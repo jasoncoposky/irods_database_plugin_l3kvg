@@ -1,14 +1,18 @@
 #include "irods/catalog/gq2_compiler.hpp"
+#include "irods/rodsGenQuery.h"
 #include <stdexcept>
 
 namespace irods::catalog::compiler {
 
-    const std::unordered_map<std::string_view, GraphMap> COLUMN_MAP = {
-        {"DATA_NAME", {"DataObject", "name"}},
-        {"DATA_SIZE", {"DataObject", "size"}},
-        {"COLL_NAME", {"Collection", "name"}},
-        {"USER_NAME", {"User", "name"}},
-        {"RESC_NAME", {"Resource", "name"}}
+    const std::unordered_map<int, GraphMap> COLUMN_MAP = {
+        {COL_DATA_NAME, {"DataObject", "name"}},
+        {COL_DATA_SIZE, {"DataObject", "size"}},
+        {COL_COLL_NAME, {"Collection", "name"}},
+        {COL_USER_NAME, {"User", "name"}},
+        {COL_R_RESC_NAME, {"Resource", "name"}},
+        {COL_D_OWNER_NAME, {"DataObject", "owner"}},
+        {COL_D_CREATE_TIME, {"DataObject", "create_ts"}},
+        {COL_D_MODIFY_TIME, {"DataObject", "modify_ts"}}
     };
 
     template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
@@ -31,7 +35,7 @@ namespace irods::catalog::compiler {
 
     void Gq2ToL3kvgCompiler::compile_condition(const ConditionNode& cond) {
         auto it = COLUMN_MAP.find(cond.column);
-        if (it == COLUMN_MAP.end()) throw std::runtime_error("Unknown column: " + cond.column);
+        if (it == COLUMN_MAP.end()) throw std::runtime_error("Unknown column ID: " + std::to_string(cond.column));
         
         auto map = it->second;
         // Simplified match logic for prototype
@@ -42,7 +46,7 @@ namespace irods::catalog::compiler {
     void Gq2ToL3kvgCompiler::compile_select(const SelectNode& sel) {
         for (const auto& col : sel.columns) {
             auto it = COLUMN_MAP.find(col);
-            if (it == COLUMN_MAP.end()) throw std::runtime_error("Unknown column: " + col);
+            if (it == COLUMN_MAP.end()) throw std::runtime_error("Unknown column ID: " + std::to_string(col));
             
             auto map = it->second;
             target_node_types_.push_back(map.node_type);

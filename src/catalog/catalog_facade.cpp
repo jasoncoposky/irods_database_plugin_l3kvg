@@ -1,19 +1,56 @@
 #include "irods/catalog/catalog_facade.hpp"
 #include "L3KVG/Engine.hpp"
+#include "L3KVG/Node.hpp"
 #include "irods/catalog/l3kvg_mapper.hpp"
 #include "irods/catalog/catalog_schemas.hpp"
+#include "irods/catalog/gq2_compiler.hpp"
 #include <iostream>
 
 namespace irods::catalog {
 
     class CatalogImpl {
     public:
-        CatalogImpl() {
-            // In a real iRODS 5 deployment, the path and node_id would come from server_config.json
-            engine_ = std::make_unique<l3kvg::Engine>("/var/lib/irods/catalog.l3kvg", 1);
+        CatalogImpl() = default;
+
+        irods::error init(const Config& cfg) {
+            try {
+                if (engine_) {
+                    return ERROR(-1, "Catalog already initialized");
+                }
+                // In a real iRODS 5 deployment, we'd use cfg.shard_count and cfg.zmq_endpoint
+                // L3KVG Engine constructor might need updates to support these.
+                engine_ = std::make_unique<l3kvg::Engine>(cfg.db_path, cfg.node_id);
+                return SUCCESS();
+            } catch (const std::exception& e) {
+                return ERROR(-1, e.what());
+            }
+        }
+
+        irods::error execute_query(const std::vector<compiler::AstNode>& ast, std::vector<std::vector<std::string>>& results) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
+            try {
+                compiler::Gq2ToL3kvgCompiler compiler(*engine_);
+                auto query = compiler.compile(ast);
+                auto graph_results = query.execute();
+
+                // Map graph results to row-major strings
+                for (const auto& row : graph_results) {
+                    std::vector<std::string> row_strings;
+                    // Note: In a real implementation, we'd need to ensure the order matches the SELECT columns.
+                    // For this prototype, we'll iterate the fields.
+                    for (const auto& [key, val] : row.fields) {
+                        row_strings.push_back(val);
+                    }
+                    results.push_back(std::move(row_strings));
+                }
+                return SUCCESS();
+            } catch (const std::exception& e) {
+                return ERROR(-1, e.what());
+            }
         }
 
         irods::error register_data_object(const data_object& obj, data_id_t& out_id) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
             try {
                 // 1. Serialize to BSON using our zero-copy template
                 // Note: We use the schema mapping to build the buffer directly from the struct
@@ -43,12 +80,14 @@ namespace irods::catalog {
         }
 
         irods::error delete_data_object(data_id_t id) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
             // L3KVG doesn't have a direct delete_node in Engine.hpp yet, 
             // but we'd implement cascading delete here.
             return SUCCESS();
         }
 
         irods::error register_replica(const replica& repl) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
             try {
                 lite3cpp::Buffer props;
                 props.init_object();
@@ -70,6 +109,7 @@ namespace irods::catalog {
         }
 
         irods::error register_collection(const collection& coll, coll_id_t& out_id) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
             try {
                 lite3cpp::Buffer buf;
                 buf.init_object();
@@ -91,6 +131,7 @@ namespace irods::catalog {
         }
 
         irods::error set_access(uint64_t user_id, uint64_t target_id, std::string_view level) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
             try {
                 lite3cpp::Buffer props;
                 props.init_object();
@@ -109,12 +150,55 @@ namespace irods::catalog {
             }
         }
 
+        // New: Metadata-specific ACL pushdown
+        irods::error add_metadata_with_acl(data_id_t object_id, const avu& metadata, const std::vector<uint64_t>& allowed_groups) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
+            try {
+                // 1. Create the AVU Node
+                lite3cpp::Buffer buf;
+                buf.init_object();
+                buf.set_str(0, "attr", metadata.attribute);
+                buf.set_str(0, "val", metadata.value);
+                
+                std::string avu_id = metadata.attribute + ":" + metadata.value; // Unique ID
+                engine_->put_node(avu_id, buf.move_to_string());
+
+                // 2. Create the ANNOTATED_WITH edge with the "Fat Payload" for Pushdown
+                lite3cpp::Buffer edge_props;
+                edge_props.init_object();
+                
+                // Consistency: Store a list of group/user IDs that can see this metadata
+                if (!allowed_groups.empty()) {
+                    size_t acl_ofs = edge_props.set_arr(0, "acl");
+                    for (uint64_t gid : allowed_groups) {
+                        edge_props.arr_append_i64(acl_ofs, static_cast<int64_t>(gid));
+                    }
+                }
+
+                engine_->add_edge(
+                    std::to_string(object_id),
+                    "ANNOTATED_WITH",
+                    1.0,
+                    avu_id,
+                    edge_props.move_to_string()
+                );
+
+                return SUCCESS();
+            } catch (const std::exception& e) {
+                return ERROR(-1, e.what());
+            }
+        }
+
     private:
         std::unique_ptr<l3kvg::Engine> engine_;
     };
 
     CatalogFacade::CatalogFacade() : pImpl_(std::make_unique<CatalogImpl>()) {}
     CatalogFacade::~CatalogFacade() = default;
+
+    irods::error CatalogFacade::init(const Config& cfg) {
+        return pImpl_->init(cfg);
+    }
 
     irods::error CatalogFacade::register_data_object(const data_object& obj, data_id_t& out_id) {
         return pImpl_->register_data_object(obj, out_id);
@@ -134,6 +218,14 @@ namespace irods::catalog {
 
     irods::error CatalogFacade::set_access(uint64_t user_id, uint64_t target_id, std::string_view level) {
         return pImpl_->set_access(user_id, target_id, level);
+    }
+
+    irods::error CatalogFacade::add_metadata_with_acl(data_id_t object_id, const avu& metadata, const std::vector<uint64_t>& allowed_groups) {
+        return pImpl_->add_metadata_with_acl(object_id, metadata, allowed_groups);
+    }
+
+    irods::error CatalogFacade::execute_query(const std::vector<compiler::AstNode>& ast, std::vector<std::vector<std::string>>& results) {
+        return pImpl_->execute_query(ast, results);
     }
 
 } // namespace irods::catalog

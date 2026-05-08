@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# find_package(GTest REQUIRED) # Use internal build
+
 # iRODS Dependencies
 # In a real environment, we'd find_package(IRODS)
 # For this prototype, we'll set up the include paths manually based on the research.
@@ -55,4 +57,22 @@ target_compile_options(l3kvg_plugin PRIVATE
 set_target_properties(l3kvg_plugin PROPERTIES
     PREFIX ""
     OUTPUT_NAME "libirods_database_plugin_l3kvg"
+)
+
+# Link dependencies for iRODS (found in build output)
+link_directories(/home/darkfell/dev/irods_dev/irods_build_output_dir/lib)
+link_directories(/home/darkfell/dev/irods_dev/irods_build_output_dir/server)
+
+# Tests
+add_executable(test_metadata_acls tests/test_metadata_acls.cpp)
+target_link_libraries(test_metadata_acls PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
 )

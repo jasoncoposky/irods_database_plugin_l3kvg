@@ -14,13 +14,13 @@ namespace irods::catalog::compiler {
     };
 
     struct ConditionNode {
-        std::string column;
+        int column;
         std::string op;
         std::string value;
     };
 
     struct SelectNode {
-        std::vector<std::string> columns;
+        std::vector<int> columns;
     };
 
     using AstNode = std::variant<ConditionNode, SelectNode>;
