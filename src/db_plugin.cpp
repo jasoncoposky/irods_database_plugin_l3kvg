@@ -195,6 +195,25 @@ irods::error db_mod_group_op(irods::plugin_context& _ctx, const char* _group, co
     return SUCCESS();
 }
 
+irods::error db_rename_coll_op(irods::plugin_context& _ctx, const char* _old_name, const char* _new_name) {
+    if (!_old_name || !_new_name) return ERROR(SYS_INVALID_INPUT_PARAM, "null rename_coll params");
+    return g_catalog->rename_collection(_old_name, _new_name);
+}
+
+irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
+    if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null collInfo_t");
+    return g_catalog->delete_collection(_info->collId);
+}
+
+irods::error db_rename_object_op(irods::plugin_context& _ctx, rodsLong_t _obj_id, const char* _new_name) {
+    if (!_new_name) return ERROR(SYS_INVALID_INPUT_PARAM, "null rename_object params");
+    return g_catalog->rename_data_object(_obj_id, _new_name);
+}
+
+irods::error db_move_object_op(irods::plugin_context& _ctx, rodsLong_t _obj_id, rodsLong_t _target_coll_id) {
+    return g_catalog->move_data_object(_obj_id, _target_coll_id);
+}
+
 class l3kvg_database_plugin : public irods::database {
 public:
     l3kvg_database_plugin(const std::string& _inst, const std::string& _ctx)
@@ -230,6 +249,22 @@ public:
         add_operation<const char*, const char*, const char*, const char*>(
             irods::DATABASE_OP_MOD_GROUP,
             std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*)>(db_mod_group_op));
+
+        add_operation<const char*, const char*>(
+            irods::DATABASE_OP_RENAME_COLL,
+            std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_rename_coll_op));
+
+        add_operation<collInfo_t*>(
+            irods::DATABASE_OP_DEL_COLL,
+            std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_del_coll_op));
+
+        add_operation<rodsLong_t, const char*>(
+            irods::DATABASE_OP_RENAME_OBJECT,
+            std::function<irods::error(irods::plugin_context&, rodsLong_t, const char*)>(db_rename_object_op));
+
+        add_operation<rodsLong_t, rodsLong_t>(
+            irods::DATABASE_OP_MOVE_OBJECT,
+            std::function<irods::error(irods::plugin_context&, rodsLong_t, rodsLong_t)>(db_move_object_op));
     }
 };
 

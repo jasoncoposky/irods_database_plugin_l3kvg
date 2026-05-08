@@ -44,12 +44,16 @@ namespace irods::catalog {
         irods::error init(const Config& cfg);
         irods::error register_data_object(const data_object& obj, data_id_t& out_id);
         irods::error delete_data_object(data_id_t id);
+        irods::error rename_data_object(data_id_t obj_id, std::string_view new_name);
+        irods::error move_data_object(data_id_t obj_id, coll_id_t target_coll_id);
 
         // Replica Operations
         irods::error register_replica(const replica& repl);
 
         // Collection Operations
         irods::error register_collection(const collection& coll, coll_id_t& out_id);
+        irods::error rename_collection(std::string_view old_name, std::string_view new_name);
+        irods::error delete_collection(coll_id_t coll_id);
 
         // Identity Operations
         irods::error register_user(const user& usr, user_id_t& out_id);
