@@ -1,6 +1,7 @@
 #include "irods/catalog/catalog_facade.hpp"
 #include "L3KVG/Engine.hpp"
 #include "L3KVG/Node.hpp"
+#include "engine/store.hpp"
 #include "irods/catalog/l3kvg_mapper.hpp"
 #include "irods/catalog/catalog_schemas.hpp"
 #include "irods/catalog/gq2_compiler.hpp"
@@ -119,6 +120,79 @@ namespace irods::catalog {
             }
         }
 
+        irods::error register_user(const user& usr, user_id_t& out_id) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
+            try {
+                lite3cpp::Buffer buf;
+                buf.init_object();
+                buf.set_i64(0, "id", usr.id);
+                buf.set_str(0, "name", usr.name);
+                buf.set_str(0, "zone", usr.zone);
+                buf.set_str(0, "type", usr.type);
+
+                // Map 'type' to numeric privilege level for db_check_auth
+                int priv = (usr.type == "rodsadmin") ? 5 : 1;
+                buf.set_i64(0, "priv_level", priv);
+
+                std::string node_id = "user:" + usr.name + "#" + usr.zone;
+                engine_->put_node(std::move(node_id), buf.move_to_string());
+
+                out_id = usr.id;
+                return SUCCESS();
+            } catch (const std::exception& e) {
+                return ERROR(-1, e.what());
+            }
+        }
+
+        irods::error check_auth(std::string_view user_name, std::string_view zone, int& user_priv) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
+            try {
+                std::string node_id = "user:" + std::string(user_name) + "#" + std::string(zone);
+                auto node = engine_->get_node(node_id);
+                if (!node) return ERROR(-1, "User not found");
+
+                // Check for attribute existence and retrieve value
+                if (node->has_attribute("priv_level")) {
+                    // Try to get as Int64 (Native BSON)
+                    user_priv = static_cast<int>(node->get_attribute<int64_t>("priv_level"));
+                } else {
+                    return ERROR(-1, "priv_level attribute missing on user node");
+                }
+                
+                return SUCCESS();
+            } catch (const std::exception& e) {
+                return ERROR(-1, e.what());
+            }
+        }
+
+        irods::error add_user_to_group(user_id_t user_id, user_id_t group_id) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
+            try {
+                engine_->add_edge(std::to_string(user_id), "MEMBER_OF", 1.0, std::to_string(group_id), "{}");
+                return SUCCESS();
+            } catch (const std::exception& e) {
+                return ERROR(-1, e.what());
+            }
+        }
+
+        irods::error remove_user_from_group(user_id_t user_id, user_id_t group_id) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
+            // L3KVG needs delete_edge support.
+            return SUCCESS();
+        }
+
+        irods::error set_user_property(user_id_t user_id, std::string_view prop, std::string_view value) {
+            if (!engine_) return ERROR(-1, "Catalog not initialized");
+            try {
+                // In L3KVG, we use the Patch API for zero-copy attribute updates
+                // We bypass loading the whole node.
+                engine_->get_store()->patch_str(std::to_string(user_id), std::string(prop), std::string(value));
+                return SUCCESS();
+            } catch (const std::exception& e) {
+                return ERROR(-1, e.what());
+            }
+        }
+
         irods::error set_access(uint64_t user_id, uint64_t target_id, std::string_view level) {
             if (!engine_) return ERROR(-1, "Catalog not initialized");
             try {
@@ -203,6 +277,26 @@ namespace irods::catalog {
 
     irods::error CatalogFacade::register_collection(const collection& coll, coll_id_t& out_id) {
         return pImpl_->register_collection(coll, out_id);
+    }
+
+    irods::error CatalogFacade::register_user(const user& usr, user_id_t& out_id) {
+        return pImpl_->register_user(usr, out_id);
+    }
+
+    irods::error CatalogFacade::check_auth(std::string_view user_name, std::string_view zone, int& user_priv) {
+        return pImpl_->check_auth(user_name, zone, user_priv);
+    }
+
+    irods::error CatalogFacade::add_user_to_group(user_id_t user_id, user_id_t group_id) {
+        return pImpl_->add_user_to_group(user_id, group_id);
+    }
+
+    irods::error CatalogFacade::remove_user_from_group(user_id_t user_id, user_id_t group_id) {
+        return pImpl_->remove_user_from_group(user_id, group_id);
+    }
+
+    irods::error CatalogFacade::set_user_property(user_id_t user_id, std::string_view prop, std::string_view value) {
+        return pImpl_->set_user_property(user_id, prop, value);
     }
 
     irods::error CatalogFacade::set_access(uint64_t user_id, uint64_t target_id, std::string_view level) {

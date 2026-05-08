@@ -76,3 +76,16 @@ target_link_libraries(test_metadata_acls PRIVATE
     irods_common
     irods_server
 )
+
+add_executable(test_identity tests/test_identity.cpp)
+target_link_libraries(test_identity PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+)

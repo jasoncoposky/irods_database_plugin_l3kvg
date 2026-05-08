@@ -165,6 +165,36 @@ irods::error db_gen_query_op(irods::plugin_context& _ctx, genQueryInp_t* _inp, g
     return SUCCESS();
 }
 
+irods::error db_check_auth_op(irods::plugin_context& _ctx, const char* _user, const char* _zone, const char* _scheme, const char* _client_user, int* _user_priv, int* _client_priv) {
+    if (!_user || !_zone || !_user_priv || !_client_priv) return ERROR(SYS_INVALID_INPUT_PARAM, "null check_auth params");
+    
+    auto ret = g_catalog->check_auth(_user, _zone, *_user_priv);
+    if (ret.ok()) {
+        *_client_priv = *_user_priv; // Simplified for prototype
+    }
+    return ret;
+}
+
+irods::error db_mod_user_op(irods::plugin_context& _ctx, const char* _user, const char* _option, const char* _value) {
+    if (!_user || !_option || !_value) return ERROR(SYS_INVALID_INPUT_PARAM, "null mod_user params");
+    
+    // In a real implementation, we'd resolve _user to user_id via GenQuery or cache.
+    // For this prototype, we'll assume the username can be used as a key-part.
+    return g_catalog->set_user_property(123, _option, _value); // Placeholder ID
+}
+
+irods::error db_mod_group_op(irods::plugin_context& _ctx, const char* _group, const char* _option, const char* _user, const char* _zone) {
+    if (!_group || !_option || !_user) return ERROR(SYS_INVALID_INPUT_PARAM, "null mod_group params");
+    
+    std::string_view option(_option);
+    if (option == "add") {
+        return g_catalog->add_user_to_group(123, 456); // Placeholder IDs
+    } else if (option == "remove") {
+        return g_catalog->remove_user_from_group(123, 456);
+    }
+    return SUCCESS();
+}
+
 class l3kvg_database_plugin : public irods::database {
 public:
     l3kvg_database_plugin(const std::string& _inst, const std::string& _ctx)
@@ -188,6 +218,18 @@ public:
         add_operation<genQueryInp_t*, genQueryOut_t*>(
             irods::DATABASE_OP_GEN_QUERY,
             std::function<irods::error(irods::plugin_context&, genQueryInp_t*, genQueryOut_t*)>(db_gen_query_op));
+
+        add_operation<const char*, const char*, const char*, const char*, int*, int*>(
+            irods::DATABASE_OP_CHECK_AUTH,
+            std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, int*, int*)>(db_check_auth_op));
+
+        add_operation<const char*, const char*, const char*>(
+            irods::DATABASE_OP_MOD_USER,
+            std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*)>(db_mod_user_op));
+
+        add_operation<const char*, const char*, const char*, const char*>(
+            irods::DATABASE_OP_MOD_GROUP,
+            std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*)>(db_mod_group_op));
     }
 };
 

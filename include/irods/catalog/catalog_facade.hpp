@@ -51,6 +51,13 @@ namespace irods::catalog {
         // Collection Operations
         irods::error register_collection(const collection& coll, coll_id_t& out_id);
 
+        // Identity Operations
+        irods::error register_user(const user& usr, user_id_t& out_id);
+        irods::error check_auth(std::string_view user_name, std::string_view zone, int& user_priv);
+        irods::error add_user_to_group(user_id_t user_id, user_id_t group_id);
+        irods::error remove_user_from_group(user_id_t user_id, user_id_t group_id);
+        irods::error set_user_property(user_id_t user_id, std::string_view prop, std::string_view value);
+
         // ACL Operations
         irods::error set_access(uint64_t user_id, uint64_t target_id, std::string_view level);
         
