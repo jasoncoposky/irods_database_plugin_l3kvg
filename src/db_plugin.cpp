@@ -128,27 +128,37 @@ irods::error db_gen_query_op(irods::plugin_context& _ctx, genQueryInp_t* _inp, g
     }
 
     // 2. Execute via Facade
-    std::vector<std::vector<std::string>> results;
+    irods::catalog::ResultSet results;
     auto ret = g_catalog->execute_query(ast, results);
     if (!ret.ok()) return ret;
 
     // 3. Map results back to genQueryOut_t
-    _out->rowCnt = static_cast<int>(results.size());
+    _out->rowCnt = static_cast<int>(results.row_count());
     _out->attriCnt = static_cast<int>(_inp->selectInp.len);
     
     for (int j = 0; j < _out->attriCnt; ++j) {
         _out->sqlResult[j].attriInx = _inp->selectInp.inx[j];
         
+        // Find property name for this column ID
+        auto it = irods::catalog::compiler::COLUMN_MAP.find(_inp->selectInp.inx[j]);
+        std::string property_key = it->second.node_type.data();
+        property_key += ".";
+        property_key += it->second.bson_key;
+
         // Calculate max len for this column
         size_t max_len = 0;
-        for (const auto& row : results) {
-            if (row[j].length() > max_len) max_len = row[j].length();
+        for (size_t i = 0; i < results.row_count(); ++i) {
+            std::string_view val = results.get_field(i, property_key);
+            if (val.length() > max_len) max_len = val.length();
         }
+        
         _out->sqlResult[j].len = static_cast<int>(max_len + 1);
         _out->sqlResult[j].value = (char*)malloc(_out->rowCnt * _out->sqlResult[j].len);
         
-        for (int i = 0; i < _out->rowCnt; ++i) {
-            std::strncpy(&_out->sqlResult[j].value[i * _out->sqlResult[j].len], results[i][j].c_str(), _out->sqlResult[j].len);
+        for (size_t i = 0; i < results.row_count(); ++i) {
+            std::string_view val = results.get_field(i, property_key);
+            std::strncpy(&_out->sqlResult[j].value[i * _out->sqlResult[j].len], val.data(), val.length());
+            _out->sqlResult[j].value[i * _out->sqlResult[j].len + val.length()] = '\0';
         }
     }
 

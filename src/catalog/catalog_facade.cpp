@@ -26,23 +26,12 @@ namespace irods::catalog {
             }
         }
 
-        irods::error execute_query(const std::vector<compiler::AstNode>& ast, std::vector<std::vector<std::string>>& results) {
+        irods::error execute_query(const std::vector<compiler::AstNode>& ast, ResultSet& results) {
             if (!engine_) return ERROR(-1, "Catalog not initialized");
             try {
                 compiler::Gq2ToL3kvgCompiler compiler(*engine_);
                 auto query = compiler.compile(ast);
-                auto graph_results = query.execute();
-
-                // Map graph results to row-major strings
-                for (const auto& row : graph_results) {
-                    std::vector<std::string> row_strings;
-                    // Note: In a real implementation, we'd need to ensure the order matches the SELECT columns.
-                    // For this prototype, we'll iterate the fields.
-                    for (const auto& [key, val] : row.fields) {
-                        row_strings.push_back(val);
-                    }
-                    results.push_back(std::move(row_strings));
-                }
+                results.rows = query.execute(); // Move rows into ResultSet
                 return SUCCESS();
             } catch (const std::exception& e) {
                 return ERROR(-1, e.what());
@@ -224,7 +213,7 @@ namespace irods::catalog {
         return pImpl_->add_metadata_with_acl(object_id, metadata, allowed_groups);
     }
 
-    irods::error CatalogFacade::execute_query(const std::vector<compiler::AstNode>& ast, std::vector<std::vector<std::string>>& results) {
+    irods::error CatalogFacade::execute_query(const std::vector<compiler::AstNode>& ast, ResultSet& results) {
         return pImpl_->execute_query(ast, results);
     }
 

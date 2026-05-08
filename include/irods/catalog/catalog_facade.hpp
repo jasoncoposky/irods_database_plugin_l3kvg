@@ -6,6 +6,8 @@
 
 #include <variant>
 
+#include "L3KVG/Query.hpp"
+
 namespace irods::catalog {
 
     namespace compiler {
@@ -13,6 +15,16 @@ namespace irods::catalog {
         struct SelectNode;
         using AstNode = std::variant<ConditionNode, SelectNode>;
     }
+
+    struct ResultSet {
+        std::vector<l3kvg::Query::ResultRow> rows;
+        
+        size_t row_count() const { return rows.size(); }
+        std::string_view get_field(size_t row, std::string_view key) const {
+            auto it = rows[row].fields.find(std::string(key));
+            return (it != rows[row].fields.end()) ? it->second : std::string_view{};
+        }
+    };
 
     struct Config {
         std::string db_path;
@@ -46,7 +58,7 @@ namespace irods::catalog {
         irods::error add_metadata_with_acl(data_id_t object_id, const avu& metadata, const std::vector<uint64_t>& allowed_groups);
 
         // Query Operations
-        irods::error execute_query(const std::vector<compiler::AstNode>& ast, std::vector<std::vector<std::string>>& results);
+        irods::error execute_query(const std::vector<compiler::AstNode>& ast, ResultSet& results);
 
     private:
         std::unique_ptr<CatalogImpl> pImpl_;

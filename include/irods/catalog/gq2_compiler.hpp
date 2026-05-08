@@ -25,6 +25,8 @@ namespace irods::catalog::compiler {
 
     using AstNode = std::variant<ConditionNode, SelectNode>;
 
+    extern const std::unordered_map<int, GraphMap> COLUMN_MAP;
+
     class Gq2ToL3kvgCompiler {
     public:
         explicit Gq2ToL3kvgCompiler(l3kvg::Engine& engine);
