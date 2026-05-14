@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+add_compile_options(-Wno-changes-meaning)
+
 # find_package(GTest REQUIRED) # Use internal build
 
 # iRODS Dependencies
@@ -16,6 +18,8 @@ set(IRODS_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/core/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/icat/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/re/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/genquery2/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/server/genquery2/dsl
 )
 
 # L3KVG Dependencies
@@ -92,6 +96,58 @@ target_link_libraries(test_identity PRIVATE
 
 add_executable(test_collections tests/test_collections.cpp)
 target_link_libraries(test_collections PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+)
+
+add_executable(test_gq2_metadata_compiler tests/test_gq2_metadata_compiler.cpp)
+target_link_libraries(test_gq2_metadata_compiler PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+)
+
+add_executable(test_multihop_query tests/test_multihop_query.cpp)
+target_link_libraries(test_multihop_query PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+)
+
+add_executable(test_advanced_operators tests/test_advanced_operators.cpp)
+target_link_libraries(test_advanced_operators PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+)
+
+add_executable(test_nested_logic tests/test_nested_logic.cpp)
+target_link_libraries(test_nested_logic PRIVATE
     l3kvg_plugin
     l3kvg_engine
     l3kv_engine
