@@ -140,12 +140,66 @@ namespace irods::catalog::compiler {
         template<typename T> std::pair<l3kvg::Query::Op, std::string> operator()(const T&) const { return {l3kvg::Query::Op::Eq, ""}; }
     };
 
+    struct condition_tree_visitor : public boost::static_visitor<void> {
+        Gq2ToL3kvgCompiler* compiler;
+        l3kvg::Query::FilterGroup& group;
+        bool use_or;
+
+        condition_tree_visitor(Gq2ToL3kvgCompiler* c, l3kvg::Query::FilterGroup& g, bool o = false)
+            : compiler(c), group(g), use_or(o) {}
+
+        void operator()(const irods::experimental::genquery2::condition& cond) const {
+            if (auto* col = std::get_if<irods::experimental::genquery2::column>(&cond.lhs)) {
+                auto it = COLUMN_NAME_MAP.find(col->name);
+                if (it != COLUMN_NAME_MAP.end()) {
+                    condition_visitor v;
+                    auto [op, val] = boost::apply_visitor(v, cond.expression);
+                    if (use_or) group.or_where(it->second.node_type, it->second.bson_key, op, val);
+                    else group.where(it->second.node_type, it->second.bson_key, op, val);
+                }
+            }
+        }
+
+        void operator()(const irods::experimental::genquery2::logical_and& la) const {
+            auto cb = [&](l3kvg::Query::FilterGroup& sub) {
+                for (const auto& w : la.condition) {
+                    boost::apply_visitor(condition_tree_visitor(compiler, sub, false), w);
+                }
+            };
+            if (use_or) group.or_where_group(cb);
+            else group.where_group(cb);
+        }
+
+        void operator()(const irods::experimental::genquery2::logical_or& lo) const {
+            auto cb = [&](l3kvg::Query::FilterGroup& sub) {
+                bool first = true;
+                for (const auto& w : lo.condition) {
+                    boost::apply_visitor(condition_tree_visitor(compiler, sub, !first), w);
+                    first = false;
+                }
+            };
+            if (use_or) group.or_where_group(cb);
+            else group.where_group(cb);
+        }
+
+        void operator()(const irods::experimental::genquery2::logical_grouping& lg) const {
+            auto cb = [&](l3kvg::Query::FilterGroup& sub) {
+                for (const auto& w : lg.conditions) {
+                    boost::apply_visitor(condition_tree_visitor(compiler, sub, false), w);
+                }
+            };
+            if (use_or) group.or_where_group(cb);
+            else group.where_group(cb);
+        }
+
+        void operator()(const irods::experimental::genquery2::logical_not& ln) const {}
+    };
+
     Gq2ToL3kvgCompiler::Gq2ToL3kvgCompiler(l3kvg::Engine& engine) 
         : query_(engine.query()) {}
 
     l3kvg::Query Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::select& ast) {
         namespace gq = irods::experimental::genquery2;
-        condition_visitor cond_v;
 
         // 1. Process Projections (Select)
         struct projection_visitor : public boost::static_visitor<void> {
@@ -165,48 +219,34 @@ namespace irods::catalog::compiler {
             boost::apply_visitor(proj_v, proj);
         }
 
-        // 2. Process Conditions
-        std::vector<gq::condition> conditions;
+        // 2. Select Anchor
+        struct anchor_visitor : public boost::static_visitor<void> {
+             Gq2ToL3kvgCompiler* compiler;
+             anchor_visitor(Gq2ToL3kvgCompiler* c) : compiler(c) {}
+             void operator()(const gq::condition& c) {
+                 if (auto* col = std::get_if<gq::column>(&c.lhs)) {
+                     if (compiler->entry_node_type_.empty()) {
+                         auto it = COLUMN_NAME_MAP.find(col->name);
+                         if (it != COLUMN_NAME_MAP.end()) {
+                             compiler->entry_node_type_ = it->second.node_type;
+                         }
+                     }
+                 }
+             }
+             void operator()(const gq::logical_and& la) { for(const auto& w : la.condition) boost::apply_visitor(*this, w); }
+             void operator()(const gq::logical_or& lo) { for(const auto& w : lo.condition) boost::apply_visitor(*this, w); }
+             void operator()(const gq::logical_grouping& lg) { for(const auto& w : lg.conditions) boost::apply_visitor(*this, w); }
+             void operator()(const gq::logical_not& ln) {}
+        };
+        anchor_visitor av(this);
+        for(const auto& w : ast.conditions) boost::apply_visitor(av, w);
+
+        if (entry_node_type_.empty()) entry_node_type_ = "DataObject";
+        query_.match(entry_node_type_);
+
+        // 3. Process Conditions recursively
         for (const auto& wrap : ast.conditions) {
-            if (auto* cond = boost::get<gq::condition>(&wrap)) {
-                conditions.push_back(*cond);
-            }
-        }
-
-        if (conditions.empty()) {
-            entry_node_type_ = "DataObject";
-            query_.match(entry_node_type_);
-        } else {
-            // Anchor Selection: Prefer AVU if present for optimization
-            const gq::condition* anchor_cond = &conditions.front();
-            for (const auto& cond : conditions) {
-                if (auto* col = std::get_if<gq::column>(&cond.lhs)) {
-                    auto it = COLUMN_NAME_MAP.find(col->name);
-                    if (it != COLUMN_NAME_MAP.end() && it->second.node_type == "AVU") {
-                        anchor_cond = &cond;
-                        break;
-                    }
-                }
-            }
-
-            if (auto* col = std::get_if<gq::column>(&anchor_cond->lhs)) {
-                auto it = COLUMN_NAME_MAP.find(col->name);
-                if (it != COLUMN_NAME_MAP.end()) {
-                    entry_node_type_ = it->second.node_type;
-                    query_.match(entry_node_type_);
-                }
-            }
-
-            // Apply all conditions
-            for (const auto& cond : conditions) {
-                if (auto* col = std::get_if<gq::column>(&cond.lhs)) {
-                    auto it = COLUMN_NAME_MAP.find(col->name);
-                    if (it != COLUMN_NAME_MAP.end()) {
-                        auto [op, val] = boost::apply_visitor(cond_v, cond.expression);
-                        query_.where(it->second.node_type, it->second.bson_key, op, val);
-                    }
-                }
-            }
+            boost::apply_visitor(condition_tree_visitor(this, query_.get_root_filters()), wrap);
         }
 
         resolve_traversals();
