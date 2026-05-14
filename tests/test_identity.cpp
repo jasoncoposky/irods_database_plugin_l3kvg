@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include "irods/catalog/catalog_facade.hpp"
+#include "L3KVG/Engine.hpp"
+#include "engine/store.hpp"
 
 using namespace irods::catalog;
 
@@ -19,6 +21,7 @@ TEST(IdentityTest, AuthCheckZeroCopy) {
     
     user_id_t out_id;
     ASSERT_TRUE(catalog.register_user(admin, out_id).ok());
+    catalog.get_engine()->get_store()->wait_all_shards();
 
     // 2. Check Auth (Retrieves view from shard)
     int priv = 0;
@@ -32,6 +35,7 @@ TEST(IdentityTest, AuthCheckZeroCopy) {
     alice.zone = "tempZone";
     alice.type = "rodsuser";
     ASSERT_TRUE(catalog.register_user(alice, out_id).ok());
+    catalog.get_engine()->get_store()->wait_all_shards();
 
     // 4. Check Auth for regular user
     ASSERT_TRUE(catalog.check_auth("alice", "tempZone", priv).ok());
