@@ -158,3 +158,16 @@ target_link_libraries(test_nested_logic PRIVATE
     irods_common
     irods_server
 )
+
+add_executable(test_aggregates tests/test_aggregates.cpp)
+target_link_libraries(test_aggregates PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+)
