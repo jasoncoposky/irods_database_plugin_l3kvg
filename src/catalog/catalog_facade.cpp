@@ -445,6 +445,13 @@ namespace irods::catalog {
                 idx_buf.set_i64(0, "id", usr.id);
                 engine_->put_node("idx:User:name:" + usr.name, idx_buf.move_to_string());
 
+                // Numeric ID node for set_access/lookup
+                lite3cpp::Buffer id_buf;
+                id_buf.init_object();
+                id_buf.set_str(0, "name", usr.name);
+                id_buf.set_i64(0, "id", usr.id);
+                engine_->put_node(std::to_string(usr.id), id_buf.move_to_string());
+
                 out_id = usr.id;
                 return SUCCESS();
             } catch (const std::exception& e) {
@@ -504,17 +511,21 @@ namespace irods::catalog {
         irods::error set_access(uint64_t user_id, uint64_t target_id, std::string_view level) {
             if (!engine_) return ERROR(-1, "Catalog not initialized");
             try {
-                lite3cpp::Buffer props;
-                props.init_object();
-                props.set_str(0, "level", level);
+                // 1. Create Access Node
+                lite3cpp::Buffer buf;
+                buf.init_object();
+                buf.set_str(0, "level", std::string(level));
+                
+                std::string access_id = "access:" + std::to_string(user_id) + ":" + std::to_string(target_id);
+                engine_->put_node(access_id, buf.move_to_string());
 
-                engine_->add_edge(
-                    std::to_string(user_id),
-                    "HAS_ACCESS",
-                    1.0,
-                    std::to_string(target_id),
-                    props.move_to_string()
-                );
+                // 2. Link User -> Access (Using string ID for User in this prototype)
+                // Note: user_id is numeric in this method, so we'll link from that node
+                engine_->add_edge(std::to_string(user_id), "HAS_ACCESS", 1.0, access_id, "{}");
+
+                // 3. Link Access -> Target (DataObject)
+                engine_->add_edge(access_id, "FOR_OBJECT", 1.0, std::to_string(target_id), "{}");
+                
                 return SUCCESS();
             } catch (const std::exception& e) {
                 return ERROR(-1, e.what());
