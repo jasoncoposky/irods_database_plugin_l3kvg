@@ -23,6 +23,13 @@ namespace irods::catalog::compiler {
         
         l3kvg::Query compile(const irods::experimental::genquery2::select& ast);
 
+        struct PathStep {
+            enum class Direction { Out, In };
+            Direction dir;
+            std::string_view edge_label;
+            std::string_view target_type;
+        };
+
     private:
         l3kvg::Query query_;
         std::string_view entry_node_type_;
@@ -35,13 +42,7 @@ namespace irods::catalog::compiler {
         std::vector<ReturnField> return_fields_;
 
         void resolve_traversals();
-        
-        struct PathStep {
-            enum class Direction { Out, In };
-            Direction dir;
-            std::string_view edge_label;
-            std::string_view target_type;
-        };
+
         std::vector<PathStep> find_path(std::string_view source, std::string_view target);
         std::string_view find_edge(std::string_view source_type, std::string_view target_type);
     };

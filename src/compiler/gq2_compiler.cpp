@@ -123,7 +123,48 @@ namespace irods::catalog::compiler {
         {"META_DATA_ATTR_UNIT", {"AVU", "unit"}},
         {"META_COLL_ATTR_NAME", {"AVU", "attribute"}},
         {"META_COLL_ATTR_VALUE", {"AVU", "value"}},
-        {"META_COLL_ATTR_UNIT", {"AVU", "unit"}}
+        {"META_COLL_ATTR_UNIT", {"AVU", "unit"}},
+        {"DATA_ACCESS_NAME", {"Access", "level"}}
+    };
+
+    using Dir = Gq2ToL3kvgCompiler::PathStep::Direction;
+    using RouteKey = std::pair<std::string_view, std::string_view>;
+    
+    struct RouteKeyHash {
+        std::size_t operator()(const RouteKey& k) const {
+            return std::hash<std::string_view>()(k.first) ^ (std::hash<std::string_view>()(k.second) << 1);
+        }
+    };
+
+    static const std::unordered_map<RouteKey, std::vector<Gq2ToL3kvgCompiler::PathStep>, RouteKeyHash> ROUTING_TABLE = {
+        // Multi-Hop Paths
+        {{"Collection", "Resource"}, {{Dir::Out, "CONTAINS", "DataObject"}, {Dir::Out, "REPLICATED_ON", "Resource"}}},
+        {{"User", "Resource"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}, {Dir::Out, "REPLICATED_ON", "Resource"}}},
+        {{"User", "Collection"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}, {Dir::In, "CONTAINS", "Collection"}}},
+        {{"User", "DataObject"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}}},
+        {{"DataObject", "Resource"}, {{Dir::Out, "REPLICATED_ON", "Resource"}}},
+        
+        // Metadata Paths
+        {{"DataObject", "AVU"}, {{Dir::Out, "ANNOTATED_WITH", "AVU"}}},
+        {{"AVU", "DataObject"}, {{Dir::In, "ANNOTATED_WITH", "DataObject"}}},
+        {{"AVU", "Collection"}, {{Dir::In, "ANNOTATED_WITH", "Collection"}}},
+        
+        // Zone Paths
+        {{"Zone", "User"}, {{Dir::Out, "HAS_USER", "User"}}},
+        {{"Zone", "Collection"}, {{Dir::Out, "HAS_ROOT_COLL", "Collection"}}},
+        {{"Zone", "Resource"}, {{Dir::Out, "HAS_RESC", "Resource"}}},
+        
+        // Replica Paths
+        {{"DataObject", "Replica"}, {{Dir::Out, "HAS_REPLICA", "Replica"}}},
+        {{"Replica", "Resource"}, {{Dir::Out, "STAYING_AT", "Resource"}}},
+        {{"Replica", "AVU"}, {{Dir::Out, "ANNOTATED_WITH", "AVU"}}},
+
+        // Single Hop Defaults / Fallbacks
+        {{"User", "Access"}, {{Dir::Out, "HAS_ACCESS", "Access"}}},
+        {{"Access", "DataObject"}, {{Dir::Out, "FOR_OBJECT", "DataObject"}}},
+        {{"Collection", "DataObject"}, {{Dir::Out, "CONTAINS", "DataObject"}}},
+        {{"DataObject", "AVU"}, {{Dir::Out, "ANNOTATED_WITH", "AVU"}}},
+        {{"Collection", "Collection"}, {{Dir::Out, "CONTAINS", "Collection"}}}
     };
 
     template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
@@ -320,65 +361,22 @@ namespace irods::catalog::compiler {
     }
 
     std::vector<Gq2ToL3kvgCompiler::PathStep> Gq2ToL3kvgCompiler::find_path(std::string_view source, std::string_view target) {
-        using Dir = Gq2ToL3kvgCompiler::PathStep::Direction;
-
-        // Hardcoded path table for prototype
-        if (source == "Collection" && target == "Resource") {
-            return {{Dir::Out, "CONTAINS", "DataObject"}, {Dir::Out, "REPLICATED_ON", "Resource"}};
-        }
-        if (source == "User" && target == "Resource") {
-            return {{Dir::Out, "HAS_ACCESS", "DataObject"}, {Dir::Out, "REPLICATED_ON", "Resource"}};
-        }
-        if (source == "User" && target == "Collection") {
-            return {{Dir::Out, "HAS_ACCESS", "DataObject"}, {Dir::In, "CONTAINS", "Collection"}};
-        }
-        if (source == "DataObject" && target == "AVU") {
-            return {{Dir::Out, "ANNOTATED_WITH", "AVU"}};
-        }
-        if (source == "AVU" && target == "DataObject") {
-            return {{Dir::In, "ANNOTATED_WITH", "DataObject"}};
-        }
-        if (source == "AVU" && target == "Collection") {
-            return {{Dir::In, "ANNOTATED_WITH", "Collection"}};
-        }
+        if (source == target) return {};
         
-        if (source == "Zone" && target == "User") {
-            return {{Dir::Out, "HAS_USER", "User"}};
-        }
-        if (source == "Zone" && target == "Collection") {
-            return {{Dir::Out, "HAS_ROOT_COLL", "Collection"}};
-        }
-        if (source == "Zone" && target == "Resource") {
-            return {{Dir::Out, "HAS_RESC", "Resource"}};
-        }
+        auto it = ROUTING_TABLE.find({source, target});
+        if (it != ROUTING_TABLE.end()) return it->second;
         
-        if (source == "DataObject" && target == "Replica") {
-            return {{Dir::Out, "HAS_REPLICA", "Replica"}};
-        }
-        if (source == "Replica" && target == "Resource") {
-            return {{Dir::Out, "STAYING_AT", "Resource"}};
-        }
-        if (source == "Replica" && target == "AVU") {
-            return {{Dir::Out, "ANNOTATED_WITH", "AVU"}};
-        }
-        
-        // Fallback to single hop
+        // Fallback to find_edge if no multi-hop defined
         return {{Dir::Out, find_edge(source, target), target}};
     }
 
     std::string_view Gq2ToL3kvgCompiler::find_edge(std::string_view source_type, std::string_view target_type) {
-        if (source_type == "User" && target_type == "DataObject") return "HAS_ACCESS";
-        if (source_type == "Collection" && target_type == "DataObject") return "CONTAINS";
-        if (source_type == "DataObject" && target_type == "Resource") return "REPLICATED_ON";
-        if (source_type == "DataObject" && target_type == "AVU") return "ANNOTATED_WITH";
-        if (source_type == "DataObject" && target_type == "Replica") return "HAS_REPLICA";
-
-        if (target_type == "AVU") return "ANNOTATED_WITH";
+        auto it = ROUTING_TABLE.find({source_type, target_type});
+        if (it != ROUTING_TABLE.end() && it->second.size() == 1) {
+            return it->second[0].edge_label;
+        }
         
-        if (source_type == "Zone" && target_type == "User") return "CONTAINS";
-        if (source_type == "Collection" && target_type == "Collection") return "CONTAINS"; // Parent-Child
-        
-        throw std::invalid_argument("No graph path exists between " + std::string(source_type) + " and " + std::string(target_type));
+        throw std::invalid_argument("No graph edge exists between " + std::string(source_type) + " and " + std::string(target_type));
     }
 
 } // namespace irods::catalog::compiler
