@@ -209,10 +209,27 @@ namespace irods::catalog::compiler {
                 auto it = COLUMN_NAME_MAP.find(col.name);
                 if (it != COLUMN_NAME_MAP.end()) {
                     compiler->target_node_types_.push_back(it->second.node_type);
-                    compiler->return_fields_.push_back(std::string(it->second.bson_key));
+                    compiler->return_fields_.push_back({std::string(it->second.bson_key), l3kvg::Query::AggOp::None});
                 }
             }
-            void operator()(const gq::function& fn) const { /* Handle functions */ }
+            void operator()(const gq::function& fn) const { 
+                l3kvg::Query::AggOp agg = l3kvg::Query::AggOp::None;
+                if (fn.name == "COUNT") agg = l3kvg::Query::AggOp::Count;
+                else if (fn.name == "SUM") agg = l3kvg::Query::AggOp::Sum;
+                else if (fn.name == "AVG") agg = l3kvg::Query::AggOp::Avg;
+                else if (fn.name == "MIN") agg = l3kvg::Query::AggOp::Min;
+                else if (fn.name == "MAX") agg = l3kvg::Query::AggOp::Max;
+
+                if (!fn.arguments.empty()) {
+                    if (auto* col = std::get_if<gq::column>(&fn.arguments[0])) {
+                        auto it = COLUMN_NAME_MAP.find(col->name);
+                        if (it != COLUMN_NAME_MAP.end()) {
+                            compiler->target_node_types_.push_back(it->second.node_type);
+                            compiler->return_fields_.push_back({std::string(it->second.bson_key), agg});
+                        }
+                    }
+                }
+            }
         };
         projection_visitor proj_v(this);
         for (const auto& proj : ast.projections) {
@@ -260,7 +277,7 @@ namespace irods::catalog::compiler {
         for (size_t i = 0; i < target_node_types_.size(); ++i) {
             auto target = target_node_types_[i];
             if (target == entry_node_type_) {
-                 query_.return_(target, return_fields_[i]);
+                 query_.return_(target, return_fields_[i].bson_key, return_fields_[i].agg);
                  continue;
             }
 
@@ -280,7 +297,7 @@ namespace irods::catalog::compiler {
                     current_source = step.target_type;
                 }
             }
-            query_.return_(target, return_fields_[i]);
+            query_.return_(target, return_fields_[i].bson_key, return_fields_[i].agg);
         }
     }
 
