@@ -171,3 +171,16 @@ target_link_libraries(test_aggregates PRIVATE
     irods_common
     irods_server
 )
+
+add_executable(test_sorting tests/test_sorting.cpp)
+target_link_libraries(test_sorting PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+)
