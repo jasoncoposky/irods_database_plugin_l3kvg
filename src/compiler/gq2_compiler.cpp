@@ -325,6 +325,16 @@ namespace irods::catalog::compiler {
             try { query_.offset(std::stoul(ast.range.offset)); } catch(...) {}
         }
 
+        // 6. Process Grouping
+        for (const auto& expr : ast.group_by.expressions) {
+            if (auto* col = std::get_if<gq::column>(&expr)) {
+                auto it = COLUMN_NAME_MAP.find(col->name);
+                if (it != COLUMN_NAME_MAP.end()) {
+                    query_.group_by(it->second.node_type, it->second.bson_key);
+                }
+            }
+        }
+
         resolve_traversals();
         return query_;
     }
