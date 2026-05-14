@@ -266,6 +266,24 @@ namespace irods::catalog::compiler {
             boost::apply_visitor(condition_tree_visitor(this, query_.get_root_filters()), wrap);
         }
 
+        // 4. Process Sorting
+        for (const auto& sort : ast.order_by.sort_expressions) {
+            if (auto* col = std::get_if<gq::column>(&sort.expr)) {
+                auto it = COLUMN_NAME_MAP.find(col->name);
+                if (it != COLUMN_NAME_MAP.end()) {
+                    query_.order_by(it->second.node_type, it->second.bson_key, sort.ascending_order);
+                }
+            }
+        }
+
+        // 5. Process Pagination
+        if (!ast.range.number_of_rows.empty()) {
+            try { query_.limit(std::stoul(ast.range.number_of_rows)); } catch(...) {}
+        }
+        if (!ast.range.offset.empty()) {
+            try { query_.offset(std::stoul(ast.range.offset)); } catch(...) {}
+        }
+
         resolve_traversals();
         return query_;
     }
