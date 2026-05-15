@@ -26,16 +26,11 @@ namespace irods::catalog::compiler {
 
     static ParsedCondition parse_condition_string(std::string_view cond) {
         std::string c(cond);
-        // Regex to match: [operator] 'value'
-        // Example: "= 'foo'", "LIKE '%bar%'", "> 1024"
         std::regex rx(R"(^\s*(LIKE|NOT LIKE|!=|<>|>=|<=|=|>|<)\s*[']?([^']*)[']?\s*$)");
         std::smatch match;
         if (std::regex_search(c, match, rx)) {
             return { parse_operator(match[1].str()), match[2].str() };
         }
-        
-        // No operator found, assume exact match on the whole string
-        // Trim optional single quotes if present
         std::string val = c;
         if (val.size() >= 2 && val.front() == '\'' && val.back() == '\'') {
             val = val.substr(1, val.size() - 2);
@@ -44,7 +39,6 @@ namespace irods::catalog::compiler {
     }
 
     const std::unordered_map<int, GraphMap> COLUMN_MAP = {
-        // Data Objects
         {COL_D_DATA_ID, {"DataObject", "id"}},
         {COL_D_COLL_ID, {"DataObject", "coll_id"}},
         {COL_DATA_NAME, {"DataObject", "name"}},
@@ -60,8 +54,6 @@ namespace irods::catalog::compiler {
         {COL_D_MODIFY_TIME, {"DataObject", "modify_ts"}},
         {COL_D_RESC_HIER, {"DataObject", "resc_hier"}},
         {COL_D_RESC_ID, {"DataObject", "resc_id"}},
-
-        // Collections
         {COL_COLL_ID, {"Collection", "id"}},
         {COL_COLL_NAME, {"Collection", "name"}},
         {COL_COLL_PARENT_NAME, {"Collection", "parent_name"}},
@@ -69,27 +61,21 @@ namespace irods::catalog::compiler {
         {COL_COLL_OWNER_ZONE, {"Collection", "owner_zone"}},
         {COL_COLL_CREATE_TIME, {"Collection", "create_ts"}},
         {COL_COLL_MODIFY_TIME, {"Collection", "modify_ts"}},
-
-        // Users
         {COL_USER_ID, {"User", "id"}},
         {COL_USER_NAME, {"User", "name"}},
         {COL_USER_TYPE, {"User", "type"}},
         {COL_USER_ZONE, {"User", "zone"}},
         {COL_USER_CREATE_TIME, {"User", "create_ts"}},
         {COL_USER_MODIFY_TIME, {"User", "modify_ts"}},
-
-        // Resources
         {COL_R_RESC_ID, {"Resource", "id"}},
         {COL_R_RESC_NAME, {"Resource", "name"}},
         {COL_R_TYPE_NAME, {"Resource", "type"}},
         {COL_R_LOC, {"Resource", "location"}},
         {COL_R_VAULT_PATH, {"Resource", "vault_path"}},
-        {308, {"Resource", "context"}}, // COL_R_RESC_CONTEXT
-        {309, {"Resource", "parent"}},  // COL_R_RESC_PARENT
+        {308, {"Resource", "context"}},
+        {309, {"Resource", "parent"}},
         {COL_R_CREATE_TIME, {"Resource", "create_ts"}},
         {COL_R_MODIFY_TIME, {"Resource", "modify_ts"}},
-
-        // Metadata (AVUs)
         {COL_META_DATA_ATTR_NAME, {"AVU", "attribute"}},
         {COL_META_DATA_ATTR_VALUE, {"AVU", "value"}},
         {COL_META_DATA_ATTR_UNITS, {"AVU", "unit"}},
@@ -98,14 +84,10 @@ namespace irods::catalog::compiler {
         {COL_META_COLL_ATTR_UNITS, {"AVU", "unit"}},
         {COL_META_DATA_CREATE_TIME, {"AVU", "create_ts"}},
         {COL_META_DATA_MODIFY_TIME, {"AVU", "modify_ts"}},
-
-        // Zones
         {COL_ZONE_ID, {"Zone", "id"}},
         {COL_ZONE_NAME, {"Zone", "name"}},
         {COL_ZONE_TYPE, {"Zone", "type"}},
         {COL_ZONE_CONNECTION, {"Zone", "connection"}},
-
-        // Access Control
         {COL_DATA_ACCESS_NAME, {"Access", "level"}},
         {COL_DATA_TOKEN_NAMESPACE, {"Access", "namespace"}}
     };
@@ -137,33 +119,24 @@ namespace irods::catalog::compiler {
     };
 
     static const std::unordered_map<RouteKey, std::vector<Gq2ToL3kvgCompiler::PathStep>, RouteKeyHash> ROUTING_TABLE = {
-        // Multi-Hop Paths
         {{"Collection", "Resource"}, {{Dir::Out, "CONTAINS", "DataObject"}, {Dir::Out, "REPLICATED_ON", "Resource"}}},
         {{"User", "Resource"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}, {Dir::Out, "REPLICATED_ON", "Resource"}}},
         {{"User", "Collection"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}, {Dir::In, "CONTAINS", "Collection"}}},
         {{"User", "DataObject"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}}},
         {{"DataObject", "Resource"}, {{Dir::Out, "REPLICATED_ON", "Resource"}}},
-        
-        // Metadata Paths
         {{"DataObject", "AVU"}, {{Dir::Out, "ANNOTATED_WITH", "AVU"}}},
         {{"AVU", "DataObject"}, {{Dir::In, "ANNOTATED_WITH", "DataObject"}}},
         {{"AVU", "Collection"}, {{Dir::In, "ANNOTATED_WITH", "Collection"}}},
-        
-        // Zone Paths
         {{"Zone", "User"}, {{Dir::Out, "HAS_USER", "User"}}},
         {{"Zone", "Collection"}, {{Dir::Out, "HAS_ROOT_COLL", "Collection"}}},
         {{"Zone", "Resource"}, {{Dir::Out, "HAS_RESC", "Resource"}}},
-        
-        // Replica Paths
         {{"DataObject", "Replica"}, {{Dir::Out, "HAS_REPLICA", "Replica"}}},
         {{"Replica", "Resource"}, {{Dir::Out, "STAYING_AT", "Resource"}}},
         {{"Replica", "AVU"}, {{Dir::Out, "ANNOTATED_WITH", "AVU"}}},
-
-        // Single Hop Defaults / Fallbacks
         {{"User", "Access"}, {{Dir::Out, "HAS_ACCESS", "Access"}}},
         {{"Access", "DataObject"}, {{Dir::Out, "FOR_OBJECT", "DataObject"}}},
         {{"Collection", "DataObject"}, {{Dir::Out, "CONTAINS", "DataObject"}}},
-        {{"DataObject", "AVU"}, {{Dir::Out, "ANNOTATED_WITH", "AVU"}}},
+        {{"DataObject", "Collection"}, {{Dir::In, "CONTAINS", "Collection"}}},
         {{"Collection", "Collection"}, {{Dir::Out, "CONTAINS", "Collection"}}}
     };
 
@@ -242,7 +215,6 @@ namespace irods::catalog::compiler {
     l3kvg::Query Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::select& ast) {
         namespace gq = irods::experimental::genquery2;
 
-        // 1. Process Projections (Select)
         struct projection_visitor : public boost::static_visitor<void> {
             Gq2ToL3kvgCompiler* compiler;
             projection_visitor(Gq2ToL3kvgCompiler* c) : compiler(c) {}
@@ -277,7 +249,6 @@ namespace irods::catalog::compiler {
             boost::apply_visitor(proj_v, proj);
         }
 
-        // 2. Select Anchor
         struct anchor_visitor : public boost::static_visitor<void> {
              Gq2ToL3kvgCompiler* compiler;
              anchor_visitor(Gq2ToL3kvgCompiler* c) : compiler(c) {}
@@ -302,12 +273,10 @@ namespace irods::catalog::compiler {
         if (entry_node_type_.empty()) entry_node_type_ = "DataObject";
         query_.match(entry_node_type_);
 
-        // 3. Process Conditions recursively
         for (const auto& wrap : ast.conditions) {
             boost::apply_visitor(condition_tree_visitor(this, query_.get_root_filters()), wrap);
         }
 
-        // 4. Process Sorting
         for (const auto& sort : ast.order_by.sort_expressions) {
             if (auto* col = std::get_if<gq::column>(&sort.expr)) {
                 auto it = COLUMN_NAME_MAP.find(col->name);
@@ -317,7 +286,6 @@ namespace irods::catalog::compiler {
             }
         }
 
-        // 5. Process Pagination
         if (!ast.range.number_of_rows.empty()) {
             try { query_.limit(std::stoul(ast.range.number_of_rows)); } catch(...) {}
         }
@@ -325,7 +293,6 @@ namespace irods::catalog::compiler {
             try { query_.offset(std::stoul(ast.range.offset)); } catch(...) {}
         }
 
-        // 6. Process Grouping
         for (const auto& expr : ast.group_by.expressions) {
             if (auto* col = std::get_if<gq::column>(&expr)) {
                 auto it = COLUMN_NAME_MAP.find(col->name);
@@ -353,7 +320,6 @@ namespace irods::catalog::compiler {
             if (!traversed_aliases.contains(target)) {
                 auto path = find_path(entry_node_type_, target);
                 std::string_view current_source = entry_node_type_;
-                
                 for (const auto& step : path) {
                     if (!traversed_aliases.contains(step.target_type)) {
                         if (step.dir == Gq2ToL3kvgCompiler::PathStep::Direction::Out) {
@@ -372,11 +338,8 @@ namespace irods::catalog::compiler {
 
     std::vector<Gq2ToL3kvgCompiler::PathStep> Gq2ToL3kvgCompiler::find_path(std::string_view source, std::string_view target) {
         if (source == target) return {};
-        
         auto it = ROUTING_TABLE.find({source, target});
         if (it != ROUTING_TABLE.end()) return it->second;
-        
-        // Fallback to find_edge if no multi-hop defined
         return {{Dir::Out, find_edge(source, target), target}};
     }
 
@@ -385,7 +348,6 @@ namespace irods::catalog::compiler {
         if (it != ROUTING_TABLE.end() && it->second.size() == 1) {
             return it->second[0].edge_label;
         }
-        
         throw std::invalid_argument("No graph edge exists between " + std::string(source_type) + " and " + std::string(target_type));
     }
 

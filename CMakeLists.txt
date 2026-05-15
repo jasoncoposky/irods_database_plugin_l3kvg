@@ -197,3 +197,16 @@ target_link_libraries(test_deep_traversal PRIVATE
     irods_common
     irods_server
 )
+
+add_executable(test_groupby tests/test_groupby.cpp)
+target_link_libraries(test_groupby PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+)
