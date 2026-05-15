@@ -223,3 +223,22 @@ target_link_libraries(test_distinct PRIVATE
     irods_common
     irods_server
 )
+
+add_executable(test_legacy_compatibility 
+    tests/test_legacy_compatibility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/genquery2/src/genquery2_driver.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/server/genquery2/dsl/lexer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/server/genquery2/dsl/parser.cpp
+)
+target_link_libraries(test_legacy_compatibility PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+    fmt
+)

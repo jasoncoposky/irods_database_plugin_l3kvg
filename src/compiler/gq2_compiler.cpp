@@ -96,17 +96,79 @@ namespace irods::catalog::compiler {
         {"DATA_ID", {"DataObject", "id"}},
         {"DATA_NAME", {"DataObject", "name"}},
         {"DATA_SIZE", {"DataObject", "size"}},
+        {"DATA_REPL_NUM", {"DataObject", "repl_num"}},
+        {"DATA_RESC_NAME", {"DataObject", "resc_name"}},
+        {"DATA_PATH", {"DataObject", "path"}},
+        {"DATA_OWNER_NAME", {"DataObject", "owner"}},
+        {"DATA_OWNER_ZONE", {"DataObject", "owner_zone"}},
+        {"DATA_REPL_STATUS", {"DataObject", "repl_status"}},
+        {"DATA_CHECKSUM", {"DataObject", "checksum"}},
+        {"DATA_CREATE_TIME", {"DataObject", "create_ts"}},
+        {"DATA_MODIFY_TIME", {"DataObject", "modify_ts"}},
+        {"DATA_RESC_HIER", {"DataObject", "resc_hier"}},
+        {"DATA_RESC_ID", {"DataObject", "resc_id"}},
+        {"DATA_COLL_ID", {"DataObject", "coll_id"}},
+        {"DATA_STATUS", {"DataObject", "status"}},
+        {"DATA_TYPE_NAME", {"DataObject", "type"}},
+        {"DATA_VERSION", {"DataObject", "version"}},
+        {"DATA_MODE", {"DataObject", "mode"}},
+        {"DATA_EXPIRY", {"DataObject", "expiry"}},
+        {"DATA_COMMENTS", {"DataObject", "comments"}},
+        
         {"COLL_ID", {"Collection", "id"}},
         {"COLL_NAME", {"Collection", "name"}},
+        {"COLL_OWNER_NAME", {"Collection", "owner"}},
+        {"COLL_OWNER_ZONE", {"Collection", "owner_zone"}},
+        {"COLL_CREATE_TIME", {"Collection", "create_ts"}},
+        {"COLL_MODIFY_TIME", {"Collection", "modify_ts"}},
+        {"COLL_ACCESS_NAME", {"Access", "level"}},
+        {"COLL_INHERITANCE", {"Collection", "inheritance"}},
+        {"COLL_TYPE", {"Collection", "type"}},
+        
+        {"USER_ID", {"User", "id"}},
         {"USER_NAME", {"User", "name"}},
+        {"USER_TYPE", {"User", "type"}},
+        {"USER_ZONE", {"User", "zone"}},
+        {"USER_CREATE_TIME", {"User", "create_ts"}},
+        {"USER_MODIFY_TIME", {"User", "modify_ts"}},
+        {"USER_INFO", {"User", "info"}},
+        {"USER_COMMENT", {"User", "comment"}},
+        {"USER_DN", {"User", "dn"}},
+        {"DATA_USER_NAME", {"User", "name"}}, 
+        {"DATA_ZONE_NAME", {"User", "zone"}}, 
+        
+        {"RESC_ID", {"Resource", "id"}},
         {"RESC_NAME", {"Resource", "name"}},
+        {"RESC_TYPE_NAME", {"Resource", "type"}},
+        {"RESC_LOC", {"Resource", "location"}},
+        {"RESC_VAULT_PATH", {"Resource", "vault_path"}},
+        {"RESC_CONTEXT", {"Resource", "context"}},
+        {"RESC_PARENT", {"Resource", "parent"}},
+        {"RESC_CREATE_TIME", {"Resource", "create_ts"}},
+        {"RESC_MODIFY_TIME", {"Resource", "modify_ts"}},
+        {"RESC_STATUS", {"Resource", "status"}},
+        {"RESC_FREE_SPACE", {"Resource", "free_space"}},
+        {"RESC_INFO", {"Resource", "info"}},
+        {"RESC_ZONE_NAME", {"Zone", "name"}},
+        
         {"META_DATA_ATTR_NAME", {"AVU", "attribute"}},
         {"META_DATA_ATTR_VALUE", {"AVU", "value"}},
         {"META_DATA_ATTR_UNIT", {"AVU", "unit"}},
+        {"META_DATA_ATTR_UNITS", {"AVU", "unit"}},
         {"META_COLL_ATTR_NAME", {"AVU", "attribute"}},
         {"META_COLL_ATTR_VALUE", {"AVU", "value"}},
         {"META_COLL_ATTR_UNIT", {"AVU", "unit"}},
-        {"DATA_ACCESS_NAME", {"Access", "level"}}
+        {"META_COLL_ATTR_UNITS", {"AVU", "unit"}},
+        
+        {"ZONE_ID", {"Zone", "id"}},
+        {"ZONE_NAME", {"Zone", "name"}},
+        {"ZONE_TYPE", {"Zone", "type"}},
+        {"ZONE_CONNECTION", {"Zone", "connection"}},
+        {"ZONE_COMMENT", {"Zone", "comment"}},
+        
+        {"DATA_ACCESS_NAME", {"Access", "level"}},
+        {"DATA_TOKEN_NAMESPACE", {"Access", "namespace"}},
+        {"COLL_TOKEN_NAMESPACE", {"Access", "namespace"}}
     };
 
     using Dir = Gq2ToL3kvgCompiler::PathStep::Direction;
@@ -119,25 +181,48 @@ namespace irods::catalog::compiler {
     };
 
     static const std::unordered_map<RouteKey, std::vector<Gq2ToL3kvgCompiler::PathStep>, RouteKeyHash> ROUTING_TABLE = {
-        {{"Collection", "Resource"}, {{Dir::Out, "CONTAINS", "DataObject"}, {Dir::Out, "REPLICATED_ON", "Resource"}}},
-        {{"User", "Resource"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}, {Dir::Out, "REPLICATED_ON", "Resource"}}},
-        {{"User", "Collection"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}, {Dir::In, "CONTAINS", "Collection"}}},
-        {{"User", "DataObject"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}}},
+        // DataObject -> X
+        {{"DataObject", "Collection"}, {{Dir::In, "CONTAINS", "Collection"}}},
         {{"DataObject", "Resource"}, {{Dir::Out, "REPLICATED_ON", "Resource"}}},
         {{"DataObject", "AVU"}, {{Dir::Out, "ANNOTATED_WITH", "AVU"}}},
-        {{"AVU", "DataObject"}, {{Dir::In, "ANNOTATED_WITH", "DataObject"}}},
-        {{"AVU", "Collection"}, {{Dir::In, "ANNOTATED_WITH", "Collection"}}},
+        {{"DataObject", "Replica"}, {{Dir::Out, "HAS_REPLICA", "Replica"}}},
+        {{"DataObject", "Access"}, {{Dir::In, "FOR_OBJECT", "Access"}}},
+        {{"DataObject", "User"}, {{Dir::In, "FOR_OBJECT", "Access"}, {Dir::In, "HAS_ACCESS", "User"}}},
+        {{"DataObject", "Zone"}, {{Dir::Out, "REPLICATED_ON", "Resource"}, {Dir::In, "HAS_RESC", "Zone"}}},
+        
+        // Collection -> X
+        {{"Collection", "DataObject"}, {{Dir::Out, "CONTAINS", "DataObject"}}},
+        {{"Collection", "Resource"}, {{Dir::Out, "CONTAINS", "DataObject"}, {Dir::Out, "REPLICATED_ON", "Resource"}}},
+        {{"Collection", "AVU"}, {{Dir::Out, "ANNOTATED_WITH", "AVU"}}},
+        {{"Collection", "Collection"}, {{Dir::Out, "CONTAINS", "Collection"}}},
+        {{"Collection", "Access"}, {{Dir::In, "FOR_OBJECT", "Access"}}},
+        {{"Collection", "User"}, {{Dir::In, "FOR_OBJECT", "Access"}, {Dir::In, "HAS_ACCESS", "User"}}},
+        {{"Collection", "Zone"}, {{Dir::In, "HAS_ROOT_COLL", "Zone"}}},
+
+        // User -> X
+        {{"User", "Access"}, {{Dir::Out, "HAS_ACCESS", "Access"}}},
+        {{"User", "DataObject"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}}},
+        {{"User", "Collection"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}, {Dir::In, "CONTAINS", "Collection"}}},
+        {{"User", "Resource"}, {{Dir::Out, "HAS_ACCESS", "Access"}, {Dir::Out, "FOR_OBJECT", "DataObject"}, {Dir::Out, "REPLICATED_ON", "Resource"}}},
+        {{"User", "Zone"}, {{Dir::In, "HAS_USER", "Zone"}}},
+        
+        // Access -> X
+        {{"Access", "User"}, {{Dir::In, "HAS_ACCESS", "User"}}},
+        {{"Access", "DataObject"}, {{Dir::Out, "FOR_OBJECT", "DataObject"}}},
+        {{"Access", "Collection"}, {{Dir::Out, "FOR_OBJECT", "Collection"}}},
+
+        // Resource -> X
+        {{"Resource", "Zone"}, {{Dir::In, "HAS_RESC", "Zone"}}},
+        {{"Resource", "DataObject"}, {{Dir::In, "REPLICATED_ON", "DataObject"}}},
+
+        // Zone -> X
         {{"Zone", "User"}, {{Dir::Out, "HAS_USER", "User"}}},
         {{"Zone", "Collection"}, {{Dir::Out, "HAS_ROOT_COLL", "Collection"}}},
         {{"Zone", "Resource"}, {{Dir::Out, "HAS_RESC", "Resource"}}},
-        {{"DataObject", "Replica"}, {{Dir::Out, "HAS_REPLICA", "Replica"}}},
-        {{"Replica", "Resource"}, {{Dir::Out, "STAYING_AT", "Resource"}}},
-        {{"Replica", "AVU"}, {{Dir::Out, "ANNOTATED_WITH", "AVU"}}},
-        {{"User", "Access"}, {{Dir::Out, "HAS_ACCESS", "Access"}}},
-        {{"Access", "DataObject"}, {{Dir::Out, "FOR_OBJECT", "DataObject"}}},
-        {{"Collection", "DataObject"}, {{Dir::Out, "CONTAINS", "DataObject"}}},
-        {{"DataObject", "Collection"}, {{Dir::In, "CONTAINS", "Collection"}}},
-        {{"Collection", "Collection"}, {{Dir::Out, "CONTAINS", "Collection"}}}
+
+        // Metadata Reverse
+        {{"AVU", "DataObject"}, {{Dir::In, "ANNOTATED_WITH", "DataObject"}}},
+        {{"AVU", "Collection"}, {{Dir::In, "ANNOTATED_WITH", "Collection"}}}
     };
 
     template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
@@ -210,10 +295,15 @@ namespace irods::catalog::compiler {
     };
 
     Gq2ToL3kvgCompiler::Gq2ToL3kvgCompiler(l3kvg::Engine& engine) 
-        : query_(engine.query()) {}
+        : engine_(engine), query_(engine.query()) {}
 
     l3kvg::Query Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::select& ast) {
         namespace gq = irods::experimental::genquery2;
+
+        query_ = engine_.query();
+        entry_node_type_ = "";
+        target_node_types_.clear();
+        return_fields_.clear();
 
         struct projection_visitor : public boost::static_visitor<void> {
             Gq2ToL3kvgCompiler* compiler;
@@ -270,6 +360,9 @@ namespace irods::catalog::compiler {
         anchor_visitor av(this);
         for(const auto& w : ast.conditions) boost::apply_visitor(av, w);
 
+        if (entry_node_type_.empty() && !target_node_types_.empty()) {
+            entry_node_type_ = target_node_types_[0];
+        }
         if (entry_node_type_.empty()) entry_node_type_ = "DataObject";
         query_.match(entry_node_type_);
 
@@ -302,7 +395,6 @@ namespace irods::catalog::compiler {
             }
         }
 
-        // 7. Process Distinct
         if (ast.distinct) {
             query_.distinct();
         }

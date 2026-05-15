@@ -22,6 +22,15 @@ namespace irods::catalog {
         std::string owner_zone;
         std::string create_ts;
         std::string modify_ts;
+        
+        // Extended fields for production
+        std::string checksum;
+        uint32_t repl_num;
+        std::string resc_name;
+        std::string path;
+        std::string resc_hier;
+        uint64_t resc_id;
+        std::string repl_status;
     };
 
     struct replica {
@@ -65,6 +74,12 @@ namespace irods::catalog {
         std::string attribute;
         std::string value;
         std::string units;
+    };
+
+    struct zone {
+        std::string name;
+        std::string type;
+        std::string connection;
     };
 
     enum class DbError {

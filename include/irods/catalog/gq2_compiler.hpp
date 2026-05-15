@@ -31,6 +31,7 @@ namespace irods::catalog::compiler {
         };
 
     private:
+        l3kvg::Engine& engine_;
         l3kvg::Query query_;
         std::string_view entry_node_type_;
         std::vector<std::string_view> target_node_types_;
