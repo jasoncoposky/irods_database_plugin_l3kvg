@@ -210,3 +210,16 @@ target_link_libraries(test_groupby PRIVATE
     irods_common
     irods_server
 )
+
+add_executable(test_distinct tests/test_distinct.cpp)
+target_link_libraries(test_distinct PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+)
