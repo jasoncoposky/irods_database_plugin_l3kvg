@@ -302,6 +302,11 @@ namespace irods::catalog::compiler {
             }
         }
 
+        // 7. Process Distinct
+        if (ast.distinct) {
+            query_.distinct();
+        }
+
         resolve_traversals();
         return query_;
     }
