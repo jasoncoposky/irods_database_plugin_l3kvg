@@ -45,6 +45,9 @@ add_library(l3kvg_plugin SHARED
     src/db_plugin.cpp
     src/catalog/catalog_facade.cpp
     src/compiler/gq2_compiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/genquery2/src/genquery2_driver.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/server/genquery2/dsl/lexer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/server/genquery2/dsl/parser.cpp
 )
 
 target_link_libraries(l3kvg_plugin PRIVATE
@@ -52,6 +55,7 @@ target_link_libraries(l3kvg_plugin PRIVATE
     l3kv_engine
     lite3-cpp
     conveyor
+    irods_common
 )
 
 target_compile_options(l3kvg_plugin PRIVATE
