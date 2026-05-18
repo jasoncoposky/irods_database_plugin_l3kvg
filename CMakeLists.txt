@@ -36,6 +36,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${IRODS_INCLUDE_DIRS}
     ${L3KVG_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_BINARY_DIR}/_deps/xxhash-src
 )
 
 # Build dependencies
@@ -85,8 +86,8 @@ target_link_libraries(test_metadata_acls PRIVATE
     irods_server
 )
 
-add_executable(test_identity tests/test_identity.cpp)
-target_link_libraries(test_identity PRIVATE
+add_executable(test_plugin_identity tests/test_plugin_identity.cpp)
+target_link_libraries(test_plugin_identity PRIVATE
     l3kvg_plugin
     l3kvg_engine
     l3kv_engine
@@ -96,6 +97,53 @@ target_link_libraries(test_identity PRIVATE
     gtest_main
     irods_common
     irods_server
+    dl
+    zmq
+)
+
+add_executable(test_plugin_data tests/test_plugin_data.cpp)
+target_link_libraries(test_plugin_data PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+    dl
+    zmq
+)
+
+add_executable(test_plugin_federation tests/test_plugin_federation.cpp)
+target_link_libraries(test_plugin_federation PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+    dl
+    zmq
+)
+
+add_executable(test_plugin_metadata tests/test_plugin_metadata.cpp)
+target_link_libraries(test_plugin_metadata PRIVATE
+    l3kvg_plugin
+    l3kvg_engine
+    l3kv_engine
+    lite3-cpp
+    conveyor
+    gtest
+    gtest_main
+    irods_common
+    irods_server
+    dl
+    zmq
 )
 
 add_executable(test_collections tests/test_collections.cpp)

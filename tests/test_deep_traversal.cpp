@@ -8,10 +8,12 @@
 using namespace irods::catalog;
 
 TEST(DeepTraversalTest, UserToDataObject) {
-    CatalogFacade catalog;
     Config cfg;
     cfg.db_path = "deep.l3kvg";
     cfg.node_id = 1;
+    system("rm -rf deep.l3kvg"); // Clean start
+    
+    CatalogFacade catalog;
     ASSERT_TRUE(catalog.init(cfg).ok());
 
     // 1. Setup Data

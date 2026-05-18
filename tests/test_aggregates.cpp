@@ -8,10 +8,12 @@
 using namespace irods::catalog;
 
 TEST(AggregateTest, CountAndSum) {
-    CatalogFacade catalog;
     Config cfg;
-    cfg.db_path = "agg.l3kvg";
+    cfg.db_path = "aggregates.l3kvg";
     cfg.node_id = 1;
+    system("rm -rf aggregates.l3kvg"); // Clean start
+
+    CatalogFacade catalog;
     ASSERT_TRUE(catalog.init(cfg).ok());
 
     // 1. Setup Data: 3 objects of sizes 100, 200, 300

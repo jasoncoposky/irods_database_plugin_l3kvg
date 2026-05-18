@@ -8,10 +8,12 @@
 using namespace irods::catalog;
 
 TEST(MultiHopQueryTest, CollectionToResource) {
-    CatalogFacade catalog;
     Config cfg;
     cfg.db_path = "multihop.l3kvg";
     cfg.node_id = 1;
+    system("rm -rf multihop.l3kvg"); // Clean start
+    
+    CatalogFacade catalog;
     ASSERT_TRUE(catalog.init(cfg).ok());
 
     // 1. Setup Hierarchy: Collection -> DataObject -> Resource
@@ -28,20 +30,17 @@ TEST(MultiHopQueryTest, CollectionToResource) {
     data_id_t out_obj_id;
     ASSERT_TRUE(catalog.register_data_object(obj, out_obj_id).ok());
 
-    // Register a Resource (Manually put node since register_resource is missing in prototype)
-    lite3cpp::Buffer resc_buf;
-    resc_buf.init_object();
-    resc_buf.set_i64(0, "id", 301);
-    resc_buf.set_str(0, "name", "demoResc");
-    catalog.get_engine()->put_node("301", resc_buf.move_to_string());
-    
-    // Add Secondary Index for Resource name (Manually)
-    lite3cpp::Buffer idx_buf;
-    idx_buf.init_object();
-    idx_buf.set_i64(0, "id", 301);
-    catalog.get_engine()->put_node("idx:Resource:name:demoResc", idx_buf.move_to_string());
+    // Register a Resource
+    resource resc;
+    resc.id = 301;
+    resc.name = "demoResc";
+    resc.type = "unixfilesystem";
+    resc.location = "localhost";
+    resc.vault_path = "/tmp";
+    resc_id_t out_resc_id;
+    ASSERT_TRUE(catalog.register_resource(resc, out_resc_id).ok());
 
-    // Register Replica on that Resource
+    // Register DataObject -> Resource relationship (using replica)
     replica repl;
     repl.data_id = 1001;
     repl.resource_id = 301;
@@ -51,6 +50,7 @@ TEST(MultiHopQueryTest, CollectionToResource) {
     ASSERT_TRUE(catalog.register_replica(repl).ok());
 
     // Synchronize
+    catalog.get_engine()->flush();
     catalog.get_engine()->get_store()->wait_all_shards();
 
     // 2. Perform Multi-Hop GenQuery using Secondary Index:

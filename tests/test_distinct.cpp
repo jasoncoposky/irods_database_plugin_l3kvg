@@ -9,10 +9,12 @@
 using namespace irods::catalog;
 
 TEST(DistinctTest, DeduplicateResults) {
-    CatalogFacade catalog;
     Config cfg;
     cfg.db_path = "distinct.l3kvg";
     cfg.node_id = 1;
+    system("rm -rf distinct.l3kvg"); // Clean start
+    
+    CatalogFacade catalog;
     ASSERT_TRUE(catalog.init(cfg).ok());
 
     // 1. Setup Data

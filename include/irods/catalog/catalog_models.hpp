@@ -13,61 +13,74 @@ namespace irods::catalog {
     using resc_id_t = uint64_t;
 
     struct data_object {
-        data_id_t id;
-        coll_id_t coll_id;
+        data_id_t id = 0;
+        coll_id_t coll_id = 0;
         std::string name;
-        std::string logical_path;
-        uint64_t size;
         std::string owner_name;
         std::string owner_zone;
+        std::string type;
+        uint64_t size = 0;
+        std::string version;
+        std::string mode;
+        std::string expiry;
+        std::string status;
+        std::string checksum;
+        std::string comments;
         std::string create_ts;
         std::string modify_ts;
-        
-        // Extended fields for production
-        std::string checksum;
-        uint32_t repl_num;
-        std::string resc_name;
-        std::string path;
-        std::string resc_hier;
-        uint64_t resc_id;
-        std::string repl_status;
     };
 
     struct replica {
-        data_id_t data_id;
-        uint32_t replica_number;
-        resc_id_t resource_id;
+        data_id_t data_id = 0;
+        uint32_t replica_number = 0;
+        resc_id_t resource_id = 0;
         std::string physical_path;
-        std::string resource_name;
+        std::string resc_hier;
         std::string status;
         std::string checksum;
+        std::string modify_ts;
+        std::string access_time;
     };
 
     struct collection {
-        coll_id_t id;
-        coll_id_t parent_id;
+        coll_id_t id = 0;
+        coll_id_t parent_id = 0;
         std::string name;
         std::string owner_name;
         std::string owner_zone;
+        std::string inheritance;
+        std::string type;
+        std::string info1;
+        std::string info2;
+        std::string comments;
         std::string create_ts;
         std::string modify_ts;
     };
 
     struct user {
-        user_id_t id;
+        user_id_t id = 0;
         std::string name;
         std::string zone;
         std::string type; // rodsuser, rodsadmin, etc.
+        std::string dn;
+        std::string info;
+        std::string comment;
+        std::string create_ts;
+        std::string modify_ts;
     };
 
     struct resource {
-        resc_id_t id;
+        resc_id_t id = 0;
         std::string name;
         std::string type;
         std::string location;
         std::string vault_path;
         std::string context;
-        std::string parent_id;
+        std::string comments;
+        int64_t free_space = 0;
+        int status = 1; // 1=up, 0=down
+        std::string create_ts;
+        std::string modify_ts;
     };
 
     struct avu {
@@ -80,15 +93,7 @@ namespace irods::catalog {
         std::string name;
         std::string type;
         std::string connection;
-    };
-
-    enum class DbError {
-        Success = 0,
-        EngineFault,
-        NotFound,
-        Collision,
-        PermissionDenied,
-        InvalidInput
+        std::string comment;
     };
 
 } // namespace irods::catalog
