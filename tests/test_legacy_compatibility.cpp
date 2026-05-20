@@ -14,7 +14,7 @@ using namespace irods::catalog;
 
 TEST(LegacyCompatibilityTest, CompileAllLegacyQueries) {
     l3kvg::Engine engine("legacy.l3kvg", 1);
-    compiler::Gq2ToL3kvgCompiler compiler(engine);
+    compiler::Gq2ToL3kvgCompiler compiler;
 
     std::ifstream file("legacy_queries.txt");
     ASSERT_TRUE(file.is_open()) << "Could not open legacy_queries.txt. Ensure it was downloaded successfully.";

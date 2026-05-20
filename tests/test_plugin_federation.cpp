@@ -26,22 +26,13 @@ TEST_F(FederationPluginTest, RemoteZoneAnchors) {
     db_config["l3kvg"]["plugin_specific_configuration"] = {
         {"db_path", "test.l3kvg"},
         {"node_id", 1},
-        {"zmq_endpoint", "tcp://127.0.0.1:5565"},
+        {"zmq_endpoint", endpoint()},
         {"federation", {fed_zone}}
     };
     config["plugin_configuration"]["database"] = db_config;
 
-    // Use a unique directory for this test's config
-    system("mkdir -p fed_test_config");
-    {
-        std::ofstream f("fed_test_config/server_config.json");
-        f << config.dump();
-    }
-    setenv("IRODS_CONF_DIR", "fed_test_config", 1);
+    irods::server_properties::instance().set_configuration(config);
     
-    // Reset singleton if possible, or just re-init
-    irods::server_properties::instance().init("fed_test_config/server_config.json");
-
     // 2. Start Plugin
     auto ret = plugin()->call(nullptr, irods::DATABASE_OP_START, nullptr);
     ASSERT_TRUE(ret.ok());

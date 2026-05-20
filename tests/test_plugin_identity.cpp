@@ -11,8 +11,16 @@ using namespace irods::catalog::test;
 class IdentityPluginTest : public PluginTestFixture {};
 
 TEST_F(IdentityPluginTest, BootstrapAndAuth) {
-    // 1. Setup Mock iRODS Config File
-    irods::server_properties::instance().init("./server_config.json");
+    // 1. Setup Mock iRODS Config
+    nlohmann::json config;
+    config["zone_name"] = "tempZone";
+    config["zone_user"] = "rods";
+    config["plugin_configuration"]["database"]["l3kvg"]["plugin_specific_configuration"] = {
+        {"db_path", "test.l3kvg"},
+        {"node_id", 1},
+        {"zmq_endpoint", endpoint()}
+    };
+    irods::server_properties::instance().set_configuration(config);
 
     // 2. Start Plugin
     auto ret = plugin()->call(nullptr, irods::DATABASE_OP_START, nullptr);
@@ -57,6 +65,21 @@ TEST_F(IdentityPluginTest, BootstrapAndAuth) {
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     snowflake_id_t alice_id = SnowflakeID::create(local_cid, "2:1002");
     ASSERT_TRUE(server()->has_node(alice_id));
+
+    // 5. Modify User (e.g. change type)
+    ASSERT_TRUE(plugin()->call<const char*, const char*, const char*>(
+        nullptr, irods::DATABASE_OP_MOD_USER, nullptr, "alice", "type", "rodsadmin").ok());
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // Verify privilege level updated (rodsadmin = 5)
+    ASSERT_EQ(server()->get_node(alice_id).get_attribute<int64_t>("p"), 5);
+
+    // 6. Delete User
+    ASSERT_TRUE(plugin()->call<const char*, const char*>(
+        nullptr, irods::DATABASE_OP_DEL_USER_RE, nullptr, "alice", "tempZone").ok());
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    ASSERT_FALSE(server()->has_node(alice_id));
 }
 
 int main(int argc, char **argv) {

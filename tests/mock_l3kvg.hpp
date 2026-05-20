@@ -37,57 +37,105 @@ namespace irods::catalog::test {
                     try {
                         auto res = zmq::recv_multipart(socket_, std::back_inserter(msgs), zmq::recv_flags::dontwait);
                         if (!res) {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                            std::this_thread::sleep_for(std::chrono::milliseconds(5));
                             continue;
                         }
                         
-                        if (msgs.size() < 3) continue;
+                        if (msgs.size() < 4) continue;
 
-                        // [Identity] [Empty] [Cmd] [Args...]
-                        std::string cmd = msgs[2].to_string();
+                        std::string cmd = msgs[3].to_string();
+                        std::string key = (msgs.size() > 4) ? msgs[4].to_string() : "";
                         
                         if (cmd == "P") {
-                            if (msgs.size() < 5) continue;
-                            std::string key = msgs[3].to_string();
-                            std::string payload = msgs[4].to_string();
-                            
+                            if (msgs.size() < 6) continue;
+                            std::string payload = msgs[5].to_string();
                             std::lock_guard<std::mutex> lock(mu_);
                             
-                            // Node: n:{id}
                             size_t n_start = key.find("n:{");
                             if (n_start != std::string::npos) {
                                 uint64_t id = std::stoull(key.substr(n_start + 3, 16), nullptr, 16);
-                                nodes_[id].id = id;
-                                nodes_[id].payload = payload;
+                                nodes_[id].id = id; nodes_[id].payload = payload;
+                                std::cerr << "[MockServer] Stored Node [" << std::hex << id << "]" << std::endl;
                             }
                             
-                            // Edge: e:out:{src}:{label}:{weight}:{dst}
                             size_t e_start = key.find("e:out:{");
                             if (e_start != std::string::npos) {
                                 uint64_t src = std::stoull(key.substr(e_start + 7, 16), nullptr, 16);
                                 size_t label_start = e_start + 7 + 16 + 2;
                                 size_t label_end = key.find(':', label_start);
                                 std::string label = key.substr(label_start, label_end - label_start);
-                                size_t dst_start = key.find(":{", label_end + 13); // skip weight
+                                size_t dst_start = key.find(":{", label_end + 13);
                                 uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
                                 nodes_[src].edges.push_back({label, dst});
+                                std::cerr << "[MockServer] Stored Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
                             }
+                            // Fire-and-forget, no reply for P
+                            socket_.send(msgs[0], zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
+                            continue;
+                        } else if (cmd == "D") {
+                            if (msgs.size() < 5) continue;
+                            std::string key = msgs[4].to_string();
+                            
+                            if (key.starts_with("n:{")) {
+                                uint64_t id = std::stoull(key.substr(3, 16), nullptr, 16);
+                                nodes_.erase(id);
+                                std::cerr << "[MockServer] Deleted Node [" << std::hex << id << "]" << std::endl;
+                            } else if (key.starts_with("e:out:{")) {
+                                uint64_t src = std::stoull(key.substr(7, 16), nullptr, 16);
+                                size_t label_start = 7 + 16 + 2;
+                                size_t label_end = key.find(':', label_start);
+                                std::string label = key.substr(label_start, label_end - label_start);
+                                size_t dst_start = key.find(":{", label_end + 13);
+                                uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
+                                
+                                auto& edges = nodes_[src].edges;
+                                edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const auto& e) {
+                                    return e.first == label && e.second == dst;
+                                }), edges.end());
+                                std::cerr << "[MockServer] Deleted Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
+                            }
+
+                            socket_.send(msgs[0], zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
+                            continue;
                         } else if (cmd == "G") {
-                            // ... return dummy payload ...
+                            if (msgs.size() < 5) continue;
+                            uint64_t id = std::stoull(key, nullptr, 16);
+                            std::string payload = "";
+                            {
+                                std::lock_guard<std::mutex> lock(mu_);
+                                auto it = nodes_.find(id);
+                                if (it != nodes_.end()) payload = it->second.payload;
+                                else std::cerr << "[MockServer] GET Node [" << std::hex << id << "] NOT FOUND" << std::endl;
+                            }
+                            socket_.send(msgs[0], zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t(payload.data(), payload.size()), zmq::send_flags::none);
+                            std::cerr << "[MockServer] Sent Payload for [" << std::hex << id << "]" << std::endl;
+                            continue;
+                        } else if (cmd == "H") {
+                             socket_.send(msgs[0], zmq::send_flags::sndmore);
+                             socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                             socket_.send(zmq::message_t(), zmq::send_flags::none);
+                             continue;
                         } else if (cmd == "R") {
-                             // Query: return empty array for now
                              socket_.send(msgs[0], zmq::send_flags::sndmore);
                              socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
                              socket_.send(zmq::message_t("[]", 2), zmq::send_flags::none);
                              continue;
                         }
 
-                        // Send Ack
+                        // Unknown command, send dummy ack to avoid hanging
                         socket_.send(msgs[0], zmq::send_flags::sndmore);
                         socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
-                        socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
+                        socket_.send(zmq::message_t("UNK", 3), zmq::send_flags::none);
 
-                    } catch (...) { if (!running_) break; }
+                    } catch (const std::exception& e) {
+                        std::cerr << "[MockServer] Error: " << e.what() << std::endl;
+                    } catch (...) { break; }
                 }
             });
         }

@@ -1,19 +1,29 @@
-#include <gtest/gtest.h>
+#include "plugin_test_fixture.hpp"
 #include "irods/catalog/catalog_facade.hpp"
+#include "irods/irods_server_properties.hpp"
 
 using namespace irods::catalog;
+using namespace irods::catalog::test;
 
-TEST(CollectionTest, Lifecycle) {
-    Config cfg;
-    cfg.db_path = "collections.l3kvg";
-    cfg.node_id = 1;
-    cfg.zmq_endpoint = "tcp://127.0.0.1:5555";
-    
+class CollectionTest : public PluginTestFixture {};
+
+TEST_F(CollectionTest, Lifecycle) {
+    // 1. Setup Config
+    nlohmann::json config;
+    config["zone_name"] = "tempZone";
+    config["zone_user"] = "rods";
+    config["plugin_configuration"]["database"]["l3kvg"]["plugin_specific_configuration"] = {
+        {"db_path", "test.l3kvg"},
+        {"node_id", 1},
+        {"zmq_endpoint", endpoint()}
+    };
+    irods::server_properties::instance().set_configuration(config);
+
     CatalogFacade catalog;
-    if (!catalog.init(cfg).ok()) {
-        std::cout << "Skipping test: L3KVG Server not available" << std::endl;
-        return;
-    }
+    Config cfg;
+    cfg.node_id = 1;
+    cfg.zmq_endpoint = endpoint();
+    ASSERT_TRUE(catalog.init(cfg).ok());
 
     // 1. Register Collections
     coll_id_t root_id, sub_id;
@@ -51,13 +61,25 @@ TEST(CollectionTest, Lifecycle) {
     ASSERT_TRUE(catalog.delete_collection(200).ok());
 }
 
-TEST(MetadataTest, AvuLifecycle) {
+class MetadataTest : public PluginTestFixture {};
+
+TEST_F(MetadataTest, AvuLifecycle) {
+    // 1. Setup Config
+    nlohmann::json config;
+    config["zone_name"] = "tempZone";
+    config["zone_user"] = "rods";
+    config["plugin_configuration"]["database"]["l3kvg"]["plugin_specific_configuration"] = {
+        {"db_path", "test.l3kvg"},
+        {"node_id", 1},
+        {"zmq_endpoint", endpoint()}
+    };
+    irods::server_properties::instance().set_configuration(config);
+
     CatalogFacade catalog;
     Config cfg;
-    cfg.db_path = "metadata.l3kvg";
     cfg.node_id = 1;
-    cfg.zmq_endpoint = "tcp://127.0.0.1:5555";
-    if (!catalog.init(cfg).ok()) return;
+    cfg.zmq_endpoint = endpoint();
+    ASSERT_TRUE(catalog.init(cfg).ok());
 
     // 1. Add AVU to Object
     avu a1{"color", "blue", "none"};

@@ -11,7 +11,16 @@ class DataPluginTest : public PluginTestFixture {};
 
 TEST_F(DataPluginTest, DataObjectLifecycle) {
     // 1. Setup Config
-    irods::server_properties::instance().init("./server_config.json");
+    nlohmann::json config;
+    config["zone_name"] = "tempZone";
+    config["zone_user"] = "rods";
+    config["plugin_configuration"]["database"]["l3kvg"]["plugin_specific_configuration"] = {
+        {"db_path", "test.l3kvg"},
+        {"node_id", 1},
+        {"zmq_endpoint", endpoint()}
+    };
+    irods::server_properties::instance().set_configuration(config);
+
     ASSERT_TRUE(plugin()->call(nullptr, irods::DATABASE_OP_START, nullptr).ok());
 
     uint16_t local_cid = SnowflakeID::calculate_cluster_id("tempZone");
@@ -51,6 +60,47 @@ TEST_F(DataPluginTest, DataObjectLifecycle) {
         }
     }
     ASSERT_TRUE(edge_found);
+
+    // 4. Rename Object
+    ASSERT_TRUE(plugin()->call<rodsLong_t, const char*>(
+        nullptr, irods::DATABASE_OP_RENAME_OBJECT, nullptr, 1001, "/tempZone/home/rods/new_name.txt").ok());
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    
+    // Verify name updated in node
+    ASSERT_EQ(server()->get_node(sid).get_attribute("n"), "/tempZone/home/rods/new_name.txt");
+
+    // 5. Move Object
+    // Create new collection
+    collInfo_t coll2;
+    std::memset(&coll2, 0, sizeof(coll2));
+    coll2.collId = 200;
+    std::strncpy(coll2.collName, "/tempZone/home/rods/sub", NAME_LEN);
+    ASSERT_TRUE(plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_REG_COLL, nullptr, &coll2).ok());
+    
+    ASSERT_TRUE(plugin()->call<rodsLong_t, rodsLong_t>(
+        nullptr, irods::DATABASE_OP_MOVE_OBJECT, nullptr, 1001, 200).ok());
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    
+    snowflake_id_t cid2 = SnowflakeID::create(local_cid, "3:200");
+    bool moved_edge_found = false;
+    for (const auto& edge : server()->get_node(cid2).edges) {
+        if (edge.first == "CONTAINS" && edge.second == sid) {
+            moved_edge_found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(moved_edge_found);
+
+    // 6. Delete Object
+    ASSERT_TRUE(plugin()->call<dataObjInfo_t*>(
+        nullptr, irods::DATABASE_OP_DEL_DATA_OBJ, nullptr, &obj).ok());
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    // Verify node is gone
+    ASSERT_FALSE(server()->has_node(sid));
 }
 
 int main(int argc, char **argv) {

@@ -10,16 +10,20 @@ namespace irods::catalog::test {
     class PluginTestFixture : public ::testing::Test {
     protected:
         void SetUp() override {
-            mock_server_ = std::make_unique<MockL3KVGServer>("tcp://127.0.0.1:5565");
+            int port = 5570 + (rand() % 100);
+            std::string endpoint = "tcp://127.0.0.1:" + std::to_string(port);
+            mock_server_ = std::make_unique<MockL3KVGServer>(endpoint);
             mock_server_->start();
+            endpoint_ = endpoint;
 
             // Load the plugin
             char cwd[1024];
-            getcwd(cwd, sizeof(cwd));
-            std::string plugin_path = std::string(cwd) + "/libirods_database_plugin_l3kvg.so";
-            handle_ = dlopen(plugin_path.c_str(), RTLD_NOW);
+            if (getcwd(cwd, sizeof(cwd))) {
+                std::string plugin_path = std::string(cwd) + "/libirods_database_plugin_l3kvg.so";
+                handle_ = dlopen(plugin_path.c_str(), RTLD_NOW);
+            }
             if (!handle_) {
-                throw std::runtime_error("Failed to load plugin from " + plugin_path + ": " + std::string(dlerror()));
+                throw std::runtime_error("Failed to load plugin: " + std::string(dlerror()));
             }
 
             typedef irods::database* (*factory_t)(const std::string&, const std::string&);
@@ -39,11 +43,13 @@ namespace irods::catalog::test {
 
         MockL3KVGServer* server() { return mock_server_.get(); }
         irods::database* plugin() { return plugin_; }
+        std::string endpoint() const { return endpoint_; }
 
     private:
         void* handle_ = nullptr;
         irods::database* plugin_ = nullptr;
         std::unique_ptr<MockL3KVGServer> mock_server_;
+        std::string endpoint_;
     };
 
 } // namespace irods::catalog::test

@@ -96,4 +96,14 @@ namespace irods::catalog {
         std::string comment;
     };
 
+    struct rule_exec {
+        uint64_t id;
+        std::string name;
+        std::string exec_time;
+        std::string priority;
+        std::string last_exec_time;
+        std::string status;
+        std::string estimate;
+    };
+
 } // namespace irods::catalog

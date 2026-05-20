@@ -74,20 +74,24 @@ namespace irods::catalog {
         irods::error modify_resource(resc_id_t resc_id, std::string_view prop, std::string_view value);
         irods::error delete_resource(resc_id_t resc_id);
         irods::error resolve_resource_name(std::string_view name, resc_id_t& out_id);
+        irods::error get_hierarchy_for_resource(std::string_view name, std::string& out_hier);
         irods::error update_resource_object_count(resc_id_t resc_id, int delta);
+        irods::error add_child_resource(std::string_view parent_name, std::string_view child_name, std::string_view context);
+        irods::error remove_child_resource(std::string_view parent_name, std::string_view child_name);
 
         // Identity Operations
         irods::error register_user(const user& usr, user_id_t& out_id);
-        irods::error delete_user(user_id_t user_id);
-        irods::error modify_user(user_id_t user_id, std::string_view prop, std::string_view value);
+        irods::error delete_user(std::string_view user_name);
+        irods::error modify_user(std::string_view user_name, std::string_view prop, std::string_view value);
         irods::error check_auth(std::string_view user_name, std::string_view zone, int& user_priv);
         irods::error check_auth_credentials(std::string_view username, std::string_view zone, std::string_view password, bool& correct);
-        irods::error add_user_to_group(user_id_t user_id, user_id_t group_id);
-        irods::error remove_user_from_group(user_id_t user_id, user_id_t group_id);
+        irods::error add_user_to_group(std::string_view user_name, std::string_view zone, std::string_view group_name);
+        irods::error remove_user_from_group(std::string_view user_name, std::string_view zone, std::string_view group_name);
 
         // ACL Operations
-        irods::error set_access(uint64_t user_id, uint64_t target_id, std::string_view level, bool recursive);
+        irods::error set_access(std::string_view user_name, std::string_view zone, std::string_view target_path, std::string_view level, bool recursive);
         irods::error check_permission(uint64_t user_id, uint64_t target_id, std::string_view level, bool& allowed);
+        irods::error check_permission_to_modify_data_object(uint64_t user_id, uint64_t target_id, bool& allowed);
 
         // Metadata (AVU) Operations
         irods::error add_avu_metadata(std::string_view type, std::string_view target_id, const avu& metadata);
@@ -106,6 +110,26 @@ namespace irods::catalog {
         irods::error delete_token(std::string_view name, std::string_view namespace_str);
         irods::error set_quota(std::string_view user_name, std::string_view resc_name, int64_t limit);
         irods::error check_quota(std::string_view user_name, std::string_view resc_name, int64_t& usage, int64_t& limit);
+        irods::error calculate_usage(std::string_view user_name, std::string_view resc_name, int64_t& usage);
+        irods::error set_logical_quota(std::string_view coll_name, int64_t limit);
+        irods::error check_logical_quota(std::string_view coll_name, int64_t& usage, int64_t& limit);
+        irods::error calculate_logical_usage(std::string_view coll_name, int64_t& usage);
+
+        // Server Operations
+        irods::error register_server_load(std::string_view host, int load);
+        irods::error purge_server_load(std::string_view host);
+
+        // Grid Config Operations
+        irods::error set_grid_configuration_value(std::string_view key, std::string_view value);
+        irods::error get_grid_configuration_value(std::string_view key, std::string& out_value);
+
+        // Rule Operations
+        irods::error register_rule_execution(const rule_exec& re, uint64_t& out_id);
+        irods::error delete_rule_execution(uint64_t id);
+
+        // Specific Query Operations
+        irods::error register_specific_query(std::string_view alias, std::string_view sql);
+        irods::error delete_specific_query(std::string_view alias);
 
         // Query Operations
         irods::error execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results);

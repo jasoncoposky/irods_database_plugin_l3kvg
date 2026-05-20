@@ -223,18 +223,45 @@ namespace irods::catalog::compiler {
         void operator()(const irods::experimental::genquery2::logical_not& l) const { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
     };
 
+    struct projection_visitor : public boost::static_visitor<void> {
+        Gq2ToL3kvgCompiler* compiler;
+        json& j_projs;
+        projection_visitor(Gq2ToL3kvgCompiler* c, json& jp) : compiler(c), j_projs(jp) {}
+
+        void operator()(const irods::experimental::genquery2::column& col) const {
+            auto it = COLUMN_NAME_MAP.find(col.name);
+            if (it != COLUMN_NAME_MAP.end()) {
+                compiler->add_target_type(it->second.node_type);
+                j_projs.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"agg", 0}});
+            }
+        }
+
+        void operator()(const irods::experimental::genquery2::function& func) const {
+            int agg = 0;
+            if (func.name == "COUNT") agg = 1;
+            else if (func.name == "SUM") agg = 2;
+            else if (func.name == "AVG") agg = 3;
+            else if (func.name == "MIN") agg = 4;
+            else if (func.name == "MAX") agg = 5;
+
+            for (const auto& arg : func.arguments) {
+                if (auto* col = std::get_if<irods::experimental::genquery2::column>(&arg)) {
+                    auto it = COLUMN_NAME_MAP.find(col->name);
+                    if (it != COLUMN_NAME_MAP.end()) {
+                        compiler->add_target_type(it->second.node_type);
+                        j_projs.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"agg", agg}});
+                    }
+                }
+            }
+        }
+    };
+
     std::string Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::select& ast) {
         json j;
         json j_projs = json::array();
+        projection_visitor pv(this, j_projs);
         for (const auto& p : ast.projections) {
-            std::string col_name;
-            if (auto* col = boost::get<irods::experimental::genquery2::column>(&p)) col_name = col->name;
-            else if (auto* func = boost::get<irods::experimental::genquery2::function>(&p)) col_name = func->name;
-            auto it = COLUMN_NAME_MAP.find(col_name);
-            if (it != COLUMN_NAME_MAP.end()) {
-                target_node_types_.push_back(it->second.node_type);
-                j_projs.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"agg", 0}});
-            }
+            boost::apply_visitor(pv, p);
         }
         j["projections"] = j_projs;
 
@@ -276,8 +303,8 @@ namespace irods::catalog::compiler {
         for(const auto& w : ast.conditions) boost::apply_visitor(cv, w);
         j["filters"] = j_filters;
 
-        if (ast.range.limit) j["limit"] = *ast.range.limit;
-        if (ast.range.offset) j["offset"] = *ast.range.offset;
+        if (!ast.range.number_of_rows.empty()) j["limit"] = std::stoull(ast.range.number_of_rows);
+        if (!ast.range.offset.empty()) j["offset"] = std::stoull(ast.range.offset);
         j["distinct"] = ast.distinct;
 
         return j.dump();

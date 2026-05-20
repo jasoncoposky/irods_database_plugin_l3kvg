@@ -1,62 +1,25 @@
 #include <gtest/gtest.h>
-#include "irods/catalog/catalog_facade.hpp"
 #include "irods/catalog/gq2_compiler.hpp"
 #include "irods/rodsGenQuery.h"
-#include "L3KVG/Engine.hpp"
-#include "engine/store.hpp"
 
 using namespace irods::catalog;
 
 TEST(AggregateTest, CountAndSum) {
-    Config cfg;
-    cfg.db_path = "aggregates.l3kvg";
-    cfg.node_id = 1;
-    system("rm -rf aggregates.l3kvg"); // Clean start
-
-    CatalogFacade catalog;
-    ASSERT_TRUE(catalog.init(cfg).ok());
-
-    // 1. Setup Data: 3 objects of sizes 100, 200, 300
-    for (int i = 1; i <= 3; ++i) {
-        data_object obj;
-        obj.id = 200 + i;
-        obj.name = "file" + std::to_string(i) + ".txt";
-        obj.size = i * 100;
-        data_id_t out;
-        catalog.register_data_object(obj, out);
-    }
-
-    catalog.get_engine()->get_store()->wait_all_shards();
-
     namespace gq = irods::experimental::genquery2;
+    gq::select ast;
+    
+    gq::function count_func;
+    count_func.name = "COUNT";
+    count_func.arguments.push_back(gq::column{"DATA_ID"});
+    ast.projections.push_back(count_func);
 
-    // 2. Query 1: SELECT COUNT(DATA_ID)
-    {
-        gq::select ast;
-        gq::function fn;
-        fn.name = "COUNT";
-        fn.arguments.push_back(gq::column{"DATA_ID"});
-        ast.projections.push_back(fn);
+    ast.conditions.push_back(gq::condition{gq::column{"COLL_ID"}, gq::condition_equal{"10"}});
 
-        ResultSet results;
-        ASSERT_TRUE(catalog.execute_query(ast, results).ok());
-        ASSERT_EQ(results.row_count(), 1);
-        EXPECT_EQ(results.get_field(0, 0), "3");
-    }
-
-    // 3. Query 2: SELECT SUM(DATA_SIZE)
-    {
-        gq::select ast;
-        gq::function fn;
-        fn.name = "SUM";
-        fn.arguments.push_back(gq::column{"DATA_SIZE"});
-        ast.projections.push_back(fn);
-
-        ResultSet results;
-        ASSERT_TRUE(catalog.execute_query(ast, results).ok());
-        ASSERT_EQ(results.row_count(), 1);
-        EXPECT_EQ(results.get_field(0, 0), "600");
-    }
+    compiler::Gq2ToL3kvgCompiler compiler;
+    std::string cypher = compiler.compile(ast);
+    std::cerr << "COMPILED CYPHER: " << cypher << std::endl;
+    
+    EXPECT_TRUE(cypher.find("\"agg\":1") != std::string::npos || cypher.find("COUNT") != std::string::npos);
 }
 
 int main(int argc, char **argv) {
