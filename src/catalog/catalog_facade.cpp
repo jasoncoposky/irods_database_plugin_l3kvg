@@ -267,15 +267,14 @@ namespace irods::catalog {
         // --- Resources ---
         irods::error register_resource(const resource& resc, resc_id_t& out_id) {
             snowflake_id_t sid = make_id(EntityType::Resource, resc.id);
-            lite3cpp::Buffer buf; buf.init_object(); buf.set_str(0, "n", resc.name); buf.set_str(0, "t", resc.type); buf.set_i64(0, "s", static_cast<int64_t>(resc.status));
+            lite3cpp::Buffer buf; buf.init_object(); buf.set_i64(0, "id", static_cast<int64_t>(resc.id)); buf.set_str(0, "n", resc.name); buf.set_str(0, "t", resc.type); buf.set_i64(0, "s", static_cast<int64_t>(resc.status));
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string());
             add_index(EntityType::Resource, "name", resc.name, sid);
             snowflake_id_t zid = make_id(EntityType::Zone, 1);
             add_edge(zid, "HAS_RESC", 1.0, sid);
-            out_id = resc.id; return SUCCESS();
+            out_id = sid; return SUCCESS();
         }
-        irods::error modify_resource(resc_id_t resc_id, std::string_view prop, std::string_view value) { 
-            snowflake_id_t sid = make_id(EntityType::Resource, resc_id);
+        irods::error modify_resource(snowflake_id_t sid, std::string_view prop, std::string_view value) { 
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (!payload.empty()) {
                  lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
@@ -284,8 +283,7 @@ namespace irods::catalog {
             }
             return SUCCESS(); 
         }
-        irods::error delete_resource(resc_id_t resc_id) { 
-            snowflake_id_t sid = make_id(EntityType::Resource, resc_id);
+        irods::error delete_resource(snowflake_id_t sid) { 
             // Delete name index
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (!payload.empty()) {
@@ -300,11 +298,10 @@ namespace irods::catalog {
             client_->del_node_async(local_cluster_id_, sid);
             return SUCCESS(); 
         }
-        irods::error resolve_resource_name(std::string_view name, resc_id_t& out_id) { 
+        irods::error resolve_resource_name(std::string_view name, snowflake_id_t& out_id) { 
             snowflake_id_t sid = resolve_id_from_index(EntityType::Resource, "name", name);
             if (!sid) return ERROR(-1, "Resource not found");
-            // Resolve Snowflake ID back to internal ID if possible, or just use Snowflake as internal
-            out_id = SnowflakeID::get_local_hash(sid);
+            out_id = sid;
             return SUCCESS(); 
         }
         irods::error get_hierarchy_for_resource(std::string_view name, std::string& out_hier) {
@@ -843,9 +840,9 @@ namespace irods::catalog {
     irods::error CatalogFacade::delete_collection(coll_id_t coll_id) { return pImpl_->delete_collection(coll_id); }
     irods::error CatalogFacade::modify_collection(coll_id_t coll_id, std::string_view prop, std::string_view value) { return pImpl_->modify_collection(coll_id, prop, value); }
     irods::error CatalogFacade::register_resource(const resource& resc, resc_id_t& out_id) { return pImpl_->register_resource(resc, out_id); }
-    irods::error CatalogFacade::modify_resource(resc_id_t resc_id, std::string_view prop, std::string_view value) { return pImpl_->modify_resource(resc_id, prop, value); }
-    irods::error CatalogFacade::delete_resource(resc_id_t resc_id) { return pImpl_->delete_resource(resc_id); }
-    irods::error CatalogFacade::resolve_resource_name(std::string_view name, resc_id_t& out_id) { return pImpl_->resolve_resource_name(name, out_id); }
+    irods::error CatalogFacade::modify_resource(snowflake_id_t sid, std::string_view prop, std::string_view value) { return pImpl_->modify_resource(sid, prop, value); }
+    irods::error CatalogFacade::delete_resource(snowflake_id_t sid) { return pImpl_->delete_resource(sid); }
+    irods::error CatalogFacade::resolve_resource_name(std::string_view name, snowflake_id_t& out_id) { return pImpl_->resolve_resource_name(name, out_id); }
     irods::error CatalogFacade::get_hierarchy_for_resource(std::string_view name, std::string& out_hier) { return pImpl_->get_hierarchy_for_resource(name, out_hier); }
     irods::error CatalogFacade::update_resource_object_count(resc_id_t resc_id, int delta) { return pImpl_->update_resource_object_count(resc_id, delta); }
     irods::error CatalogFacade::add_child_resource(std::string_view parent_name, std::string_view child_name, std::string_view context) { return pImpl_->add_child_resource(parent_name, child_name, context); }

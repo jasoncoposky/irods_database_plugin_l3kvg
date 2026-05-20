@@ -115,7 +115,7 @@ namespace irods::catalog::test {
                             continue;
                         } else if (cmd == "G") {
                             if (msgs.size() < 5) continue;
-                            uint64_t id = std::stoull(key, nullptr, 16);
+                            uint64_t id = std::stoull(msgs[4].to_string(), nullptr, 16);
                             std::string payload = "";
                             {
                                 std::lock_guard<std::mutex> lock(mu_);
@@ -127,6 +127,57 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
                             socket_.send(zmq::message_t(payload.data(), payload.size()), zmq::send_flags::none);
                             std::cerr << "[MockServer] Sent Payload for [" << std::hex << id << "]" << std::endl;
+                            continue;
+                        } else if (cmd == "N") {
+                            if (msgs.size() < 5) continue;
+                            uint64_t id = std::stoull(msgs[4].to_string(), nullptr, 16);
+                            std::string label = msgs[5].to_string();
+                            
+                            std::vector<uint64_t> neighs;
+                            {
+                                std::lock_guard<std::mutex> lock(mu_);
+                                auto it = nodes_.find(id);
+                                if (it != nodes_.end()) {
+                                    for (const auto& e : it->second.edges) {
+                                        if (e.first == label) neighs.push_back(e.second);
+                                    }
+                                }
+                            }
+                            
+                            nlohmann::json j = nlohmann::json::array();
+                            for (auto n : neighs) {
+                                char buf[17]; std::snprintf(buf, 17, "%016llx", (unsigned long long)n);
+                                j.push_back(std::string(buf));
+                            }
+                            
+                            socket_.send(msgs[0], zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t(j.dump()), zmq::send_flags::none);
+                            continue;
+                        } else if (cmd == "I") {
+                            if (msgs.size() < 5) continue;
+                            uint64_t id = std::stoull(msgs[4].to_string(), nullptr, 16);
+                            std::string label = msgs[5].to_string();
+                            
+                            std::vector<uint64_t> neighs;
+                            {
+                                std::lock_guard<std::mutex> lock(mu_);
+                                for (const auto& [nid, node] : nodes_) {
+                                    for (const auto& e : node.edges) {
+                                        if (e.first == label && e.second == id) neighs.push_back(nid);
+                                    }
+                                }
+                            }
+                            
+                            nlohmann::json j = nlohmann::json::array();
+                            for (auto n : neighs) {
+                                char buf[17]; std::snprintf(buf, 17, "%016llx", (unsigned long long)n);
+                                j.push_back(std::string(buf));
+                            }
+                            
+                            socket_.send(msgs[0], zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t(j.dump()), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "H") {
                              socket_.send(msgs[0], zmq::send_flags::sndmore);

@@ -35,7 +35,7 @@ TEST_F(ResourcePluginTest, LifecycleAndHierarchy) {
         nullptr, irods::DATABASE_OP_REG_RESC, nullptr, &info).ok()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    snowflake_id_t rid = SnowflakeID::create(local_cid, "5:501");
+    snowflake_id_t rid = SnowflakeID::create(local_cid, "6:501");
     ASSERT_TRUE(server()->has_node(rid));
 
     // 3. Modify Resource
@@ -59,7 +59,7 @@ TEST_F(ResourcePluginTest, LifecycleAndHierarchy) {
         nullptr, irods::DATABASE_OP_ADD_CHILD_RESC, nullptr, "ufs", "ufs_child", "").ok()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    snowflake_id_t crid = SnowflakeID::create(local_cid, "5:502");
+    snowflake_id_t crid = SnowflakeID::create(local_cid, "6:502");
     
     // Verify HAS_CHILD edge
     bool edge_found = false;

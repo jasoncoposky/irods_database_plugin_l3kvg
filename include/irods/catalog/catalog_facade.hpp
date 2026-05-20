@@ -7,6 +7,7 @@
 #include <map>
 #include <unordered_map>
 #include "irods/catalog/catalog_models.hpp"
+#include "irods/catalog/binary_key.hpp"
 #include "irods/irods_error.hpp"
 #include "irods/private/genquery2_ast_types.hpp"
 #include "L3KVG/Query.hpp"
@@ -71,9 +72,9 @@ namespace irods::catalog {
 
         // Resource Operations
         irods::error register_resource(const resource& resc, resc_id_t& out_id);
-        irods::error modify_resource(resc_id_t resc_id, std::string_view prop, std::string_view value);
-        irods::error delete_resource(resc_id_t resc_id);
-        irods::error resolve_resource_name(std::string_view name, resc_id_t& out_id);
+        irods::error modify_resource(snowflake_id_t sid, std::string_view prop, std::string_view value);
+        irods::error delete_resource(snowflake_id_t sid);
+        irods::error resolve_resource_name(std::string_view name, snowflake_id_t& out_id);
         irods::error get_hierarchy_for_resource(std::string_view name, std::string& out_hier);
         irods::error update_resource_object_count(resc_id_t resc_id, int delta);
         irods::error add_child_resource(std::string_view parent_name, std::string_view child_name, std::string_view context);
