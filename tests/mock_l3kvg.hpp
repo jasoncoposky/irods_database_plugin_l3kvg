@@ -23,6 +23,18 @@ namespace irods::catalog::test {
             uint64_t id = 0;
             std::string payload;
             std::vector<std::pair<std::string, uint64_t>> edges;
+
+            template<typename T>
+            T get_attribute(const std::string& key) const {
+                if (payload.empty()) return T{};
+                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                if constexpr (std::is_same_v<T, std::string>) {
+                    return std::string(buf.get_str(0, key));
+                } else if constexpr (std::is_integral_v<T>) {
+                    return static_cast<T>(buf.get_i64(0, key));
+                }
+                return T{};
+            }
         };
 
         MockL3KVGServer(const std::string& endpoint) 

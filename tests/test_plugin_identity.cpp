@@ -67,16 +67,16 @@ TEST_F(IdentityPluginTest, BootstrapAndAuth) {
     ASSERT_TRUE(server()->has_node(alice_id));
 
     // 5. Modify User (e.g. change type)
-    ASSERT_TRUE(plugin()->call<const char*, const char*, const char*>(
-        nullptr, irods::DATABASE_OP_MOD_USER, nullptr, "alice", "type", "rodsadmin").ok());
+    ASSERT_TRUE((plugin()->call<const char*, const char*, const char*>(
+        nullptr, irods::DATABASE_OP_MOD_USER, nullptr, "alice", "type", "rodsadmin").ok()));
     
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     // Verify privilege level updated (rodsadmin = 5)
     ASSERT_EQ(server()->get_node(alice_id).get_attribute<int64_t>("p"), 5);
 
     // 6. Delete User
-    ASSERT_TRUE(plugin()->call<const char*, const char*>(
-        nullptr, irods::DATABASE_OP_DEL_USER_RE, nullptr, "alice", "tempZone").ok());
+    ASSERT_TRUE((plugin()->call<const char*, const char*>(
+        nullptr, irods::DATABASE_OP_DEL_USER_RE, nullptr, "alice", "tempZone").ok()));
     
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     ASSERT_FALSE(server()->has_node(alice_id));

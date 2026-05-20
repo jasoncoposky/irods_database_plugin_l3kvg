@@ -108,8 +108,13 @@ namespace irods::catalog {
             buf.set_str(0, "ct", obj.create_ts); buf.set_str(0, "mt", obj.modify_ts);
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string());
             add_index(EntityType::DataObject, "path", obj.name, sid);
+            
             snowflake_id_t cid = make_id(EntityType::Collection, obj.coll_id);
             add_edge(cid, "CONTAINS", 1.0, sid);
+
+            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "name", obj.owner_name);
+            if (uid) add_edge(uid, "OWNS", 1.0, sid);
+
             out_id = obj.id; return SUCCESS();
         }
         irods::error delete_data_object(data_id_t id) { 
@@ -649,7 +654,36 @@ namespace irods::catalog {
             return SUCCESS(); 
         }
         irods::error calculate_usage(std::string_view user_name, std::string_view resc_name, int64_t& usage) {
-            usage = 0; // TODO: Implement graph-based summation
+            usage = 0;
+            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "name", user_name);
+            snowflake_id_t rid = resolve_id_from_index(EntityType::Resource, "name", resc_name);
+            if (!uid || !rid) return SUCCESS();
+
+            // 1. Find all DataObjects owned by user
+            auto data_objects = client_->get_neighbors_async(local_cluster_id_, uid, "OWNS", 0.0).get();
+            for (auto sid : data_objects) {
+                // 2. Check if DataObject has a replica on this resource
+                auto replicas = client_->get_neighbors_async(local_cluster_id_, sid, "HAS_REPLICA", 0.0).get();
+                bool on_resc = false;
+                for (auto rep_id : replicas) {
+                    auto resources = client_->get_neighbors_async(local_cluster_id_, rep_id, "STAYING_AT", 0.0).get();
+                    for (auto res_id : resources) {
+                        if (res_id == rid) { on_resc = true; break; }
+                    }
+                    if (on_resc) break;
+                }
+
+                if (on_resc) {
+                    // 3. Add size to total
+                    std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
+                    if (!payload.empty()) {
+                        try {
+                            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                            usage += buf.get_i64(0, "s");
+                        } catch (...) {}
+                    }
+                }
+            }
             return SUCCESS();
         }
 
@@ -714,7 +748,31 @@ namespace irods::catalog {
             return SUCCESS();
         }
         irods::error calculate_logical_usage(std::string_view coll_name, int64_t& usage) {
-            usage = 0; // TODO: Implement graph-based summation
+            usage = 0;
+            snowflake_id_t cid = resolve_id_from_index(EntityType::Collection, "path", coll_name);
+            if (!cid) return SUCCESS();
+
+            // Recursive traversal to sum all DataObjects
+            std::vector<snowflake_id_t> stack = {cid};
+            while (!stack.empty()) {
+                snowflake_id_t current = stack.back(); stack.pop_back();
+                
+                auto contents = client_->get_neighbors_async(local_cluster_id_, current, "CONTAINS", 0.0).get();
+                for (auto id : contents) {
+                    std::string payload = client_->get_node_payload_async(local_cluster_id_, id).get();
+                    if (!payload.empty()) {
+                        try {
+                            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                            if (buf.get_type(0, "s") != lite3cpp::Type::Invalid) {
+                                usage += buf.get_i64(0, "s");
+                            } else {
+                                // It's a collection, add to stack for recursive summation
+                                stack.push_back(id);
+                            }
+                        } catch (...) {}
+                    }
+                }
+            }
             return SUCCESS();
         }
 

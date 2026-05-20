@@ -31,16 +31,16 @@ TEST_F(ResourcePluginTest, LifecycleAndHierarchy) {
     info["resc_type"] = "unixfilesystem";
     info["resc_net"] = "localhost";
     info["resc_def_path"] = "/tmp";
-    ASSERT_TRUE(plugin()->call<std::map<std::string, std::string>*>(
-        nullptr, irods::DATABASE_OP_REG_RESC, nullptr, &info).ok());
+    ASSERT_TRUE((plugin()->call<std::map<std::string, std::string>*>(
+        nullptr, irods::DATABASE_OP_REG_RESC, nullptr, &info).ok()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     snowflake_id_t rid = SnowflakeID::create(local_cid, "5:501");
     ASSERT_TRUE(server()->has_node(rid));
 
     // 3. Modify Resource
-    ASSERT_TRUE(plugin()->call<const char*, const char*, const char*>(
-        nullptr, irods::DATABASE_OP_MOD_RESC, nullptr, "ufs", "status", "down").ok());
+    ASSERT_TRUE((plugin()->call<const char*, const char*, const char*>(
+        nullptr, irods::DATABASE_OP_MOD_RESC, nullptr, "ufs", "status", "down").ok()));
     
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     // Note: status is stored as int64 's' in the facade
@@ -52,11 +52,11 @@ TEST_F(ResourcePluginTest, LifecycleAndHierarchy) {
     child_info["resc_id"] = "502";
     child_info["resc_name"] = "ufs_child";
     child_info["resc_type"] = "unixfilesystem";
-    ASSERT_TRUE(plugin()->call<std::map<std::string, std::string>*>(
-        nullptr, irods::DATABASE_OP_REG_RESC, nullptr, &child_info).ok());
+    ASSERT_TRUE((plugin()->call<std::map<std::string, std::string>*>(
+        nullptr, irods::DATABASE_OP_REG_RESC, nullptr, &child_info).ok()));
     
-    ASSERT_TRUE(plugin()->call<const char*, const char*, const char*>(
-        nullptr, irods::DATABASE_OP_ADD_CHILD_RESC, nullptr, "ufs", "ufs_child", "").ok());
+    ASSERT_TRUE((plugin()->call<const char*, const char*, const char*>(
+        nullptr, irods::DATABASE_OP_ADD_CHILD_RESC, nullptr, "ufs", "ufs_child", "").ok()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     snowflake_id_t crid = SnowflakeID::create(local_cid, "5:502");
@@ -73,14 +73,14 @@ TEST_F(ResourcePluginTest, LifecycleAndHierarchy) {
 
     // 5. Get Hierarchy
     char* hier = nullptr;
-    ASSERT_TRUE(plugin()->call<const char*, char**>(
-        nullptr, irods::DATABASE_OP_GET_HIERARCHY_FOR_RESC, nullptr, "ufs_child", &hier).ok());
+    ASSERT_TRUE((plugin()->call<const char*, char**>(
+        nullptr, irods::DATABASE_OP_GET_HIERARCHY_FOR_RESC, nullptr, "ufs_child", &hier).ok()));
     ASSERT_STREQ(hier, "ufs;ufs_child");
     if (hier) free(hier);
 
     // 6. Delete Resource
-    ASSERT_TRUE(plugin()->call<const char*, int>(
-        nullptr, irods::DATABASE_OP_DEL_RESC, nullptr, "ufs_child", 0).ok());
+    ASSERT_TRUE((plugin()->call<const char*, int>(
+        nullptr, irods::DATABASE_OP_DEL_RESC, nullptr, "ufs_child", 0).ok()));
     
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     ASSERT_FALSE(server()->has_node(crid));

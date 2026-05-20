@@ -31,7 +31,7 @@ TEST_F(CollectionPluginTest, Lifecycle) {
     std::strncpy(coll.collName, "/tempZone/home/rods", NAME_LEN);
     std::strncpy(coll.collOwnerName, "rods", NAME_LEN);
     std::strncpy(coll.collOwnerZone, "tempZone", NAME_LEN);
-    ASSERT_TRUE(plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_REG_COLL, nullptr, &coll).ok());
+    ASSERT_TRUE((plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_REG_COLL, nullptr, &coll).ok()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     snowflake_id_t cid = SnowflakeID::create(local_cid, "3:100");
@@ -46,20 +46,20 @@ TEST_F(CollectionPluginTest, Lifecycle) {
     coll.condInput.keyWord[0] = strdup("o");
     coll.condInput.value[0] = strdup("alice");
     
-    ASSERT_TRUE(plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_MOD_COLL, nullptr, &coll).ok());
+    ASSERT_TRUE((plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_MOD_COLL, nullptr, &coll).ok()));
     
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    ASSERT_EQ(server()->get_node(cid).get_attribute("o"), "alice");
+    ASSERT_EQ(server()->get_node(cid).get_attribute<std::string>("o"), "alice");
 
     // 3. Rename Collection
-    ASSERT_TRUE(plugin()->call<const char*, const char*>(
-        nullptr, irods::DATABASE_OP_RENAME_COLL, nullptr, "/tempZone/home/rods", "/tempZone/home/alice").ok());
+    ASSERT_TRUE((plugin()->call<const char*, const char*>(
+        nullptr, irods::DATABASE_OP_RENAME_COLL, nullptr, "/tempZone/home/rods", "/tempZone/home/alice").ok()));
     
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    ASSERT_EQ(server()->get_node(cid).get_attribute("n"), "/tempZone/home/alice");
+    ASSERT_EQ(server()->get_node(cid).get_attribute<std::string>("n"), "/tempZone/home/alice");
 
     // 4. Delete Collection
-    ASSERT_TRUE(plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_DEL_COLL, nullptr, &coll).ok());
+    ASSERT_TRUE((plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_DEL_COLL, nullptr, &coll).ok()));
     
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     ASSERT_FALSE(server()->has_node(cid));

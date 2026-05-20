@@ -36,7 +36,10 @@ namespace irods::catalog::test {
         }
 
         void TearDown() override {
-            if (plugin_) delete plugin_;
+            if (plugin_) {
+                plugin_->call(nullptr, "database_stop", nullptr);
+                delete plugin_;
+            }
             if (handle_) dlclose(handle_);
             mock_server_->stop();
         }
