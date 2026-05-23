@@ -8,8 +8,16 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_compile_options(-Wno-changes-meaning)
 
 # Include Directories
+include_directories(include)
+
+# Check for iRODS headers in system paths first (for Docker builds)
+find_path(IRODS_EXTERNALS_PATH NAMES irods_externals PATHS /opt/irods-externals)
+if(EXISTS "/usr/include/irods")
+    include_directories(/usr/include/irods)
+endif()
+
+# Fallback/Override for local development
 include_directories(
-    include
     ${CMAKE_CURRENT_SOURCE_DIR}/../l3kvg/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../L3KV/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../L3KV/src/engine
@@ -24,6 +32,7 @@ include_directories(
 
 # External Libraries
 link_directories(
+    /usr/lib/irods/plugins/database
     ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/lib
 )
 
@@ -38,6 +47,11 @@ add_library(irods_database_plugin_l3kvg SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/genquery2/src/genquery2_driver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/server/genquery2/dsl/lexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/server/genquery2/dsl/parser.cpp
+)
+
+set_target_properties(irods_database_plugin_l3kvg PROPERTIES
+    PREFIX "lib"
+    OUTPUT_NAME "l3kvg"
 )
 
 target_link_libraries(irods_database_plugin_l3kvg PRIVATE
@@ -113,3 +127,23 @@ target_link_libraries(test_deep_traversal PRIVATE irods_database_plugin_l3kvg l3
 
 add_executable(test_legacy_compatibility tests/test_legacy_compatibility.cpp)
 target_link_libraries(test_legacy_compatibility PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static fmt)
+
+# CPack Configuration
+set(CPACK_PACKAGE_NAME "irods-database-plugin-l3kvg")
+set(CPACK_PACKAGE_VENDOR "iRODS Consortium")
+set(CPACK_PACKAGE_CONTACT "iRODS Consortium <support@irods.org>")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "iRODS L3KVG Database Plugin")
+set(CPACK_PACKAGE_VERSION "5.0.0")
+set(CPACK_PACKAGE_RELEASE "0")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "iRODS Consortium <support@irods.org>")
+set(CPACK_DEBIAN_PACKAGE_SECTION "contrib/science")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "irods-server (>= 5.0.0), irods-runtime (>= 5.0.0), libzmq5")
+
+# Install Logic
+install(TARGETS irods_database_plugin_l3kvg
+    LIBRARY DESTINATION /usr/lib/irods/plugins/database
+)
+
+include(CPack)
