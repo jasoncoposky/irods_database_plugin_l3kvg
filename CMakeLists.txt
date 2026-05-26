@@ -9,6 +9,7 @@ add_compile_options(-Wno-changes-meaning)
 
 # Include Directories
 include_directories(include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/lib/filesystem/include)
 
 # Check for iRODS headers in system paths first (for Docker builds)
 find_path(IRODS_EXTERNALS_PATH NAMES irods_externals PATHS /opt/irods-externals)
@@ -42,6 +43,7 @@ add_subdirectory(../l3kvg l3kvg)
 # Core Plugin Library
 add_library(irods_database_plugin_l3kvg SHARED
     src/db_plugin.cpp
+    src/gq1_bridge.cpp
     src/catalog/catalog_facade.cpp
     src/compiler/gq2_compiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/genquery2/src/genquery2_driver.cpp
@@ -53,6 +55,7 @@ set_target_properties(irods_database_plugin_l3kvg PROPERTIES
     PREFIX "lib"
     OUTPUT_NAME "l3kvg"
 )
+target_compile_definitions(irods_database_plugin_l3kvg PRIVATE IRODS_SERVER)
 
 target_link_libraries(irods_database_plugin_l3kvg PRIVATE
     l3kvg_engine
@@ -126,7 +129,10 @@ add_executable(test_deep_traversal tests/test_deep_traversal.cpp)
 target_link_libraries(test_deep_traversal PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
 
 add_executable(test_legacy_compatibility tests/test_legacy_compatibility.cpp)
-target_link_libraries(test_legacy_compatibility PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static fmt)
+target_link_libraries(test_legacy_compatibility PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+
+add_executable(bootstrap_l3kvg tests/bootstrap_l3kvg.cpp src/catalog/catalog_facade.cpp src/compiler/gq2_compiler.cpp)
+target_link_libraries(bootstrap_l3kvg PRIVATE l3kvg_engine l3kv_engine lite3-cpp conveyor irods_common irods_server dl libzmq-static fmt)
 
 # CPack Configuration
 set(CPACK_PACKAGE_NAME "irods-database-plugin-l3kvg")

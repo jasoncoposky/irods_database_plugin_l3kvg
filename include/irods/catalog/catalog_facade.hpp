@@ -36,6 +36,7 @@ namespace irods::catalog {
     struct Config {
         std::string db_path;
         uint32_t node_id;
+        uint16_t cluster_id;
         uint32_t shard_count;
         std::string zmq_endpoint;
         std::vector<FederatedZone> federation;
@@ -101,7 +102,11 @@ namespace irods::catalog {
         irods::error copy_avu_metadata(std::string_view src_type, std::string_view src_id, std::string_view dst_type, std::string_view dst_id);
         irods::error set_avu_metadata(std::string_view type, std::string_view target_id, const avu& metadata);
 
-        // Zone Operations
+        // Path Resolution
+        irods::error resolve_path(std::string_view path, snowflake_id_t& out_id, EntityType& out_type);
+
+        // --- Grid Configuration ---
+
         irods::error register_zone(const zone& z);
         irods::error modify_zone(std::string_view name, std::string_view prop, std::string_view value);
         irods::error delete_zone(std::string_view name);
@@ -133,7 +138,7 @@ namespace irods::catalog {
         irods::error delete_specific_query(std::string_view alias);
 
         // Query Operations
-        irods::error execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results);
+        irods::error execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes = {});
         irods::error get_next_sequence_value(std::string_view seq_name, uint64_t& out_val);
 
     private:

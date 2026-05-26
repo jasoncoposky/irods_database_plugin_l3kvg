@@ -1,0 +1,10 @@
+Architecture: amd64
+Depends: irods-server (>= 5.0.0), irods-runtime (>= 5.0.0), libzmq5
+Description: iRODS L3KVG Database Plugin
+Maintainer: iRODS Consortium <support@irods.org>
+Package: irods-database-plugin-l3kvg
+Priority: optional
+Section: contrib/science
+Version: 5.0.0
+Installed-Size: 14126
+

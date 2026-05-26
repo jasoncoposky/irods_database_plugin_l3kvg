@@ -27,12 +27,16 @@
 static std::unique_ptr<irods::catalog::CatalogFacade> g_catalog;
 
 irods::error init_l3kvg_catalog() {
+    rodsLog(LOG_NOTICE, "L3_PLUGIN: init_l3kvg_catalog entered");
     if (g_catalog) return SUCCESS();
     try {
-        // irods::server_properties::instance().capture();
         const auto& config_handle{irods::server_properties::instance().map()};
         const auto& config_json{config_handle.get_json()};
+        
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: Config JSON obtained");
+
         if (!config_json.contains("plugin_configuration") || !config_json.at("plugin_configuration").contains("database")) {
+            rodsLog(LOG_ERROR, "L3_PLUGIN: Missing plugin_configuration/database");
             return ERROR(SYS_CONFIG_FILE_ERR, "Missing plugin_configuration/database");
         }
         const auto& db_config = config_json.at("plugin_configuration").at("database");
@@ -44,10 +48,14 @@ irods::error init_l3kvg_catalog() {
             spec_config = db_config.at("l3kvg").at(irods::KW_CFG_PLUGIN_SPECIFIC_CONFIGURATION);
         }
 
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: spec_config identified");
+
         irods::catalog::Config cfg;
         cfg.db_path = spec_config.at("db_path").get<std::string>();
         cfg.node_id = spec_config.at("node_id").get<uint32_t>();
         cfg.zmq_endpoint = spec_config.contains("zmq_endpoint") ? spec_config.at("zmq_endpoint").get<std::string>() : "tcp://127.0.0.1:5555";
+
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: basic cfg parsed");
 
         if (spec_config.contains("federation")) {
             for (const auto& fed : spec_config.at("federation")) {
@@ -55,16 +63,23 @@ irods::error init_l3kvg_catalog() {
             }
         }
 
-        g_catalog = std::make_unique<irods::catalog::CatalogFacade>();
-        if (auto ret = g_catalog->init(cfg); !ret.ok()) return ret;
-
         const std::string& zone_name = config_json.at(KW_CFG_ZONE_NAME).get<std::string>();
         const std::string& admin_name = config_json.at(KW_CFG_ZONE_USER).get<std::string>();
-        g_catalog->bootstrap_catalog(zone_name, admin_name);
-        if (!cfg.federation.empty()) g_catalog->bootstrap_federation(cfg.federation);
+
+        cfg.cluster_id = irods::catalog::SnowflakeID::calculate_cluster_id(zone_name);
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: Calculated Cluster ID: %u", cfg.cluster_id);
+
+        g_catalog = std::make_unique<irods::catalog::CatalogFacade>();
+        if (auto ret = g_catalog->init(cfg); !ret.ok()) {
+            rodsLog(LOG_ERROR, "L3_PLUGIN: g_catalog->init FAILED");
+            return ret;
+        }
+
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: g_catalog initialized successfully");
 
         return SUCCESS();
     } catch (const std::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: init_l3kvg_catalog EXCEPTION: %s", e.what());
         return ERROR(SYS_CONFIG_FILE_ERR, e.what());
     }
 }
@@ -375,9 +390,59 @@ irods::error db_get_grid_configuration_value_op(irods::plugin_context& _ctx, con
     return ret;
 }
 
+namespace irods::catalog::bridge {
+    irods::experimental::genquery2::select synthesize_gq2_ast(genQueryInp_t* _inp, irods::catalog::CatalogFacade* _catalog, std::vector<uint64_t>& _starting_nodes);
+    void pack_gq1_results(const irods::catalog::ResultSet& _results, genQueryInp_t* _inp, genQueryOut_t* _out);
+}
+
 // GenQuery
-irods::error db_gen_query_op(irods::plugin_context& _ctx, genQueryInp_t* _inp, genQueryOut_t* _out) {
-    return ERROR(CAT_NO_ROWS_FOUND, "GenQuery not yet implemented via Smart Client");
+irods::error db_get_catalog_version_op(irods::plugin_context& _ctx, int* _version) {
+    if (!_version) return ERROR(SYS_INVALID_INPUT_PARAM, "Null version pointer");
+    *_version = 1; // Assuming version 1 for initial L3KVG schema
+    return SUCCESS();
+}
+
+irods::error db_initialize_catalog_op(irods::plugin_context& _ctx) {
+    try {
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: Agnostic bootstrap via DATABASE_OP_INITIALIZE_CATALOG");
+        if (auto ret = init_l3kvg_catalog(); !ret.ok()) return ret;
+
+        const auto& server_config = irods::server_properties::instance().map().get_json();
+        const std::string& zone_name = server_config.at(KW_CFG_ZONE_NAME).get<std::string>();
+        const std::string& admin_name = server_config.at(KW_CFG_ZONE_USER).get<std::string>();
+
+        return g_catalog->bootstrap_catalog(zone_name, admin_name);
+    } catch (const std::exception& e) {
+        return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
+}
+
+irods::error db_gen_query_op(
+irods::plugin_context& _ctx, genQueryInp_t* _inp, genQueryOut_t* _out) {
+    if (!_inp || !_out) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Null input/output");
+
+    try {
+        std::vector<uint64_t> starting_nodes;
+
+        // 1. Synthesize GQ2 AST from GQ1 Input
+        auto ast = irods::catalog::bridge::synthesize_gq2_ast(_inp, g_catalog.get(), starting_nodes);
+
+        // 2. Execute via Catalog Facade
+        irods::catalog::ResultSet results;
+        auto ret = g_catalog->execute_query(ast, results, starting_nodes);
+        if (!ret.ok()) return ret;
+
+        if (results.row_count() == 0) {
+            return ERROR(CAT_NO_ROWS_FOUND, "No rows found");
+        }
+
+        // 3. Pack results back into GQ1 format
+        irods::catalog::bridge::pack_gq1_results(results, _inp, _out);
+
+        return SUCCESS();
+    } catch (const std::exception& e) {
+        return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
 }
 
 class l3kvg_database_plugin : public irods::database {
@@ -462,12 +527,12 @@ public:
 
         add_operation<rodsLong_t, rodsLong_t, int*>(irods::DATABASE_OP_CHECK_PERMISSION_TO_MODIFY_DATA_OBJECT, std::function<irods::error(irods::plugin_context&, rodsLong_t, rodsLong_t, int*)>(db_check_permission_to_modify_data_object_op));
 
-
-
-
+        // add_operation<int*>(irods::DATABASE_OP_GET_CATALOG_VERSION, std::function<irods::error(irods::plugin_context&, int*)>(db_get_catalog_version_op));
+        // add_operation(irods::DATABASE_OP_INITIALIZE_CATALOG, std::function<irods::error(irods::plugin_context&)>(db_initialize_catalog_op));
 
         add_operation<genQueryInp_t*, genQueryOut_t*>(irods::DATABASE_OP_GEN_QUERY, std::function<irods::error(irods::plugin_context&, genQueryInp_t*, genQueryOut_t*)>(db_gen_query_op));
-    }
-};
+        }
+        };
+
 
 extern "C" irods::database* plugin_factory(const std::string& _inst_name, const std::string& _context) { return new l3kvg_database_plugin(_inst_name, _context); }

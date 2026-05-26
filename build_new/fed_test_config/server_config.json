@@ -1,0 +1,1 @@
+{"plugin_configuration":{"database":{"l3kvg":{"plugin_specific_configuration":{"db_path":"test.l3kvg","federation":[{"endpoint":"tcp://127.0.0.1:5566","id":100,"name":"eu-west"}],"node_id":1,"zmq_endpoint":"tcp://127.0.0.1:5565"}}}},"zone_name":"tempZone","zone_user":"rods"}
