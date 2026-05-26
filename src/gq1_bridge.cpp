@@ -46,6 +46,24 @@ namespace irods::catalog::bridge {
                 case COL_D_RESC_HIER: return "DATA_RESC_HIER";
                 case COL_D_RESC_ID: return "D_RESC_ID";
                 
+                case COL_ZONE_ID: return "ZONE_ID";
+                case COL_ZONE_NAME: return "ZONE_NAME";
+                case COL_ZONE_TYPE: return "ZONE_TYPE";
+                case COL_ZONE_CONNECTION: return "ZONE_CONNECTION";
+                case COL_ZONE_COMMENT: return "ZONE_COMMENT";
+                case COL_ZONE_CREATE_TIME: return "ZONE_CREATE_TIME";
+                case COL_ZONE_MODIFY_TIME: return "ZONE_MODIFY_TIME";
+
+                case COL_USER_ID: return "USER_ID";
+                case COL_USER_NAME: return "USER_NAME";
+                case COL_USER_ZONE: return "USER_ZONE";
+                case COL_USER_TYPE: return "USER_TYPE";
+                case COL_USER_INFO: return "USER_INFO";
+                case COL_USER_COMMENT: return "USER_COMMENT";
+                case COL_USER_CREATE_TIME: return "USER_CREATE_TIME";
+                case COL_USER_MODIFY_TIME: return "USER_MODIFY_TIME";
+                case COL_USER_DN: return "USER_DN";
+
                 case COL_COLL_ID: return "COLL_ID";
                 case COL_COLL_NAME: return "COLL_NAME";
                 case COL_COLL_PARENT_NAME: return "COLL_PARENT_NAME";
@@ -56,21 +74,18 @@ namespace irods::catalog::bridge {
                 case COL_COLL_TYPE: return "COLL_TYPE";
                 case COL_COLL_INFO1: return "COLL_INFO1";
                 case COL_COLL_INFO2: return "COLL_INFO2";
-                
-                case COL_USER_ID: return "USER_ID";
-                case COL_USER_NAME: return "USER_NAME";
-                case COL_USER_ZONE: return "USER_ZONE";
-                
-                case COL_ZONE_ID: return "ZONE_ID";
-                case COL_ZONE_NAME: return "ZONE_NAME";
-                
+                case COL_COLL_INHERITANCE: return "COLL_INHERITANCE";
+                case COL_COLL_COMMENTS: return "COLL_COMMENTS";
+
                 case COL_R_RESC_ID: return "RESC_ID";
                 case COL_R_RESC_NAME: return "RESC_NAME";
                 case COL_R_ZONE_NAME: return "ZONE_NAME";
                 case COL_R_TYPE_NAME: return "RESC_TYPE_NAME";
+                case COL_R_CLASS_NAME: return "RESC_CLASS_NAME";
                 case COL_R_LOC: return "RESC_LOC";
                 case COL_R_VAULT_PATH: return "RESC_VAULT_PATH";
                 case COL_R_FREE_SPACE: return "RESC_FREE_SPACE";
+                case COL_R_FREE_SPACE_TIME: return "RESC_FREE_SPACE_TIME";
                 case COL_R_RESC_INFO: return "RESC_INFO";
                 case COL_R_RESC_COMMENT: return "RESC_COMMENT";
                 case COL_R_RESC_STATUS: return "RESC_STATUS";
@@ -78,30 +93,46 @@ namespace irods::catalog::bridge {
                 case COL_R_RESC_CONTEXT: return "RESC_CONTEXT";
                 case COL_R_RESC_PARENT: return "RESC_PARENT";
                 case COL_R_RESC_PARENT_CONTEXT: return "RESC_PARENT_CONTEXT";
+                case COL_R_CREATE_TIME: return "RESC_CREATE_TIME";
+                case COL_R_MODIFY_TIME: return "RESC_MODIFY_TIME";
 
-                case COL_META_DATA_ATTR_NAME: return "META_DATA_ATTR_NAME";
-                case COL_META_DATA_ATTR_VALUE: return "META_DATA_ATTR_VALUE";
-                case COL_META_DATA_ATTR_UNITS: return "META_DATA_ATTR_UNITS";
-                case COL_META_DATA_ATTR_ID: return "META_DATA_ATTR_ID";
-                case COL_META_COLL_ATTR_NAME: return "META_COLL_ATTR_NAME";
-                case COL_META_COLL_ATTR_VALUE: return "META_COLL_ATTR_VALUE";
-                case COL_META_COLL_ATTR_UNITS: return "META_COLL_ATTR_UNITS";
-                case COL_META_COLL_ATTR_ID: return "META_COLL_ATTR_ID";
-                case COL_META_RESC_ATTR_NAME: return "META_RESC_ATTR_NAME";
-                case COL_META_RESC_ATTR_VALUE: return "META_RESC_ATTR_VALUE";
-                case COL_META_RESC_ATTR_UNITS: return "META_RESC_ATTR_UNITS";
-                case COL_META_RESC_ATTR_ID: return "META_RESC_ATTR_ID";
-                case COL_META_USER_ATTR_NAME: return "META_USER_ATTR_NAME";
-                case COL_META_USER_ATTR_VALUE: return "META_USER_ATTR_VALUE";
-                case COL_META_USER_ATTR_UNITS: return "META_USER_ATTR_UNITS";
-                case COL_META_USER_ATTR_ID: return "META_USER_ATTR_ID";
+                case COL_MSRVC_ID: return "MSRVC_ID";
+                case COL_MSRVC_NAME: return "MSRVC_NAME";
+                case COL_MSRVC_SIGNATURE: return "MSRVC_SIGNATURE";
+                case COL_MSRVC_DOXYGEN: return "MSRVC_DOXYGEN";
+                case COL_MSRVC_VARIATIONS: return "MSRVC_VARIATIONS";
+                case COL_MSRVC_STATUS: return "MSRVC_STATUS";
+                case COL_MSRVC_OWNER_NAME: return "MSRVC_OWNER_NAME";
+                case COL_MSRVC_OWNER_ZONE: return "MSRVC_OWNER_ZONE";
+                case COL_MSRVC_COMMENT: return "MSRVC_COMMENT";
+                case COL_MSRVC_CREATE_TIME: return "MSRVC_CREATE_TIME";
+                case COL_MSRVC_MODIFY_TIME: return "MSRVC_MODIFY_TIME";
+                case COL_MSRVC_VERSION: return "MSRVC_VERSION";
+                case COL_MSRVC_HOST: return "MSRVC_HOST";
+                case COL_MSRVC_LOCATION: return "MSRVC_LOCATION";
+                case COL_MSRVC_LANGUAGE: return "MSRVC_LANGUAGE";
+                case COL_MSRVC_TYPE_NAME: return "MSRVC_TYPE_NAME";
+                case COL_MSRVC_MODULE_NAME: return "MSRVC_MODULE_NAME";
 
-                case COL_USER_GROUP_ID: return "USER_GROUP_ID";
-                case COL_USER_GROUP_NAME: return "USER_GROUP_NAME";
+                case COL_MSRVC_VER_OWNER_NAME: return "MSRVC_VER_OWNER_NAME";
+                case COL_MSRVC_VER_OWNER_ZONE: return "MSRVC_VER_OWNER_ZONE";
+                case COL_MSRVC_VER_COMMENT: return "MSRVC_VER_COMMENT";
+                case COL_MSRVC_VER_CREATE_TIME: return "MSRVC_VER_CREATE_TIME";
+                case COL_MSRVC_VER_MODIFY_TIME: return "MSRVC_VER_MODIFY_TIME";
 
-                case COL_DATA_ACCESS_NAME: return "DATA_ACCESS_NAME";
-                case COL_DATA_ACCESS_TYPE: return "DATA_ACCESS_TYPE";
-                case COL_DATA_TOKEN_NAMESPACE: return "DATA_TOKEN_NAMESPACE";
+                case COL_MSRVC_ACCESS_TYPE: return "MSRVC_ACCESS_TYPE";
+                case COL_MSRVC_ACCESS_NAME: return "MSRVC_ACCESS_NAME";
+                case COL_MSRVC_TOKEN_NAMESPACE: return "MSRVC_TOKEN_NAMESPACE";
+
+                case COL_QUOTA_USER_ID: return "QUOTA_USER_ID";
+                case COL_QUOTA_USER_NAME: return "QUOTA_USER_NAME";
+                case COL_QUOTA_USER_ZONE: return "QUOTA_USER_ZONE";
+                case COL_QUOTA_RESC_ID: return "QUOTA_RESC_ID";
+                case COL_QUOTA_RESC_NAME: return "QUOTA_RESC_NAME";
+                case COL_QUOTA_LIMIT: return "QUOTA_LIMIT";
+                case COL_QUOTA_OVER: return "QUOTA_OVER";
+                case COL_QUOTA_USAGE: return "QUOTA_USAGE";
+
                 case COL_TICKET_ID: return "TICKET_ID";
                 case COL_TICKET_STRING: return "TICKET_STRING";
                 case COL_TICKET_TYPE: return "TICKET_TYPE";
@@ -117,46 +148,12 @@ namespace irods::catalog::bridge {
                 case COL_TICKET_DATA_NAME: return "TICKET_DATA_NAME";
                 case COL_TICKET_COLL_NAME: return "TICKET_COLL_NAME";
                 case COL_TICKET_OWNER_NAME: return "TICKET_OWNER_NAME";
-
-                case COL_AUDIT_OBJ_ID: return "AUDIT_OBJ_ID";
-                case COL_AUDIT_USER_ID: return "AUDIT_USER_ID";
-                case COL_AUDIT_ACTION_ID: return "AUDIT_ACTION_ID";
-                case COL_AUDIT_COMMENT: return "AUDIT_COMMENT";
-                case COL_AUDIT_CREATE_TIME: return "AUDIT_CREATE_TIME";
-                case COL_AUDIT_MODIFY_TIME: return "AUDIT_MODIFY_TIME";
-
-                case COL_SL_HOST_NAME: return "SL_HOST_NAME";
-                case COL_SL_RESC_NAME: return "SL_RESC_NAME";
-                case COL_SL_CPU_USED: return "SL_CPU_USED";
-                case COL_SL_MEM_USED: return "SL_MEM_USED";
-                case COL_SL_SWAP_USED: return "SL_SWAP_USED";
-                case COL_SL_RUNQ_LOAD: return "SL_RUNQ_LOAD";
-                case COL_SL_DISK_SPACE: return "SL_DISK_SPACE";
-                case COL_SL_NET_INPUT: return "SL_NET_INPUT";
-                case COL_SL_NET_OUTPUT: return "SL_NET_OUTPUT";
-                case COL_SL_CREATE_TIME: return "SL_CREATE_TIME";
-
-                case COL_RULE_ID: return "RULE_ID";
-                case COL_RULE_NAME: return "RULE_NAME";
-                case COL_RULE_BODY: return "RULE_BODY";
-                case COL_RULE_OWNER_NAME: return "RULE_OWNER_NAME";
-                case COL_RULE_CREATE_TIME: return "RULE_CREATE_TIME";
-                case COL_RULE_MODIFY_TIME: return "RULE_MODIFY_TIME";
-
-                case COL_DVM_ID: return "DVM_ID";
-                case COL_DVM_BASE_NAME: return "DVM_BASE_NAME";
-                case COL_DVM_EXT_VAR_NAME: return "DVM_EXT_VAR_NAME";
-                case COL_DVM_INT_MAP_PATH: return "DVM_INT_MAP_PATH";
-
-                case COL_FNM_ID: return "FNM_ID";
-                case COL_FNM_BASE_NAME: return "FNM_BASE_NAME";
-                case COL_FNM_EXT_FUNC_NAME: return "FNM_EXT_FUNC_NAME";
-                case COL_FNM_INT_FUNC_NAME: return "FNM_INT_FUNC_NAME";
-
-                case COL_QUOTA_USER_ID: return "QUOTA_USER_ID";
-                case COL_QUOTA_RESC_ID: return "QUOTA_RESC_ID";
-                case COL_QUOTA_LIMIT: return "QUOTA_LIMIT";
-                case COL_QUOTA_OVER: return "QUOTA_OVER";
+                case COL_TICKET_ALLOWED_HOST_TICKET_ID: return "TICKET_ALLOWED_HOST_TICKET_ID";
+                case COL_TICKET_ALLOWED_HOST: return "TICKET_ALLOWED_HOST";
+                case COL_TICKET_ALLOWED_USER_TICKET_ID: return "TICKET_ALLOWED_USER_TICKET_ID";
+                case COL_TICKET_ALLOWED_USER_NAME: return "TICKET_ALLOWED_USER_NAME";
+                case COL_TICKET_ALLOWED_GROUP_TICKET_ID: return "TICKET_ALLOWED_GROUP_TICKET_ID";
+                case COL_TICKET_ALLOWED_GROUP_NAME: return "TICKET_ALLOWED_GROUP_NAME";
                 
                 default: 
                    return "";

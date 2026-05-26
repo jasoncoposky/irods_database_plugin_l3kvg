@@ -176,6 +176,40 @@ namespace irods::catalog::compiler {
         {"TICKET_DATA_NAME",  {"DataObject", "n"}},
         {"TICKET_COLL_NAME",  {"Collection", "n"}},
         {"TICKET_OWNER_NAME", {"User", "n"}},
+        {"TICKET_ALLOWED_HOST_TICKET_ID", {"Ticket", "id"}},
+        {"TICKET_ALLOWED_HOST",           {"Ticket", "h"}},
+        {"TICKET_ALLOWED_USER_TICKET_ID", {"Ticket", "id"}},
+        {"TICKET_ALLOWED_USER_NAME",      {"User", "n"}},
+        {"TICKET_ALLOWED_GROUP_TICKET_ID",{"Ticket", "id"}},
+        {"TICKET_ALLOWED_GROUP_NAME",     {"User", "n"}},
+
+        {"MSRVC_ID",          {"MSRVC", "id"}},
+        {"MSRVC_NAME",        {"MSRVC", "n"}},
+        {"MSRVC_SIGNATURE",   {"MSRVC", "s"}},
+        {"MSRVC_DOXYGEN",     {"MSRVC", "d"}},
+        {"MSRVC_VARIATIONS",  {"MSRVC", "v"}},
+        {"MSRVC_STATUS",      {"MSRVC", "st"}},
+        {"MSRVC_OWNER_NAME",  {"User", "n"}},
+        {"MSRVC_OWNER_ZONE",  {"User", "z"}},
+        {"MSRVC_COMMENT",     {"MSRVC", "c"}},
+        {"MSRVC_CREATE_TIME", {"MSRVC", "ct"}},
+        {"MSRVC_MODIFY_TIME", {"MSRVC", "mt"}},
+        {"MSRVC_VERSION",     {"MSRVC", "ver"}},
+        {"MSRVC_HOST",        {"MSRVC", "h"}},
+        {"MSRVC_LOCATION",    {"MSRVC", "l"}},
+        {"MSRVC_LANGUAGE",    {"MSRVC", "lang"}},
+        {"MSRVC_TYPE_NAME",   {"MSRVC", "t"}},
+        {"MSRVC_MODULE_NAME", {"MSRVC", "mod"}},
+
+        {"MSRVC_VER_OWNER_NAME", {"MSRVC", "vo"}},
+        {"MSRVC_VER_OWNER_ZONE", {"MSRVC", "vz"}},
+        {"MSRVC_VER_COMMENT",    {"MSRVC", "vc"}},
+        {"MSRVC_VER_CREATE_TIME",{"MSRVC", "vct"}},
+        {"MSRVC_VER_MODIFY_TIME",{"MSRVC", "vmt"}},
+
+        {"MSRVC_ACCESS_TYPE",      {"Access", "l"}},
+        {"MSRVC_ACCESS_NAME",      {"User", "n"}},
+        {"MSRVC_TOKEN_NAMESPACE",  {"Access", "t"}},
 
         {"AUDIT_OBJ_ID",      {"Audit", "oid"}},
         {"AUDIT_USER_ID",     {"Audit", "uid"}},
@@ -213,14 +247,33 @@ namespace irods::catalog::compiler {
         {"FNM_INT_FUNC_NAME", {"FNM", "if"}},
 
         {"QUOTA_USER_ID",     {"Quota", "uid"}},
-        {"QUOTA_RESC_ID",     {"Quota", "rid"}},
+        {"QUOTA_RESC_NAME", {"Resource", "n"}},
         {"QUOTA_LIMIT",       {"Quota", "l"}},
         {"QUOTA_OVER",        {"Quota", "o"}},
+        {"QUOTA_USAGE",       {"Quota", "u"}},
 
         {"ZONE_ID",        {"Zone", "id"}},
         {"ZONE_NAME",      {"Zone", "n"}},
         {"ZONE_TYPE",      {"Zone", "t"}},
-        {"ZONE_CONNECTION",{"Zone", "c"}}
+        {"ZONE_CONNECTION",{"Zone", "c"}},
+        {"ZONE_COMMENT",   {"Zone", "m"}},
+        {"ZONE_CREATE_TIME",{"Zone", "ct"}},
+        {"ZONE_MODIFY_TIME",{"Zone", "mt"}},
+
+        {"USER_ID",        {"User", "id"}},
+        {"USER_NAME",      {"User", "n"}},
+        {"USER_TYPE",      {"User", "t"}},
+        {"USER_ZONE",      {"User", "z"}},
+        {"USER_INFO",      {"User", "i"}},
+        {"USER_COMMENT",   {"User", "c"}},
+        {"USER_CREATE_TIME",{"User", "ct"}},
+        {"USER_MODIFY_TIME",{"User", "mt"}},
+        {"USER_DN",        {"User", "d"}},
+
+        {"USER_GROUP_ID",        {"User", "id"}},
+        {"USER_GROUP_NAME",      {"User", "n"}},
+
+        {"D_RESC_ID",      {"Replica", "rid"}}
     };
 
     struct InternalRouteKey {
@@ -268,6 +321,10 @@ namespace irods::catalog::compiler {
         {{"DataObject", "Ticket"},     {{Direction::In, "FOR_OBJECT", "Ticket"}}},
         {{"Collection", "Ticket"},     {{Direction::In, "FOR_OBJECT", "Ticket"}}},
         {{"User", "Ticket"},           {{Direction::In, "OWNED_BY", "Ticket"}}},
+        {{"User", "Quota"},           {{Direction::In, "LIMITS", "Quota"}}},
+        {{"User", "Audit"},           {{Direction::In, "BY_USER", "Audit"}}},
+        {{"User", "MSRVC"},           {{Direction::In, "OWNED_BY", "MSRVC"}}},
+        {{"DataObject", "Audit"},      {{Direction::In, "AUDIT_OF", "Audit"}}},
         {{"Ticket", "DataObject"},     {{Direction::Out, "FOR_OBJECT", "DataObject"}}},
         {{"Ticket", "Collection"},     {{Direction::Out, "FOR_OBJECT", "Collection"}}},
         {{"Ticket", "User"},           {{Direction::Out, "OWNED_BY", "User"}}},
@@ -276,7 +333,8 @@ namespace irods::catalog::compiler {
         {{"ServerLoad", "Resource"},   {{Direction::Out, "LOAD_ON", "Resource"}}},
         {{"Rule", "User"},             {{Direction::Out, "OWNED_BY", "User"}}},
         {{"Quota", "User"},            {{Direction::Out, "LIMITS", "User"}}},
-        {{"Quota", "Resource"},        {{Direction::Out, "ON_RESC", "Resource"}}}
+        {{"Quota", "Resource"},        {{Direction::Out, "ON_RESC", "Resource"}}},
+        {{"MSRVC", "User"},            {{Direction::Out, "OWNED_BY", "User"}}}
     };
 
     struct pc_visitor : public boost::static_visitor<std::pair<int, std::string>> {
