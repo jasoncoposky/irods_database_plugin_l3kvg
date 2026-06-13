@@ -46,30 +46,32 @@ TEST_F(MiscPluginTest, TokensAndQuotas) {
     ASSERT_FALSE(server()->has_node(sid));
 
     // 3. Quotas
+    // 3. Quotas
     ASSERT_TRUE((plugin()->call<const char*, const char*, rodsLong_t>(
         nullptr, irods::DATABASE_OP_SET_QUOTA, nullptr, "alice", "ufs", 1000000).ok()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    rodsLong_t usage = 0, limit = 0;
-    ASSERT_TRUE((plugin()->call<const char*, const char*, rodsLong_t*, rodsLong_t*>(
-        nullptr, irods::DATABASE_OP_CHECK_QUOTA, nullptr, "alice", "ufs", &usage, &limit).ok()));
-    ASSERT_EQ(limit, 1000000);
+    rodsLong_t usage = 0;
+    int limit_exceeded = 0;
+    ASSERT_TRUE((plugin()->call<const char*, const char*, rodsLong_t*, int*>(
+        nullptr, irods::DATABASE_OP_CHECK_QUOTA, nullptr, "alice", "ufs", &usage, &limit_exceeded).ok()));
 
     // 4. Logical Quotas
     // Register Collection for Logical Quota test
     collInfo_t coll;
-    std::memset(&coll, 0, sizeof(coll));
-    coll.collId = 100;
-    std::strncpy(coll.collName, "/tempZone/home/alice", NAME_LEN);
+    std::strcpy(coll.collName, "/tempZone/home/alice");
     ASSERT_TRUE((plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_REG_COLL, nullptr, &coll).ok()));
 
     ASSERT_TRUE((plugin()->call<const char*, rodsLong_t>(
         nullptr, irods::DATABASE_OP_SET_LOGICAL_QUOTA, nullptr, "/tempZone/home/alice", 5000000).ok()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    ASSERT_TRUE((plugin()->call<const char*, rodsLong_t*, rodsLong_t*>(
-        nullptr, irods::DATABASE_OP_CHECK_LOGICAL_QUOTA, nullptr, "/tempZone/home/alice", &usage, &limit).ok()));
-    ASSERT_EQ(limit, 5000000);
+    std::vector<std::tuple<std::string, std::int64_t, std::int64_t, std::int64_t, std::int64_t>> quota_values;
+    ASSERT_TRUE((plugin()->call<const char*, std::vector<std::tuple<std::string, std::int64_t, std::int64_t, std::int64_t, std::int64_t>>*>(
+        nullptr, irods::DATABASE_OP_CHECK_LOGICAL_QUOTA, nullptr, "/tempZone/home/alice", &quota_values).ok()));
+    ASSERT_FALSE(quota_values.empty());
+    ASSERT_EQ(std::get<2>(quota_values[0]), 5000000);
+
 }
 
 TEST_F(MiscPluginTest, RuleExecutionAndGridConfig) {
@@ -97,15 +99,14 @@ TEST_F(MiscPluginTest, RuleExecutionAndGridConfig) {
         nullptr, irods::DATABASE_OP_REG_RULE_EXEC, nullptr, &re).ok()));
 
     // 3. Grid Config
-    ASSERT_TRUE((plugin()->call<const char*, const char*>(
-        nullptr, irods::DATABASE_OP_SET_GRID_CONFIGURATION_VALUE, nullptr, "cleanup_interval", "3600").ok()));
+    ASSERT_TRUE((plugin()->call<const char*, const char*, const char*>(
+        nullptr, irods::DATABASE_OP_SET_GRID_CONFIGURATION_VALUE, nullptr, "", "cleanup_interval", "3600").ok()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    char* val = nullptr;
-    ASSERT_TRUE((plugin()->call<const char*, char**>(
-        nullptr, irods::DATABASE_OP_GET_GRID_CONFIGURATION_VALUE, nullptr, "cleanup_interval", &val).ok()));
+    char val[1024];
+    ASSERT_TRUE((plugin()->call<const char*, const char*, char*, std::size_t>(
+        nullptr, irods::DATABASE_OP_GET_GRID_CONFIGURATION_VALUE, nullptr, "", "cleanup_interval", val, sizeof(val)).ok()));
     ASSERT_STREQ(val, "3600");
-    if (val) free(val);
 }
 
 int main(int argc, char **argv) {

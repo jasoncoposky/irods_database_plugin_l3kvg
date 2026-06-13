@@ -13,7 +13,7 @@ TEST(IdentityTest, AuthCheckZeroCopy) {
     // Note: This will fail if no server is running, which is expected in Phase 2/3
     // until the L3KVG server agent completes their work.
     // For now, we verify that the plugin can initialize with the new Config.
-    bool init_ok = catalog.init(cfg).ok();
+    bool init_ok = catalog.init(cfg, "tempZone").ok();
     if (!init_ok) {
         std::cout << "Skipping test: L3KVG Server not available for Smart Client" << std::endl;
         return;

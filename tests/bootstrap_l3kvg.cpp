@@ -1,102 +1,83 @@
 #include "irods/catalog/catalog_facade.hpp"
-#include "irods/catalog/binary_key.hpp"
 #include <iostream>
+#include <vector>
 #include <thread>
 #include <chrono>
+#include <unistd.h>
 
 using namespace irods::catalog;
 
 int main() {
     Config cfg;
-    cfg.db_path = "/home/darkfell/dev/l3kvg_db";
+    cfg.db_path = "/var/lib/irods/l3kvg_db";
     cfg.node_id = 1;
+    cfg.cluster_id = 521;
     cfg.shard_count = 1;
-    cfg.zmq_endpoint = "tcp://127.0.0.1:5555";
-    cfg.cluster_id = SnowflakeID::calculate_cluster_id("tempZone");
+    cfg.zmq_endpoint = "tcp://127.0.0.1:5556";
 
     CatalogFacade catalog;
-    if (!catalog.init(cfg).ok()) {
-        std::cerr << "Failed to init catalog" << std::endl;
+    if (!catalog.init(cfg, "tempZone").ok()) {
+        std::cerr << "Failed to init catalog\n";
         return 1;
     }
 
-    std::cout << "Connecting to L3KVG at " << cfg.zmq_endpoint << "..." << std::endl;
+    std::cout << "Connecting to L3KVG at " << cfg.zmq_endpoint << "...\n";
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    // 1. Bootstrap Zone and Admin
-    if (!catalog.bootstrap_catalog("tempZone", "rods").ok()) {
-        std::cerr << "Failed to bootstrap catalog" << std::endl;
-        return 1;
-    }
-    std::cout << "Zone and Admin bootstrapped." << std::endl;
+    // Bootstrap Zone and Admin
+    catalog.bootstrap_catalog("tempZone", "rods");
+    std::cout << "Zone and Admin bootstrapped.\n";
 
-    // 2. Create Collection Hierarchy
-    std::cout << "Creating collection hierarchy..." << std::endl;
-    collection root_coll;
-    root_coll.id = 10001;
-    root_coll.name = "/tempZone";
-    root_coll.owner_name = "rods";
-    root_coll.owner_zone = "tempZone";
-    root_coll.type = "local";
-    root_coll.create_ts = "01748200000";
-    root_coll.modify_ts = "01748200000";
-    catalog.register_collection(root_coll, root_coll.id);
+    // Set 'own' access for root
+    catalog.set_access("rods", "tempZone", "/tempZone", "own", false);
 
+    std::cout << "Creating collection hierarchy...\n";
+    
     collection home;
     home.id = 10002;
     home.name = "/tempZone/home";
+    home.parent_name = "/tempZone";
     home.owner_name = "rods";
     home.owner_zone = "tempZone";
-    home.type = "local";
+    home.type = "";
+    home.parent_id = 10001; 
     home.create_ts = "01748200000";
     home.modify_ts = "01748200000";
     catalog.register_collection(home, home.id);
+    catalog.set_access("rods", "tempZone", "/tempZone/home", "own", false);
 
     collection rods_home;
     rods_home.id = 10003;
     rods_home.name = "/tempZone/home/rods";
+    rods_home.parent_name = "/tempZone/home";
     rods_home.owner_name = "rods";
     rods_home.owner_zone = "tempZone";
-    rods_home.type = "local";
+    rods_home.type = "";
+    rods_home.parent_id = 10002;
     rods_home.create_ts = "01748200000";
     rods_home.modify_ts = "01748200000";
     catalog.register_collection(rods_home, rods_home.id);
+    catalog.set_access("rods", "tempZone", "/tempZone/home/rods", "own", false);
 
-    // 3. Register Data Object
-    data_object obj;
-    obj.id = 20001;
-    obj.name = "test_file.txt";
-    obj.coll_id = rods_home.id;
-    obj.owner_name = "rods";
-    obj.owner_zone = "tempZone";
-    obj.size = 1024;
-    obj.type = "generic";
-    obj.create_ts = "01748200000";
-    obj.modify_ts = "01748200000";
-    catalog.register_data_object(obj, obj.id);
+    char hostname[1024];
+    gethostname(hostname, 1024);
 
-    // 4. Register Resource
-    std::cout << "Registering resources..." << std::endl;
+    std::cout << "Registering resources for " << hostname << "...\n";
     resource resc;
     resc.id = 40001;
     resc.name = "demoResc";
     resc.type = "unixfilesystem";
-    resc.status = 1;
-    catalog.register_resource(resc, resc.id);
+    resc.location = hostname;
+    resc.vault_path = "/var/lib/irods/Vault";
+    resc.status = 0;
+    resc.create_ts = "01748200000";
+    resc.modify_ts = "01748200000";
+    resc_id_t out_resc_id;
+    catalog.register_resource(resc, out_resc_id);
 
-    // 5. Register Replica
-    replica r;
-    r.data_id = obj.id;
-    r.replica_number = 0;
-    r.resource_id = 40001;
-    r.physical_path = "/var/lib/irods/Vault/test_file.txt";
-    r.resc_hier = "demoResc";
-    r.status = "1";
-    r.modify_ts = "01748200000";
-    catalog.register_replica(r);
+    std::cout << "Hierarchy created. Waiting for ZMQ to flush...\n";
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
-    std::cout << "Hierarchy created. Waiting for ZMQ to flush..." << std::endl;
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-
-    std::cout << "Bootstrap complete." << std::endl;
+    std::cout << "Bootstrap complete.\n";
     return 0;
 }

@@ -77,6 +77,18 @@ namespace irods::catalog::bridge {
                 case COL_COLL_INHERITANCE: return "COLL_INHERITANCE";
                 case COL_COLL_COMMENTS: return "COLL_COMMENTS";
 
+                case COL_DATA_ACCESS_TYPE: return "DATA_ACCESS_TYPE";
+                case COL_DATA_ACCESS_NAME: return "DATA_ACCESS_NAME";
+                case COL_DATA_TOKEN_NAMESPACE: return "DATA_TOKEN_NAMESPACE";
+                case COL_DATA_ACCESS_USER_ID: return "DATA_ACCESS_USER_ID";
+                case COL_DATA_ACCESS_DATA_ID: return "DATA_ACCESS_DATA_ID";
+
+                case COL_COLL_ACCESS_TYPE: return "COLL_ACCESS_TYPE";
+                case COL_COLL_ACCESS_NAME: return "COLL_ACCESS_NAME";
+                case COL_COLL_TOKEN_NAMESPACE: return "COLL_TOKEN_NAMESPACE";
+                case COL_COLL_ACCESS_USER_ID: return "COLL_ACCESS_USER_ID";
+                case COL_COLL_ACCESS_COLL_ID: return "COLL_COLL_ACCESS_COLL_ID";
+
                 case COL_R_RESC_ID: return "RESC_ID";
                 case COL_R_RESC_NAME: return "RESC_NAME";
                 case COL_R_ZONE_NAME: return "ZONE_NAME";
@@ -154,9 +166,8 @@ namespace irods::catalog::bridge {
                 case COL_TICKET_ALLOWED_USER_NAME: return "TICKET_ALLOWED_USER_NAME";
                 case COL_TICKET_ALLOWED_GROUP_TICKET_ID: return "TICKET_ALLOWED_GROUP_TICKET_ID";
                 case COL_TICKET_ALLOWED_GROUP_NAME: return "TICKET_ALLOWED_GROUP_NAME";
-                
-                default: 
-                   return "";
+
+                default: return "";
             }
         };
 
@@ -192,8 +203,63 @@ namespace irods::catalog::bridge {
             }
         }
 
+        // Limit and Offset
+        if (_inp->maxRows > 0) {
+            ast.range.number_of_rows = std::to_string(_inp->maxRows);
+        }
+        if (_inp->continueInx > 0) {
+            ast.range.offset = std::to_string(_inp->continueInx);
+        }
+
         // 2. Conditions & Path Resolution
         bool resolved_start = false;
+        int best_start_priority = -1;
+        std::regex eq_regex("^\\s*=\\s*'(.*)'\\s*$");
+        std::regex ne_regex("^\\s*!=\\s*'(.*)'\\s*$");
+        std::regex like_regex("^\\s*like\\s*'(.*)'\\s*$");
+        std::regex eq_or_like_regex("^\\s*=\\s*'(.*)'\\s*\\|\\|\\s*like\\s*'(.*)'\\s*$");
+        std::regex parent_regex("^\\s*parent_of\\s*'(.*)'\\s*$");
+
+        // Pass 1: Find best starting node
+        for (int i = 0; i < _inp->sqlCondInp.len; ++i) {
+            int inx = _inp->sqlCondInp.inx[i];
+            std::string cond(_inp->sqlCondInp.value[i]);
+            std::smatch match;
+
+            if (std::regex_match(cond, match, eq_regex)) {
+                std::string literal = match[1].str();
+                int priority = -1;
+                if (inx == COL_DATA_NAME || inx == COL_D_DATA_ID) priority = 3;
+                else if (inx == COL_COLL_NAME || inx == COL_COLL_ID) priority = 2;
+                else if (inx == COL_USER_NAME || inx == COL_USER_ID || inx == COL_R_RESC_NAME || inx == COL_R_RESC_ID) priority = 1;
+                else if (inx == COL_ZONE_NAME || inx == COL_ZONE_ID) priority = -1;
+
+                if (priority > best_start_priority && _catalog != nullptr) {
+                    snowflake_id_t sid = 0; EntityType type;
+                    if (_catalog->resolve_path(literal, sid, type).ok()) {
+                        _starting_nodes.clear();
+                        _starting_nodes.push_back(sid);
+                        resolved_start = true;
+                        best_start_priority = priority;
+                    }
+                }
+            } else if (std::regex_match(cond, match, parent_regex)) {
+                irods::experimental::filesystem::path p(match[1].str());
+                std::string parent_path = p.parent_path().string();
+                int priority = 2;
+                if ((inx == COL_COLL_NAME || inx == COL_COLL_PARENT_NAME) && priority > best_start_priority && _catalog != nullptr) {
+                    snowflake_id_t sid = 0; EntityType type;
+                    if (_catalog->resolve_path(parent_path, sid, type).ok()) {
+                        _starting_nodes.clear();
+                        _starting_nodes.push_back(sid);
+                        resolved_start = true;
+                        best_start_priority = priority;
+                    }
+                }
+            }
+        }
+
+        // Pass 2: Build conditions
         for (int i = 0; i < _inp->sqlCondInp.len; ++i) {
             int inx = _inp->sqlCondInp.inx[i];
             std::string cond(_inp->sqlCondInp.value[i]);
@@ -203,39 +269,18 @@ namespace irods::catalog::bridge {
 
             if (!name.empty()) {
                 gq2::column col(name);
-                std::regex eq_regex("^\\s*=\\s*'(.*)'\\s*$");
-                std::regex like_regex("^\\s*like\\s*'(.*)'\\s*$");
-                std::regex eq_or_like_regex("^\\s*=\\s*'(.*)'\\s*\\|\\|\\s*like\\s*'(.*)'\\s*$");
-                std::regex parent_regex("^\\s*parent_of\\s*'(.*)'\\s*$");
-
                 std::smatch match;
                 if (std::regex_match(cond, match, eq_regex)) {
-                    std::string literal = match[1].str();
-                    if ((inx == COL_COLL_NAME || inx == COL_DATA_NAME || inx == COL_USER_NAME || inx == COL_ZONE_NAME) && !resolved_start) {
-                        snowflake_id_t sid = 0; EntityType type;
-                        if (_catalog->resolve_path(literal, sid, type).ok()) {
-                            _starting_nodes.push_back(sid);
-                            resolved_start = true;
-                            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved path [%s] to starting node %lx", literal.c_str(), sid);
-                        }
-                    }
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(literal)));
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(match[1].str())));
+                } else if (std::regex_match(cond, match, ne_regex)) {
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_not_equal(match[1].str())));
                 } else if (std::regex_match(cond, match, eq_or_like_regex)) {
                     ast.conditions.push_back(gq2::condition(col, gq2::condition_like(match[2].str())));
                 } else if (std::regex_match(cond, match, like_regex)) {
                     ast.conditions.push_back(gq2::condition(col, gq2::condition_like(match[1].str())));
                 } else if (std::regex_match(cond, match, parent_regex)) {
                     irods::experimental::filesystem::path p(match[1].str());
-                    std::string parent_path = p.parent_path().string();
-                    if ((inx == COL_COLL_NAME) && !resolved_start) {
-                        snowflake_id_t sid = 0; EntityType type;
-                        if (_catalog->resolve_path(parent_path, sid, type).ok()) {
-                            _starting_nodes.push_back(sid);
-                            resolved_start = true;
-                            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved parent path [%s] to starting node %lx", parent_path.c_str(), sid);
-                        }
-                    }
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(parent_path)));
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(p.parent_path().string())));
                 }
             }
         }
@@ -250,7 +295,13 @@ namespace irods::catalog::bridge {
         rodsLog(LOG_NOTICE, "L3_BRIDGE: Packing %zu rows into GQ1 output", _results.row_count());
         _out->rowCnt = _results.row_count();
         _out->attriCnt = _inp->selectInp.len;
-        _out->continueInx = 0; 
+
+        if (_inp->maxRows > 0 && _out->rowCnt == _inp->maxRows) {
+            _out->continueInx = _inp->continueInx + _out->rowCnt;
+        } else {
+            _out->continueInx = 0;
+        }
+
         _out->totalRowCount = _out->rowCnt;
 
         for (int i = 0; i < _out->attriCnt; ++i) {
@@ -304,12 +355,24 @@ namespace irods::catalog::bridge {
                                      inx == COL_FNM_INT_FUNC_NAME || inx == COL_AUDIT_COMMENT ||
                                      inx == COL_SL_HOST_NAME || inx == COL_SL_RESC_NAME);
 
-                if (val.empty()) {
+                if (val.empty() && inx == COL_COLL_TYPE) {
+                    val = "";
+                } else if (val.empty()) {
                     if (is_string_col) {
                         val = ""; 
                     } else {
                         val = "0"; // Conservative default for all non-string columns
                     }
+                } else if (inx == COL_COLL_TYPE && val == "collection") {
+                    val = "";
+                }
+
+                // Map L3KVG permission labels to numeric strings
+                if (inx == COL_DATA_ACCESS_TYPE || inx == COL_COLL_ACCESS_TYPE) {
+                    if (val == "own") val = "1200";
+                    else if (val == "write") val = "1100";
+                    else if (val == "read") val = "1050";
+                    else if (val == "null" || val.empty()) val = "1000";
                 }
 
                 rodsLog(LOG_NOTICE, "L3_BRIDGE: Packing Col %d Row %d: [%s]", inx, r, val.c_str());

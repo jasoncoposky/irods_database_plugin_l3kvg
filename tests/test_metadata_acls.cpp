@@ -24,7 +24,7 @@ TEST_F(MetadataAclTest, PushdownFilter) {
     Config cfg;
     cfg.node_id = 1;
     cfg.zmq_endpoint = endpoint();
-    ASSERT_TRUE(catalog.init(cfg).ok());
+    ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
 
     // 1. Create a Data Object
     data_object obj;

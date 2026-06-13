@@ -24,7 +24,7 @@ namespace irods::catalog::compiler {
     public:
         Gq2ToL3kvgCompiler() = default;
         
-        std::string compile(const irods::experimental::genquery2::select& ast);
+        std::string compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias = "");
 
         struct PathStep {
             enum class Direction { Out, In };
@@ -33,12 +33,13 @@ namespace irods::catalog::compiler {
             std::string_view target_type;
         };
 
-        void add_target_type(std::string_view t) { target_node_types_.push_back(t); }
+        void add_target_type(std::string_view t) { target_node_types_.emplace_back(t); }
         void set_entry_type(std::string_view t) { entry_node_type_ = t; }
+        const std::string& get_entry_type() const { return entry_node_type_; }
 
     private:
-        std::string_view entry_node_type_;
-        std::vector<std::string_view> target_node_types_;
+        std::string entry_node_type_;
+        std::vector<std::string> target_node_types_;
 
         std::vector<PathStep> find_path(std::string_view source, std::string_view target);
         std::string_view find_edge(std::string_view source_type, std::string_view target_type);

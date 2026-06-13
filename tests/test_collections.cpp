@@ -23,7 +23,7 @@ TEST_F(CollectionTest, Lifecycle) {
     Config cfg;
     cfg.node_id = 1;
     cfg.zmq_endpoint = endpoint();
-    ASSERT_TRUE(catalog.init(cfg).ok());
+    ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
 
     // 1. Register Collections
     coll_id_t root_id, sub_id;
@@ -79,7 +79,7 @@ TEST_F(MetadataTest, AvuLifecycle) {
     Config cfg;
     cfg.node_id = 1;
     cfg.zmq_endpoint = endpoint();
-    ASSERT_TRUE(catalog.init(cfg).ok());
+    ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
 
     // 1. Add AVU to Object
     avu a1{"color", "blue", "none"};

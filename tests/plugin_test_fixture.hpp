@@ -19,8 +19,13 @@ namespace irods::catalog::test {
             // Load the plugin
             char cwd[1024];
             if (getcwd(cwd, sizeof(cwd))) {
-                std::string plugin_path = std::string(cwd) + "/libirods_database_plugin_l3kvg.so";
+                std::string plugin_path = std::string(cwd) + "/libl3kvg.so";
                 handle_ = dlopen(plugin_path.c_str(), RTLD_NOW);
+                if (!handle_) {
+                     // Try relative to exe
+                     plugin_path = "./libl3kvg.so";
+                     handle_ = dlopen(plugin_path.c_str(), RTLD_NOW);
+                }
             }
             if (!handle_) {
                 throw std::runtime_error("Failed to load plugin: " + std::string(dlerror()));

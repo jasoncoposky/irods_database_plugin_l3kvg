@@ -10,7 +10,9 @@
 #include "irods/catalog/binary_key.hpp"
 #include "irods/irods_error.hpp"
 #include "irods/private/genquery2_ast_types.hpp"
+#include "irods/atomic_apply_database_operations.hpp"
 #include "L3KVG/Query.hpp"
+#include "L3KVG/Settings.hpp"
 
 namespace irods::catalog {
 
@@ -20,10 +22,12 @@ namespace irods::catalog {
         std::string_view get_field(size_t row, std::string_view key) const {
             if (row >= rows.size()) return "";
             auto it = rows[row].fields.find(std::string(key));
-            return (it == rows[row].fields.end()) ? "" : it->second;
+            if (it == rows[row].fields.end()) return "";
+            return it->second;
         }
         std::string_view get_field(size_t row, size_t col_idx) const {
-            return get_field(row, std::to_string(col_idx));
+            std::string key = "idx_" + std::to_string(col_idx);
+            return get_field(row, key);
         }
     };
 
@@ -49,7 +53,7 @@ namespace irods::catalog {
         CatalogFacade();
         ~CatalogFacade();
 
-        irods::error init(const Config& cfg);
+        irods::error init(const Config& cfg, std::string_view zone_name, const l3kvg::Settings& settings = {});
         irods::error bootstrap_catalog(std::string_view zone_name, std::string_view admin_name);
         irods::error bootstrap_federation(const std::vector<FederatedZone>& peers);
 
@@ -138,8 +142,12 @@ namespace irods::catalog {
         irods::error delete_specific_query(std::string_view alias);
 
         // Query Operations
-        irods::error execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes = {});
+        irods::error execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes = {}, std::string_view root_type = "");
+        irods::error apply_atomic_operations(const std::vector<irods::experimental::dml::operation_type>& ops);
         irods::error get_next_sequence_value(std::string_view seq_name, uint64_t& out_val);
+
+        l3kvg::RemoteL3KVClient* get_client() const;
+        uint16_t get_cluster_id() const;
 
     private:
         std::unique_ptr<CatalogImpl> pImpl_;

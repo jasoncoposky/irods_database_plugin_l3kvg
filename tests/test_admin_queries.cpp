@@ -12,7 +12,7 @@ TEST(AdminQueryTest, ZoneListing) {
     Config cfg;
     cfg.db_path = "admin.l3kvg";
     cfg.node_id = 1;
-    ASSERT_TRUE(catalog.init(cfg).ok());
+    ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
 
     // 1. Setup: Zone with multiple users
     zone z{"tempZone", "local", ""};

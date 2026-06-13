@@ -37,6 +37,16 @@ link_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/lib
 )
 
+# Dependencies
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ZMQ REQUIRED libzmq)
+if(ZMQ_FOUND AND NOT TARGET libzmq)
+    add_library(libzmq INTERFACE)
+    target_include_directories(libzmq INTERFACE ${ZMQ_INCLUDE_DIRS})
+    target_link_libraries(libzmq INTERFACE ${ZMQ_LIBRARIES})
+endif()
+find_package(cppzmq REQUIRED)
+
 # Subprojects
 add_subdirectory(../l3kvg l3kvg)
 
@@ -81,7 +91,7 @@ macro(add_plugin_test name source)
         irods_common
         irods_server
         dl
-        libzmq-static
+        libzmq
     )
 endmacro()
 
@@ -93,46 +103,56 @@ add_plugin_test(test_plugin_federation tests/test_plugin_federation.cpp)
 add_plugin_test(test_plugin_resources tests/test_plugin_resources.cpp)
 add_plugin_test(test_plugin_collections tests/test_plugin_collections.cpp)
 add_plugin_test(test_plugin_misc tests/test_plugin_misc.cpp)
+add_plugin_test(test_plugin_environment tests/test_plugin_environment.cpp)
 
 # Logic Tests (Direct Facade/Compiler)
 add_executable(test_metadata_acls tests/test_metadata_acls.cpp)
-target_link_libraries(test_metadata_acls PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_metadata_acls PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_collections tests/test_collections.cpp)
-target_link_libraries(test_collections PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_collections PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_gq2_metadata_compiler tests/test_gq2_metadata_compiler.cpp)
-target_link_libraries(test_gq2_metadata_compiler PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_gq2_metadata_compiler PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_multihop_query tests/test_multihop_query.cpp)
-target_link_libraries(test_multihop_query PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_multihop_query PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_advanced_operators tests/test_advanced_operators.cpp)
-target_link_libraries(test_advanced_operators PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_advanced_operators PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_nested_logic tests/test_nested_logic.cpp)
-target_link_libraries(test_nested_logic PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_nested_logic PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_aggregates tests/test_aggregates.cpp)
-target_link_libraries(test_aggregates PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_aggregates PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_sorting tests/test_sorting.cpp)
-target_link_libraries(test_sorting PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_sorting PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_groupby tests/test_groupby.cpp)
-target_link_libraries(test_groupby PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_groupby PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_distinct tests/test_distinct.cpp)
-target_link_libraries(test_distinct PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_distinct PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_deep_traversal tests/test_deep_traversal.cpp)
-target_link_libraries(test_deep_traversal PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_deep_traversal PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
 add_executable(test_legacy_compatibility tests/test_legacy_compatibility.cpp)
-target_link_libraries(test_legacy_compatibility PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq-static)
+target_link_libraries(test_legacy_compatibility PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
+
+add_executable(test_gq1_bridge tests/test_gq1_bridge.cpp src/gq1_bridge.cpp src/compiler/gq2_compiler.cpp src/catalog/catalog_facade.cpp)
+target_link_libraries(test_gq1_bridge PRIVATE l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq fmt)
 
 add_executable(bootstrap_l3kvg tests/bootstrap_l3kvg.cpp src/catalog/catalog_facade.cpp src/compiler/gq2_compiler.cpp)
-target_link_libraries(bootstrap_l3kvg PRIVATE l3kvg_engine l3kv_engine lite3-cpp conveyor irods_common irods_server dl libzmq-static fmt)
+target_link_libraries(bootstrap_l3kvg PRIVATE l3kvg_engine l3kv_engine lite3-cpp conveyor irods_common irods_server dl libzmq fmt)
+
+add_executable(test_repro_imkdir tests/test_repro_imkdir.cpp src/gq1_bridge.cpp src/compiler/gq2_compiler.cpp src/catalog/catalog_facade.cpp)
+target_link_libraries(test_repro_imkdir PRIVATE l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq fmt)
+
+add_executable(test_repro_icp tests/test_repro_icp.cpp src/gq1_bridge.cpp src/compiler/gq2_compiler.cpp src/catalog/catalog_facade.cpp)
+target_link_libraries(test_repro_icp PRIVATE l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq fmt)
 
 # CPack Configuration
 set(CPACK_PACKAGE_NAME "irods-database-plugin-l3kvg")
@@ -149,7 +169,13 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "irods-server (>= 5.0.0), irods-runtime (>= 5.0
 
 # Install Logic
 install(TARGETS irods_database_plugin_l3kvg
-    LIBRARY DESTINATION /usr/lib/irods/plugins/database
+    LIBRARY DESTINATION lib/irods/plugins/database
 )
 
+install(TARGETS l3kvg_server bootstrap_l3kvg
+    RUNTIME DESTINATION bin
+)
+
+set(CPACK_SET_DESTDIR ON)
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Gemini")
 include(CPack)

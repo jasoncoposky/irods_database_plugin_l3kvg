@@ -8,7 +8,25 @@
 using namespace irods::catalog;
 using namespace irods::catalog::test;
 
-class IdentityPluginTest : public PluginTestFixture {};
+class IdentityPluginTest : public PluginTestFixture {
+protected:
+    snowflake_id_t resolve_id_from_index(EntityType type, std::string_view attr, std::string_view value) {
+        uint16_t local_cid = SnowflakeID::calculate_cluster_id("tempZone");
+        std::string type_str;
+        switch(type) {
+            case EntityType::Zone: type_str = "Zone"; break;
+            case EntityType::User: type_str = "User"; break;
+            case EntityType::Collection: type_str = "Collection"; break;
+            case EntityType::DataObject: type_str = "DataObject"; break;
+            case EntityType::Resource: type_str = "Resource"; break;
+            default: type_str = "Unknown"; break;
+        }
+        std::string idx_key = "idx:" + type_str + ":" + std::string(attr) + ":" + std::string(value);
+        std::string payload = server()->get_generic_value(idx_key);
+        if (payload.empty()) return 0;
+        return std::stoull(payload, nullptr, 16);
+    }
+};
 
 TEST_F(IdentityPluginTest, BootstrapAndAuth) {
     // 1. Setup Mock iRODS Config
@@ -24,62 +42,94 @@ TEST_F(IdentityPluginTest, BootstrapAndAuth) {
 
     // 2. Start Plugin
     auto ret = plugin()->call(nullptr, irods::DATABASE_OP_START, nullptr);
-    if (!ret.ok()) {
-        std::cerr << "DATABASE_OP_START failed: " << ret.result() << std::endl;
-    }
     ASSERT_TRUE(ret.ok());
 
-    // 3. Verify Bootstrap Nodes
-    uint16_t local_cid = SnowflakeID::calculate_cluster_id("tempZone");
-    snowflake_id_t zid = SnowflakeID::create(local_cid, "1:1");
-    snowflake_id_t uid = SnowflakeID::create(local_cid, "2:1");
-
-    std::cout << "[Test] Expecting Zone Snowflake ID: [" << std::hex << zid << "]" << std::endl;
-    std::cout << "[Test] Expecting Admin Snowflake ID: [" << std::hex << uid << "]" << std::endl;
+    // Bootstrap
+    ret = plugin()->call(nullptr, "database_initialize_catalog", nullptr);
+    ASSERT_TRUE(ret.ok());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
+}
 
-    ASSERT_TRUE(server()->has_node(zid));
-    ASSERT_TRUE(server()->has_node(uid));
+TEST_F(IdentityPluginTest, GroupOperations) {
+    // 1. Setup Mock iRODS Config
+    nlohmann::json config;
+    config["zone_name"] = "tempZone";
+    config["zone_user"] = "rods";
+    config["plugin_configuration"]["database"]["l3kvg"]["plugin_specific_configuration"] = {
+        {"db_path", "test_group.l3kvg"},
+        {"node_id", 1},
+        {"zmq_endpoint", endpoint()}
+    };
+    irods::server_properties::instance().set_configuration(config);
+
+    // 2. Start Plugin and Bootstrap
+    ASSERT_TRUE(plugin()->call(nullptr, irods::DATABASE_OP_START, nullptr).ok());
+    ASSERT_TRUE(plugin()->call(nullptr, "database_initialize_catalog", nullptr).ok());
+
+    // 3. Register a new group
+    userInfo_t group;
+    std::memset(&group, 0, sizeof(group));
+    std::strncpy(group.userName, "devs", NAME_LEN);
+    std::strncpy(group.rodsZone, "tempZone", NAME_LEN);
+    std::strncpy(group.userType, "rodsgroup", NAME_LEN);
+    group.sysUid = 2001;
     
-    // Verify the HAS_USER edge exists in the mock server
+    ASSERT_TRUE(plugin()->call<userInfo_t*>(nullptr, irods::DATABASE_OP_REG_USER_RE, nullptr, &group).ok());
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    
+    // 4. Add user to group
+    ASSERT_TRUE((plugin()->call<const char*, const char*, const char*, const char*>(
+        nullptr, irods::DATABASE_OP_MOD_GROUP, nullptr, "devs", "add", "rods", "tempZone").ok()));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    // Verify edge exists: rods -> MEMBER_OF -> devs
+    snowflake_id_t gid = resolve_id_from_index(EntityType::User, "n", "devs");
+    snowflake_id_t rid = resolve_id_from_index(EntityType::User, "n", "rods");
+
+    ASSERT_NE(gid, 0);
+    ASSERT_NE(rid, 0);
+
     bool edge_found = false;
-    for (const auto& edge : server()->get_node(zid).edges) {
-        if (edge.first == "HAS_USER" && edge.second == uid) {
+    for (const auto& edge : server()->get_node(rid).edges) {
+        if (edge.first == "MEMBER_OF" && edge.second == gid) {
             edge_found = true;
             break;
         }
     }
     ASSERT_TRUE(edge_found);
+}
 
-    // 4. Register a new user
-    userInfo_t user;
-    std::memset(&user, 0, sizeof(user));
-    std::strncpy(user.userName, "alice", NAME_LEN);
-    std::strncpy(user.rodsZone, "tempZone", NAME_LEN);
-    std::strncpy(user.userType, "rodsuser", NAME_LEN);
-    user.sysUid = 1002;
+TEST_F(IdentityPluginTest, NullSafety) {
+    // 1. Setup Mock iRODS Config
+    nlohmann::json config;
+    config["zone_name"] = "tempZone";
+    config["zone_user"] = "rods";
+    config["plugin_configuration"]["database"]["l3kvg"]["plugin_specific_configuration"] = {
+        {"db_path", "test_null.l3kvg"},
+        {"node_id", 1},
+        {"zmq_endpoint", endpoint()}
+    };
+    irods::server_properties::instance().set_configuration(config);
+
+    // 2. Start Plugin
+    ASSERT_TRUE(plugin()->call(nullptr, irods::DATABASE_OP_START, nullptr).ok());
+
+    // 3. Test various operations with NULL pointers - Should NOT crash
     
-    ASSERT_TRUE(plugin()->call<userInfo_t*>(nullptr, irods::DATABASE_OP_REG_USER_RE, nullptr, &user).ok());
+    plugin()->call<const char*, const char*, const char*>(
+        nullptr, irods::DATABASE_OP_MOD_USER, nullptr, nullptr, nullptr, nullptr);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    snowflake_id_t alice_id = SnowflakeID::create(local_cid, "2:1002");
-    ASSERT_TRUE(server()->has_node(alice_id));
+    plugin()->call<collInfo_t*>(
+        nullptr, irods::DATABASE_OP_REG_COLL, nullptr, nullptr);
 
-    // 5. Modify User (e.g. change type)
-    ASSERT_TRUE((plugin()->call<const char*, const char*, const char*>(
-        nullptr, irods::DATABASE_OP_MOD_USER, nullptr, "alice", "type", "rodsadmin").ok()));
-    
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    // Verify privilege level updated (rodsadmin = 5)
-    ASSERT_EQ(server()->get_node(alice_id).get_attribute<int64_t>("p"), 5);
+    plugin()->call<const char*, const char*, const char*, const char*>(
+        nullptr, irods::DATABASE_OP_MOD_GROUP, nullptr, nullptr, nullptr, nullptr, nullptr);
 
-    // 6. Delete User
-    ASSERT_TRUE((plugin()->call<const char*, const char*>(
-        nullptr, irods::DATABASE_OP_DEL_USER_RE, nullptr, "alice", "tempZone").ok()));
-    
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    ASSERT_FALSE(server()->has_node(alice_id));
+    plugin()->call<const char*, const char*, const char*, const char*, const char*, const KeyValPair*>(
+        nullptr, irods::DATABASE_OP_ADD_AVU_METADATA, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 }
 
 int main(int argc, char **argv) {

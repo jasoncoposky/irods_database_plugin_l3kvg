@@ -16,6 +16,7 @@ namespace irods::catalog {
         data_id_t id = 0;
         coll_id_t coll_id = 0;
         std::string name;
+        std::string full_path;
         std::string owner_name;
         std::string owner_zone;
         std::string type;
@@ -46,6 +47,7 @@ namespace irods::catalog {
         coll_id_t id = 0;
         coll_id_t parent_id = 0;
         std::string name;
+        std::string parent_name;
         std::string owner_name;
         std::string owner_zone;
         std::string inheritance;
@@ -78,7 +80,7 @@ namespace irods::catalog {
         std::string context;
         std::string comments;
         int64_t free_space = 0;
-        int status = 1; // 1=up, 0=down
+        int status = 0; // 0=up, 1=down
         std::string create_ts;
         std::string modify_ts;
     };

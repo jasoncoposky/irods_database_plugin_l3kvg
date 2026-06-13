@@ -19,7 +19,7 @@ set(CMAKE_IMPORT_FILE_VERSION 1)
 set(_cmake_targets_defined "")
 set(_cmake_targets_not_defined "")
 set(_cmake_expected_targets "")
-foreach(_cmake_expected_target IN ITEMS libconveyor::conveyor libconveyor::conveyor_daemon)
+foreach(_cmake_expected_target IN ITEMS libconveyor::conveyor)
   list(APPEND _cmake_expected_targets "${_cmake_expected_target}")
   if(TARGET "${_cmake_expected_target}")
     list(APPEND _cmake_targets_defined "${_cmake_expected_target}")
@@ -50,23 +50,14 @@ unset(_cmake_expected_targets)
 add_library(libconveyor::conveyor STATIC IMPORTED)
 
 set_target_properties(libconveyor::conveyor PROPERTIES
-  INTERFACE_INCLUDE_DIRECTORIES "/home/darkfell/dev/libconveyor/include;/home/darkfell/dev/libconveyor/../L3KV/lib/concurrentqueue;/home/darkfell/dev/irods_database_plugin_l3kvg/build_fresh/_deps/citor-src/single_include;/home/darkfell/dev/irods_database_plugin_l3kvg/build_fresh/_deps/citor-src/include"
+  INTERFACE_INCLUDE_DIRECTORIES "/home/darkfell/dev/libconveyor/include;/home/darkfell/dev/irods_database_plugin_l3kvg/build_fresh/_deps/concurrentqueue-src;/home/darkfell/dev/irods_database_plugin_l3kvg/build_fresh/_deps/citor-src/single_include;/home/darkfell/dev/irods_database_plugin_l3kvg/build_fresh/_deps/citor-src/include"
 )
 
-# Create imported target libconveyor::conveyor_daemon
-add_executable(libconveyor::conveyor_daemon IMPORTED)
-
-# Import target "libconveyor::conveyor" for configuration ""
-set_property(TARGET libconveyor::conveyor APPEND PROPERTY IMPORTED_CONFIGURATIONS NOCONFIG)
+# Import target "libconveyor::conveyor" for configuration "Release"
+set_property(TARGET libconveyor::conveyor APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)
 set_target_properties(libconveyor::conveyor PROPERTIES
-  IMPORTED_LINK_INTERFACE_LANGUAGES_NOCONFIG "CXX"
-  IMPORTED_LOCATION_NOCONFIG "/home/darkfell/dev/irods_database_plugin_l3kvg/build_fresh/l3kvg/L3KV/libconveyor/libconveyor.a"
-  )
-
-# Import target "libconveyor::conveyor_daemon" for configuration ""
-set_property(TARGET libconveyor::conveyor_daemon APPEND PROPERTY IMPORTED_CONFIGURATIONS NOCONFIG)
-set_target_properties(libconveyor::conveyor_daemon PROPERTIES
-  IMPORTED_LOCATION_NOCONFIG "/home/darkfell/dev/irods_database_plugin_l3kvg/build_fresh/l3kvg/L3KV/libconveyor/conveyor_daemon"
+  IMPORTED_LINK_INTERFACE_LANGUAGES_RELEASE "CXX"
+  IMPORTED_LOCATION_RELEASE "/home/darkfell/dev/irods_database_plugin_l3kvg/build_fresh/l3kvg/L3KV/libconveyor/libconveyor.a"
   )
 
 # This file does not depend on other imported targets which have

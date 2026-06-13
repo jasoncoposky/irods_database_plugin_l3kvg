@@ -53,6 +53,11 @@ namespace irods::catalog::test {
                             continue;
                         }
                         
+                        std::cerr << "[MockServer] Received " << msgs.size() << " frames" << std::endl;
+                        for (size_t i = 0; i < msgs.size(); ++i) {
+                            std::cerr << "  Frame " << i << ": size=" << msgs[i].size() << " content=[" << msgs[i].to_string() << "]" << std::endl;
+                        }
+
                         if (msgs.size() < 4) continue;
 
                         std::string cmd = msgs[3].to_string();
@@ -68,10 +73,8 @@ namespace irods::catalog::test {
                                 uint64_t id = std::stoull(key.substr(n_start + 3, 16), nullptr, 16);
                                 nodes_[id].id = id; nodes_[id].payload = payload;
                                 std::cerr << "[MockServer] Stored Node [" << std::hex << id << "]" << std::endl;
-                            }
-                            
-                            size_t e_start = key.find("e:out:{");
-                            if (e_start != std::string::npos) {
+                            } else if (key.find("e:out:{") != std::string::npos) {
+                                size_t e_start = key.find("e:out:{");
                                 uint64_t src = std::stoull(key.substr(e_start + 7, 16), nullptr, 16);
                                 size_t label_start = e_start + 7 + 16 + 2;
                                 size_t label_end = key.find(':', label_start);
@@ -80,8 +83,11 @@ namespace irods::catalog::test {
                                 uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
                                 nodes_[src].edges.push_back({label, dst});
                                 std::cerr << "[MockServer] Stored Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
+                            } else {
+                                // Generic key (e.g. index)
+                                generic_store_[key] = payload;
+                                std::cerr << "[MockServer] Stored Generic Key [" << key << "] value=[" << payload << "]" << std::endl;
                             }
-                            // Fire-and-forget, no reply for P
                             socket_.send(msgs[0], zmq::send_flags::sndmore);
                             socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
@@ -89,6 +95,7 @@ namespace irods::catalog::test {
                         } else if (cmd == "D") {
                             if (msgs.size() < 5) continue;
                             std::string key = msgs[4].to_string();
+                            std::lock_guard<std::mutex> lock(mu_);
                             
                             if (key.starts_with("n:{")) {
                                 uint64_t id = std::stoull(key.substr(3, 16), nullptr, 16);
@@ -102,11 +109,17 @@ namespace irods::catalog::test {
                                 size_t dst_start = key.find(":{", label_end + 13);
                                 uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
                                 
-                                auto& edges = nodes_[src].edges;
-                                edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const auto& e) {
-                                    return e.first == label && e.second == dst;
-                                }), edges.end());
+                                auto it = nodes_.find(src);
+                                if (it != nodes_.end()) {
+                                    auto& edges = it->second.edges;
+                                    edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const auto& e) {
+                                        return e.first == label && e.second == dst;
+                                    }), edges.end());
+                                }
                                 std::cerr << "[MockServer] Deleted Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
+                            } else {
+                                generic_store_.erase(key);
+                                std::cerr << "[MockServer] Deleted Generic Key [" << key << "]" << std::endl;
                             }
 
                             socket_.send(msgs[0], zmq::send_flags::sndmore);
@@ -115,18 +128,34 @@ namespace irods::catalog::test {
                             continue;
                         } else if (cmd == "G") {
                             if (msgs.size() < 5) continue;
-                            uint64_t id = std::stoull(msgs[4].to_string(), nullptr, 16);
+                            std::string key = msgs[4].to_string();
                             std::string payload = "";
                             {
                                 std::lock_guard<std::mutex> lock(mu_);
-                                auto it = nodes_.find(id);
-                                if (it != nodes_.end()) payload = it->second.payload;
-                                else std::cerr << "[MockServer] GET Node [" << std::hex << id << "] NOT FOUND" << std::endl;
+                                uint64_t id = 0;
+                                bool is_node = false;
+                                if (key.starts_with("n:{") && key.size() >= 19) {
+                                    try { id = std::stoull(key.substr(3, 16), nullptr, 16); is_node = true; } catch(...) {}
+                                } else if (key.size() == 16) {
+                                    try { id = std::stoull(key, nullptr, 16); is_node = true; } catch(...) {}
+                                }
+
+                                if (is_node) {
+                                    auto it = nodes_.find(id);
+                                    if (it != nodes_.end()) payload = it->second.payload;
+                                }
+                                
+                                if (payload.empty()) {
+                                    auto it = generic_store_.find(key);
+                                    if (it != generic_store_.end()) payload = it->second;
+                                }
+                                
+                                if (payload.empty()) std::cerr << "[MockServer] GET Key [" << key << "] NOT FOUND" << std::endl;
                             }
                             socket_.send(msgs[0], zmq::send_flags::sndmore);
                             socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
                             socket_.send(zmq::message_t(payload.data(), payload.size()), zmq::send_flags::none);
-                            std::cerr << "[MockServer] Sent Payload for [" << std::hex << id << "]" << std::endl;
+                            std::cerr << "[MockServer] Sent Payload for [" << key << "]" << std::endl;
                             continue;
                         } else if (cmd == "N") {
                             if (msgs.size() < 5) continue;
@@ -185,9 +214,46 @@ namespace irods::catalog::test {
                              socket_.send(zmq::message_t(), zmq::send_flags::none);
                              continue;
                         } else if (cmd == "R") {
+                             if (msgs.size() < 6) continue;
+                             std::string query_json = msgs[5].to_string();
+                             nlohmann::json q = nlohmann::json::parse(query_json);
+                             
+                             nlohmann::json results = nlohmann::json::array();
+                             std::string root_alias = q["root_alias"];
+                             
+                             std::lock_guard<std::mutex> lock(mu_);
+                             for (const auto& [id, node] : nodes_) {
+                                 bool match = true;
+                                 if (q.contains("filters")) {
+                                     for (const auto& f : q["filters"]) {
+                                         if (f["alias"] == root_alias) {
+                                             std::string key = f["key"];
+                                             std::string val = f["value"];
+                                             if (node.get_attribute<std::string>(key) != val) {
+                                                 match = false; break;
+                                             }
+                                         }
+                                     }
+                                 }
+                                 
+                                 if (match) {
+                                     nlohmann::json row;
+                                     if (q.contains("projections")) {
+                                         for (const auto& p : q["projections"]) {
+                                             if (p["alias"] == root_alias) {
+                                                 std::string prop = p["property"];
+                                                 std::string as = p["as"];
+                                                 row[as] = node.get_attribute<std::string>(prop);
+                                             }
+                                         }
+                                     }
+                                     results.push_back(row);
+                                 }
+                             }
+                             
                              socket_.send(msgs[0], zmq::send_flags::sndmore);
                              socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
-                             socket_.send(zmq::message_t("[]", 2), zmq::send_flags::none);
+                             socket_.send(zmq::message_t(results.dump()), zmq::send_flags::none);
                              continue;
                         }
 
@@ -222,6 +288,12 @@ namespace irods::catalog::test {
             return nodes_.at(id);
         }
 
+        std::string get_generic_value(const std::string& key) const {
+            std::lock_guard<std::mutex> lock(mu_);
+            auto it = generic_store_.find(key);
+            return (it == generic_store_.end()) ? "" : it->second;
+        }
+
     private:
         std::string endpoint_;
         zmq::context_t ctx_;
@@ -230,6 +302,7 @@ namespace irods::catalog::test {
         std::thread server_thread_;
         mutable std::mutex mu_;
         std::unordered_map<uint64_t, MockNode> nodes_;
+        std::unordered_map<std::string, std::string> generic_store_;
     };
 
 } // namespace irods::catalog::test
