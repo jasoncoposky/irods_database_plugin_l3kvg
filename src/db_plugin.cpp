@@ -123,6 +123,9 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
 
         obj.size = (uint64_t)_info->dataSize;
         obj.owner_name = safe_string(_info->dataOwnerName); 
+        if (obj.owner_name.empty()) {
+            obj.owner_name = _ctx.comm()->clientUser.userName;
+        }
         obj.owner_zone = safe_string(_info->dataOwnerZone);
         if (obj.owner_zone.empty()) {
             const auto& config = irods::server_properties::instance().map().get_json();
@@ -143,16 +146,27 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
             _info->dataId = out_id;
             
             // Also register the initial replica, as R_DATA_MAIN traditionally holds both
-            irods::catalog::replica repl{
-                (uint64_t)out_id, 
-                (uint32_t)_info->replNum, 
-                (uint64_t)_info->rescId, 
-                safe_string(_info->filePath), 
-                safe_string(_info->rescHier), 
-                safe_string(_info->statusString), 
-                safe_string(_info->chksum), 
-                safe_string(_info->dataModify), 
-                ""};
+            irods::catalog::replica repl;
+            repl.data_id = (uint64_t)out_id;
+            repl.replica_number = (uint32_t)_info->replNum;
+            repl.resource_id = (uint64_t)_info->rescId;
+            repl.physical_path = safe_string(_info->filePath);
+            repl.resc_hier = safe_string(_info->rescHier);
+            repl.status = safe_string(_info->statusString);
+            repl.checksum = safe_string(_info->chksum);
+            repl.modify_ts = safe_string(_info->dataModify);
+
+            if (repl.resource_id == 0 && _info->rescName[0] != '\0') {
+                irods::catalog::snowflake_id_t rsid;
+                if (g_catalog->resolve_resource_name(_info->rescName, rsid).ok()) {
+                    auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
+                    if (!payload.empty()) {
+                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        repl.resource_id = buf.get_i64(0, "id");
+                    }
+                }
+            }
+            
             auto repl_ret = g_catalog->register_replica(repl);
             if (!repl_ret.ok()) {
                 rodsLog(LOG_ERROR, "L3_PLUGIN: db_reg_data_obj_op failed to register replica: %s", repl_ret.result().c_str());
@@ -224,6 +238,18 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
             safe_string(_dst->chksum), 
             safe_string(_dst->dataModify), 
             ""};
+
+        if (repl.resource_id == 0 && _dst->rescName[0] != '\0') {
+            irods::catalog::snowflake_id_t rsid;
+            if (g_catalog->resolve_resource_name(_dst->rescName, rsid).ok()) {
+                auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
+                if (!payload.empty()) {
+                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    repl.resource_id = buf.get_i64(0, "id");
+                }
+            }
+        }
+        
         auto ret = g_catalog->register_replica(repl);
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_replica_op SUCCESS");
         return ret;
@@ -269,12 +295,10 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         coll.name = safe_string(_info->collName); 
         coll.parent_name = safe_string(_info->collParentName);
         coll.owner_name = safe_string(_info->collOwnerName);
-        coll.owner_zone = safe_string(_info->collOwnerZone);
-        coll.type = safe_string(_info->collType);
-
         if (coll.owner_name.empty()) {
             coll.owner_name = _ctx.comm()->clientUser.userName;
         }
+        coll.owner_zone = safe_string(_info->collOwnerZone);
         if (coll.owner_zone.empty()) {
             coll.owner_zone = _ctx.comm()->clientUser.rodsZone;
         }
@@ -376,22 +400,22 @@ irods::error db_reg_resc_op(irods::plugin_context& _ctx, std::map<std::string, s
         irods::catalog::resource resc;
         if (_info) {
             for (auto const& [key, val] : *_info) {
-                if (key == "resc_id") resc.id = val.empty() ? 0 : std::stoull(val);
-                else if (key == "resc_name") resc.name = val;
-                else if (key == "zone_name") /* resc.zone = val; */ ; // resource doesn't have zone in catalog_models.hpp
-                else if (key == "resc_type_name") resc.type = val;
-                else if (key == "resc_class_name") /* resc.class_name = val; */ ;
-                else if (key == "resc_net") resc.location = val;
-                else if (key == "resc_def_path") resc.vault_path = val;
-                else if (key == "free_space") resc.free_space = val.empty() ? 0 : std::stoll(val);
-                else if (key == "resc_info") /* resc.info = val; */ ;
-                else if (key == "r_comment") resc.comments = val;
-                else if (key == "resc_status") resc.status = val.empty() ? 0 : std::stoi(val);
-                else if (key == "resc_context") resc.context = val;
-                else if (key == "create_ts") resc.create_ts = val;
-                else if (key == "modify_ts") resc.modify_ts = val;
+                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_resc_op: key=[%s] val=[%s]", key.c_str(), val.c_str());
+                if (key == "resource_property_id" || key == "resc_id" || key == "RESC_ID") resc.id = val.empty() ? 0 : std::stoull(val);
+                else if (key == "resource_property_name" || key == "resc_name" || key == "RESC_NAME") resc.name = val;
+                else if (key == "resource_property_type" || key == "resc_type_name" || key == "RESC_TYPE_NAME" || key == "resc_type") resc.type = val;
+                else if (key == "resource_property_location" || key == "resc_net" || key == "RESC_LOC") resc.location = val;
+                else if (key == "resource_property_path" || key == "resc_def_path" || key == "RESC_VAULT_PATH") resc.vault_path = val;
+                else if (key == "resource_property_comment" || key == "r_comment" || key == "RESC_COMMENT") resc.comments = val;
+                else if (key == "resource_property_status" || key == "resc_status" || key == "RESC_STATUS") resc.status = val.empty() ? 0 : std::stoi(val);
+                else if (key == "resource_property_context" || key == "resc_context" || key == "RESC_CONTEXT") resc.context = val;
+                else if (key == "resource_property_create_time" || key == "create_ts" || key == "RESC_CREATE_TIME") resc.create_ts = val;
+                else if (key == "resource_property_modify_time" || key == "modify_ts" || key == "RESC_MODIFY_TIME") resc.modify_ts = val;
             }
         }
+        
+        if (resc.id <= 0) g_catalog->get_next_sequence_value("R_RESC_MAIN", resc.id);
+        
         irods::catalog::resc_id_t out_id;
         auto ret = g_catalog->register_resource(resc, out_id);
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_resc_op SUCCESS");
@@ -751,22 +775,22 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
         auto j = nlohmann::json::parse(json_str);
         if (j.contains("replicas") && j["replicas"].is_array()) {
             for (auto& r : j["replicas"]) {
-                if (r.contains("after") && r["after"].contains("data_id")) {
-                    uint64_t data_id = std::stoull(r["after"]["data_id"].get<std::string>());
-                    uint32_t repl_num = std::stoul(r["after"]["data_repl_num"].get<std::string>());
-                    uint64_t resc_id = std::stoull(r["after"]["resc_id"].get<std::string>());
-                    uint64_t data_size = std::stoull(r["after"]["data_size"].get<std::string>());
-                    std::string checksum = r["after"]["data_checksum"].get<std::string>();
-                    std::string modify_ts = r["after"]["modify_ts"].get<std::string>();
-                    std::string resc_hier = r["after"]["data_path"].get<std::string>(); // Wait, data_path is physical path
+                if (r.contains("after")) {
+                    auto& after = r["after"];
+                    uint64_t data_id = std::stoull(after.value("data_id", "0"));
+                    uint32_t repl_num = std::stoul(after.value("data_repl_num", "0"));
+                    uint64_t resc_id = std::stoull(after.value("resc_id", "0"));
+                    uint64_t data_size = std::stoull(after.value("data_size", "0"));
+                    std::string checksum = after.value("data_checksum", "");
+                    std::string modify_ts = after.value("modify_ts", "");
 
                     irods::catalog::replica repl;
                     repl.data_id = data_id;
                     repl.replica_number = repl_num;
                     repl.resource_id = resc_id;
-                    repl.physical_path = r["after"]["data_path"].get<std::string>();
-                    repl.resc_hier = r["after"]["resc_hier"].get<std::string>();
-                    repl.status = r["after"]["data_status"].get<std::string>();
+                    repl.physical_path = after.value("data_path", "");
+                    repl.resc_hier = after.value("resc_hier", "");
+                    repl.status = after.value("data_status", "");
                     repl.checksum = checksum;
                     repl.modify_ts = modify_ts;
 

@@ -524,11 +524,20 @@ namespace irods::catalog::compiler {
             if (visited.count(target)) continue;
             rodsLog(LOG_NOTICE, "L3_COMPILER: Finding path from %s to %s", entry_node_type_.c_str(), target.c_str());
             auto path = find_path(entry_node_type_, target);
+            
+            std::string current_source = entry_node_type_;
             for (const auto& step : path) {
-                if (visited.count(std::string(step.target_type))) continue;
-                if (step.dir == Direction::Out) j_steps.push_back({{"type", "out"}, {"label", step.edge_label}, {"min_weight", 0.0}, {"target_alias", step.target_type}});
-                else j_steps.push_back({{"type", "in"}, {"label", step.edge_label}, {"target_alias", step.target_type}});
+                if (visited.count(std::string(step.target_type))) {
+                    current_source = step.target_type;
+                    continue;
+                }
+                if (step.dir == Direction::Out) {
+                    j_steps.push_back({{"type", "out"}, {"label", step.edge_label}, {"min_weight", 0.0}, {"target_alias", step.target_type}, {"source_alias", current_source}});
+                } else {
+                    j_steps.push_back({{"type", "in"}, {"label", step.edge_label}, {"target_alias", step.target_type}, {"source_alias", current_source}});
+                }
                 visited.insert(std::string(step.target_type));
+                current_source = step.target_type;
             }
         }
         j["steps"] = j_steps;
