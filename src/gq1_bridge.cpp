@@ -12,6 +12,15 @@
 
 namespace irods::catalog::bridge {
 
+    static std::string unescape_sql_literal(std::string str) {
+        size_t pos = 0;
+        while ((pos = str.find("''", pos)) != std::string::npos) {
+            str.replace(pos, 2, "'");
+            pos += 1;
+        }
+        return str;
+    }
+
     /**
      * Synthesizes a GenQuery2 AST from a legacy GenQuery1 input.
      */
@@ -167,6 +176,11 @@ namespace irods::catalog::bridge {
                 case COL_TICKET_ALLOWED_GROUP_TICKET_ID: return "TICKET_ALLOWED_GROUP_TICKET_ID";
                 case COL_TICKET_ALLOWED_GROUP_NAME: return "TICKET_ALLOWED_GROUP_NAME";
 
+                case COL_COLL_USER_NAME: return "COLL_USER_NAME";
+                case COL_COLL_USER_ZONE: return "COLL_USER_ZONE";
+                case COL_DATA_USER_NAME: return "DATA_USER_NAME";
+                case COL_DATA_USER_ZONE: return "DATA_USER_ZONE";
+
                 default: return "";
             }
         };
@@ -174,8 +188,9 @@ namespace irods::catalog::bridge {
         // Determine likely root alias for type-safe resolution
         std::string likely_root = "DataObject";
         for (int i = 0; i < _inp->selectInp.len; ++i) {
-            int inx = _inp->selectInp.inx[i] & ~ORDER_BY & ~ORDER_BY_DESC;
+            int inx = _inp->selectInp.inx[i];
             if (inx >= 500 && inx < 600) { likely_root = "Collection"; break; }
+            if (inx >= 1300 && inx < 1310) { likely_root = "Collection"; break; }
             if (inx >= 600 && inx < 700) { likely_root = "Resource"; break; }
             if (inx >= 200 && inx < 300) { likely_root = "User"; break; }
             if (inx >= 100 && inx < 200) { likely_root = "Zone"; break; }
@@ -184,7 +199,7 @@ namespace irods::catalog::bridge {
         // 1. Projections
         for (int i = 0; i < _inp->selectInp.len; ++i) {
             int inx = _inp->selectInp.inx[i];
-            int pure_inx = inx & ~ORDER_BY & ~ORDER_BY_DESC;
+            int pure_inx = inx;
             std::string name = get_col_name(pure_inx);
             
             if (name.empty()) {
@@ -193,10 +208,12 @@ namespace irods::catalog::bridge {
             } else {
                 gq2::column col(name);
                 ast.projections.push_back(col);
-                if (inx & ORDER_BY) {
+                bool has_order_by = _inp->selectInp.value && (_inp->selectInp.value[i] & ORDER_BY);
+                bool has_order_by_desc = _inp->selectInp.value && (_inp->selectInp.value[i] & ORDER_BY_DESC);
+                if (has_order_by) {
                     gq2::sort_expression sort; sort.expr = col; sort.ascending_order = true;
                     ast.order_by.sort_expressions.push_back(sort);
-                } else if (inx & ORDER_BY_DESC) {
+                } else if (has_order_by_desc) {
                     gq2::sort_expression sort; sort.expr = col; sort.ascending_order = false;
                     ast.order_by.sort_expressions.push_back(sort);
                 }
@@ -227,26 +244,37 @@ namespace irods::catalog::bridge {
             std::smatch match;
 
             if (std::regex_match(cond, match, eq_regex)) {
-                std::string literal = match[1].str();
+                std::string literal = unescape_sql_literal(match[1].str());
                 int priority = -1;
-                if (inx == COL_DATA_NAME || inx == COL_D_DATA_ID) priority = 3;
-                else if (inx == COL_COLL_NAME || inx == COL_COLL_ID) priority = 2;
+                if (inx == COL_DATA_NAME || inx == COL_D_DATA_ID) priority = 4;
+                else if (inx == COL_COLL_NAME || inx == COL_COLL_ID) priority = 3;
+                else if (inx == COL_COLL_PARENT_NAME) priority = 2;
                 else if (inx == COL_USER_NAME || inx == COL_USER_ID || inx == COL_R_RESC_NAME || inx == COL_R_RESC_ID) priority = 1;
                 else if (inx == COL_ZONE_NAME || inx == COL_ZONE_ID) priority = -1;
 
                 if (priority > best_start_priority && _catalog != nullptr) {
-                    snowflake_id_t sid = 0; EntityType type;
-                    if (_catalog->resolve_path(literal, sid, type).ok()) {
-                        _starting_nodes.clear();
-                        _starting_nodes.push_back(sid);
-                        resolved_start = true;
-                        best_start_priority = priority;
+                    if (inx == COL_COLL_PARENT_NAME) {
+                        snowflake_id_t parent_sid = 0; EntityType type;
+                        if (_catalog->resolve_path(literal, parent_sid, type).ok()) {
+                            auto child_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), parent_sid, "CONTAINS", 0.0).get();
+                            _starting_nodes = std::move(child_nodes);
+                            resolved_start = true;
+                            best_start_priority = priority;
+                        }
+                    } else {
+                        snowflake_id_t sid = 0; EntityType type;
+                        if (_catalog->resolve_path(literal, sid, type).ok()) {
+                            _starting_nodes.clear();
+                            _starting_nodes.push_back(sid);
+                            resolved_start = true;
+                            best_start_priority = priority;
+                        }
                     }
                 }
             } else if (std::regex_match(cond, match, parent_regex)) {
                 irods::experimental::filesystem::path p(match[1].str());
-                std::string parent_path = p.parent_path().string();
-                int priority = 2;
+                std::string parent_path = unescape_sql_literal(p.parent_path().string());
+                int priority = 4;
                 if ((inx == COL_COLL_NAME || inx == COL_COLL_PARENT_NAME) && priority > best_start_priority && _catalog != nullptr) {
                     snowflake_id_t sid = 0; EntityType type;
                     if (_catalog->resolve_path(parent_path, sid, type).ok()) {
@@ -271,16 +299,16 @@ namespace irods::catalog::bridge {
                 gq2::column col(name);
                 std::smatch match;
                 if (std::regex_match(cond, match, eq_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(match[1].str())));
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(unescape_sql_literal(match[1].str()))));
                 } else if (std::regex_match(cond, match, ne_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_not_equal(match[1].str())));
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_not_equal(unescape_sql_literal(match[1].str()))));
                 } else if (std::regex_match(cond, match, eq_or_like_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_like(match[2].str())));
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_like(unescape_sql_literal(match[2].str()))));
                 } else if (std::regex_match(cond, match, like_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_like(match[1].str())));
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_like(unescape_sql_literal(match[1].str()))));
                 } else if (std::regex_match(cond, match, parent_regex)) {
                     irods::experimental::filesystem::path p(match[1].str());
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(p.parent_path().string())));
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(unescape_sql_literal(p.parent_path().string()))));
                 }
             }
         }
@@ -305,10 +333,14 @@ namespace irods::catalog::bridge {
         _out->totalRowCount = _out->rowCnt;
 
         for (int i = 0; i < _out->attriCnt; ++i) {
-            int inx = _inp->selectInp.inx[i] & ~ORDER_BY & ~ORDER_BY_DESC;
+            int inx = _inp->selectInp.inx[i];
             _out->sqlResult[i].attriInx = inx;
             
+            // Standardize on MAX_NAME_LEN for all GenQuery 1 output columns.
+            // Many iRODS clients (including iadmin) are sensitive to memory layout 
+            // and often assume 2700 byte buffers for all results.
             int col_len = 2700; 
+            
             _out->sqlResult[i].len = col_len;
             _out->sqlResult[i].value = (char*)malloc(_out->rowCnt * col_len);
             if (!_out->sqlResult[i].value) throw std::runtime_error("Failed to allocate result buffer");
@@ -353,7 +385,10 @@ namespace irods::catalog::bridge {
                                      inx == COL_DVM_EXT_VAR_NAME || inx == COL_DVM_INT_MAP_PATH ||
                                      inx == COL_FNM_BASE_NAME || inx == COL_FNM_EXT_FUNC_NAME ||
                                      inx == COL_FNM_INT_FUNC_NAME || inx == COL_AUDIT_COMMENT ||
-                                     inx == COL_SL_HOST_NAME || inx == COL_SL_RESC_NAME);
+                                     inx == COL_SL_HOST_NAME || inx == COL_SL_RESC_NAME ||
+                                     inx == COL_COLL_USER_NAME || inx == COL_COLL_USER_ZONE ||
+                                     inx == COL_DATA_USER_NAME || inx == COL_DATA_USER_ZONE ||
+                                     inx == COL_RESC_USER_NAME || inx == COL_RESC_USER_ZONE);
 
                 if (val.empty() && inx == COL_COLL_TYPE) {
                     val = "";
@@ -368,11 +403,26 @@ namespace irods::catalog::bridge {
                 }
 
                 // Map L3KVG permission labels to numeric strings
-                if (inx == COL_DATA_ACCESS_TYPE || inx == COL_COLL_ACCESS_TYPE) {
-                    if (val == "own") val = "1200";
-                    else if (val == "write") val = "1100";
-                    else if (val == "read") val = "1050";
-                    else if (val == "null" || val.empty()) val = "1000";
+                if (inx == COL_DATA_ACCESS_TYPE || inx == COL_COLL_ACCESS_TYPE || inx == COL_DATA_ACCESS_NAME || inx == COL_COLL_ACCESS_NAME) {
+                    rodsLog(LOG_NOTICE, "L3_BRIDGE: Mapping permission column %d value [%s]", inx, val.c_str());
+                    
+                    // Handle admin: prefix
+                    if (val.starts_with("admin:")) {
+                        val = val.substr(6);
+                    }
+
+                    if (val == "own") {
+                        if (inx == COL_DATA_ACCESS_TYPE || inx == COL_COLL_ACCESS_TYPE) val = "1200";
+                    }
+                    else if (val == "write") {
+                        if (inx == COL_DATA_ACCESS_TYPE || inx == COL_COLL_ACCESS_TYPE) val = "1100";
+                    }
+                    else if (val == "read") {
+                        if (inx == COL_DATA_ACCESS_TYPE || inx == COL_COLL_ACCESS_TYPE) val = "1050";
+                    }
+                    else if (val == "null" || val.empty()) {
+                        if (inx == COL_DATA_ACCESS_TYPE || inx == COL_COLL_ACCESS_TYPE) val = "1000";
+                    }
                 }
 
                 rodsLog(LOG_NOTICE, "L3_BRIDGE: Packing Col %d Row %d: [%s]", inx, r, val.c_str());
