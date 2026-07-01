@@ -24,7 +24,7 @@ namespace irods::catalog::compiler {
         {COL_D_OWNER_NAME,     {"DataObject", "o"}},
         {COL_D_OWNER_ZONE,     {"DataObject", "z"}},
         {COL_D_CREATE_TIME,    {"DataObject", "ct"}},
-        {COL_D_MODIFY_TIME,    {"DataObject", "mt"}},
+        {COL_D_MODIFY_TIME,    {"Replica", "mt"}},
         {COL_D_DATA_CHECKSUM,  {"Replica", "cs"}},
         {COL_D_DATA_STATUS,    {"DataObject", "st"}},
 
@@ -84,7 +84,11 @@ namespace irods::catalog::compiler {
         {COL_DATA_ACCESS_DATA_ID, {"DataObject", "id"}},
         {COL_COLL_ACCESS_COLL_ID, {"Collection", "id"}},
         {COL_DATA_ACCESS_USER_ID, {"User", "id"}},
-        {COL_COLL_ACCESS_USER_ID, {"User", "id"}}
+        {COL_COLL_ACCESS_USER_ID, {"User", "id"}},
+        {COL_COLL_USER_NAME,      {"User", "n"}},
+        {COL_COLL_USER_ZONE,      {"User", "z"}},
+        {COL_DATA_USER_NAME,      {"User", "n"}},
+        {COL_DATA_USER_ZONE,      {"User", "z"}}
     };
 
     const std::unordered_map<std::string_view, GraphMap> COLUMN_NAME_MAP = {
@@ -98,7 +102,7 @@ namespace irods::catalog::compiler {
         {"DATA_OWNER_NAME",   {"DataObject", "o"}},
         {"DATA_OWNER_ZONE",   {"DataObject", "z"}},
         {"DATA_CREATE_TIME",  {"DataObject", "ct"}},
-        {"DATA_MODIFY_TIME",  {"DataObject", "mt"}},
+        {"DATA_MODIFY_TIME",  {"Replica", "mt"}},
         {"DATA_CHECKSUM",     {"Replica", "cs"}},
         {"DATA_EXPIRY",       {"DataObject", "ex"}},
         {"DATA_MAP_ID",       {"DataObject", "m"}},
@@ -192,6 +196,10 @@ namespace irods::catalog::compiler {
         {"COLL_ACCESS_TYPE",      {"Access", "l"}},
         {"DATA_TOKEN_NAMESPACE",  {"Access", "t"}},
         {"COLL_TOKEN_NAMESPACE",  {"Access", "t"}},
+        {"COLL_USER_NAME",        {"User", "n"}},
+        {"COLL_USER_ZONE",        {"User", "z"}},
+        {"DATA_USER_NAME",        {"User", "n"}},
+        {"DATA_USER_ZONE",        {"User", "z"}},
 
         {"TICKET_ID",         {"Ticket", "id"}},
         {"TICKET_STRING",     {"Ticket", "s"}},
@@ -311,6 +319,10 @@ namespace irods::catalog::compiler {
         {{"Collection", "User"},       {{Direction::In, "FOR_OBJECT", "Access"}, {Direction::In, "HAS_ACCESS", "User"}}},
         {{"Collection", "Group"},      {{Direction::In, "FOR_OBJECT", "Access"}, {Direction::In, "HAS_ACCESS", "User"}, {Direction::Out, "MEMBER_OF", "Group"}}},
         {{"Collection", "Zone"},       {{Direction::In, "HAS_ROOT_COLL", "Zone"}}},
+        {{"Collection", "Replica"},    {{Direction::Out, "CONTAINS", "DataObject"}, {Direction::Out, "HAS_REPLICA", "Replica"}}},
+        {{"User", "Replica"},          {{Direction::Out, "HAS_ACCESS", "Access"}, {Direction::Out, "FOR_OBJECT", "DataObject"}, {Direction::Out, "HAS_REPLICA", "Replica"}}},
+        {{"Group", "Replica"},         {{Direction::In, "MEMBER_OF", "User"}, {Direction::Out, "HAS_ACCESS", "Access"}, {Direction::Out, "FOR_OBJECT", "DataObject"}, {Direction::Out, "HAS_REPLICA", "Replica"}}},
+        {{"Zone", "Replica"},          {{Direction::Out, "HAS_ROOT_COLL", "Collection"}, {Direction::Out, "CONTAINS", "DataObject"}, {Direction::Out, "HAS_REPLICA", "Replica"}}},
         {{"User", "Access"},           {{Direction::Out, "HAS_ACCESS", "Access"}}},
         {{"User", "DataObject"},       {{Direction::Out, "HAS_ACCESS", "Access"}, {Direction::Out, "FOR_OBJECT", "DataObject"}}},
         {{"User", "Collection"},       {{Direction::Out, "HAS_ACCESS", "Access"}, {Direction::Out, "FOR_OBJECT", "Collection"}}},
