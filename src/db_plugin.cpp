@@ -19,9 +19,73 @@
 #include <map>
 #include <cstring>
 #include <iostream>
+#include <ctime>
+
+inline std::string sanitize_utf8(std::string_view sv) {
+    std::string res;
+    res.reserve(sv.size());
+    for (size_t i = 0; i < sv.size();) {
+        unsigned char c = sv[i];
+        if (c < 0x80) {
+            res.push_back(c);
+            i++;
+        } else if ((c & 0xE0) == 0xC0) {
+            if (i + 1 < sv.size() && (static_cast<unsigned char>(sv[i + 1]) & 0xC0) == 0x80) {
+                res.push_back(sv[i]);
+                res.push_back(sv[i + 1]);
+                i += 2;
+            } else {
+                res.push_back('?');
+                i++;
+            }
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 < sv.size() && (static_cast<unsigned char>(sv[i + 1]) & 0xC0) == 0x80 && (static_cast<unsigned char>(sv[i + 2]) & 0xC0) == 0x80) {
+                res.push_back(sv[i]);
+                res.push_back(sv[i + 1]);
+                res.push_back(sv[i + 2]);
+                i += 3;
+            } else {
+                res.push_back('?');
+                i++;
+            }
+        } else if ((c & 0xF8) == 0xF0) {
+            if (i + 3 < sv.size() && (static_cast<unsigned char>(sv[i + 1]) & 0xC0) == 0x80 && (static_cast<unsigned char>(sv[i + 2]) & 0xC0) == 0x80 && (static_cast<unsigned char>(sv[i + 3]) & 0xC0) == 0x80) {
+                res.push_back(sv[i]);
+                res.push_back(sv[i + 1]);
+                res.push_back(sv[i + 2]);
+                res.push_back(sv[i + 3]);
+                i += 4;
+            } else {
+                res.push_back('?');
+                i++;
+            }
+        } else {
+            res.push_back('?');
+            i++;
+        }
+    }
+    return res;
+}
 
 inline std::string safe_string(const char* s) {
-    return s ? std::string(s) : std::string("");
+    if (!s) return "";
+    return sanitize_utf8(s);
+}
+
+template <size_t N>
+inline std::string safe_string(const char (&arr)[N]) {
+    size_t len = 0;
+    while (len < N && arr[len] != '\0') {
+        len++;
+    }
+    return sanitize_utf8(std::string_view(arr, len));
+}
+
+static std::string get_timestamp(const std::string& ts) {
+    if (ts.empty() || ts == "set time to now" || ts == "now") {
+        return std::to_string(std::time(nullptr));
+    }
+    return ts;
 }
 
 #ifndef KW_CFG_ZONE_NAME
@@ -131,8 +195,10 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
             const auto& config = irods::server_properties::instance().map().get_json();
             obj.owner_zone = config.at(KW_CFG_ZONE_NAME).get<std::string>();
         }
-        obj.create_ts = safe_string(_info->dataCreate); 
-        obj.modify_ts = safe_string(_info->dataModify);
+        obj.create_ts = get_timestamp(safe_string(_info->dataCreate)); 
+        obj.modify_ts = get_timestamp(safe_string(_info->dataModify));
+        obj.type = safe_string(_info->dataType);
+        if (obj.type.empty()) obj.type = "generic";
         obj.checksum = safe_string(_info->chksum);
         obj.status = safe_string(_info->statusString);
 
@@ -152,9 +218,9 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
             repl.resource_id = (uint64_t)_info->rescId;
             repl.physical_path = safe_string(_info->filePath);
             repl.resc_hier = safe_string(_info->rescHier);
-            repl.status = safe_string(_info->statusString);
+            repl.status = std::to_string(_info->replStatus);
             repl.checksum = safe_string(_info->chksum);
-            repl.modify_ts = safe_string(_info->dataModify);
+            repl.modify_ts = get_timestamp(safe_string(_info->dataModify));
 
             if (repl.resource_id == 0 && _info->rescName[0] != '\0') {
                 irods::catalog::snowflake_id_t rsid;
@@ -234,9 +300,9 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
             (uint64_t)_dst->rescId, 
             safe_string(_dst->filePath), 
             safe_string(_dst->rescHier), 
-            safe_string(_dst->statusString), 
+            std::to_string(_dst->replStatus), 
             safe_string(_dst->chksum), 
-            safe_string(_dst->dataModify), 
+            get_timestamp(safe_string(_dst->dataModify)), 
             ""};
 
         if (repl.resource_id == 0 && _dst->rescName[0] != '\0') {
@@ -272,13 +338,27 @@ irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _in
     }
 }
 
-irods::error db_update_replica_access_time(irods::plugin_context& _ctx, const char* _data_id, char** _out) {
+irods::error db_update_replica_access_time(irods::plugin_context& _ctx, const char* _json_input, char** _out) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_update_replica_access_time");
-        std::string did_str = _data_id ? _data_id : "0";
-        auto ret = g_catalog->update_replica_access_time(did_str.empty() ? 0 : std::stoull(did_str), 0, "now");
+        if (!_json_input || !_out) {
+            return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Received one or more null pointers.");
+        }
+        
+        auto json_input = nlohmann::json::parse(_json_input);
+        const auto& updates = json_input.at("access_time_updates");
+        
+        for (const auto& _j : updates) {
+            uint64_t data_id = _j.at("data_id").get<uint64_t>();
+            uint32_t repl_num = _j.at("replica_number").get<uint32_t>();
+            std::string atime = _j.at("atime").get<std::string>();
+            
+            auto ret = g_catalog->update_replica_access_time(data_id, repl_num, atime);
+            if (!ret.ok()) return ret;
+        }
+        
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_update_replica_access_time SUCCESS");
-        return ret;
+        return SUCCESS();
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_update_replica_access_time EXCEPTION: %s", e.what());
         return ERROR(SYS_INTERNAL_ERR, e.what());
@@ -295,6 +375,18 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         coll.name = safe_string(_info->collName); 
         coll.parent_name = safe_string(_info->collParentName);
         coll.owner_name = safe_string(_info->collOwnerName);
+
+        // Heuristic: If owner is empty, check if it's a home directory
+        if (coll.owner_name.empty()) {
+            std::string name = coll.name;
+            size_t home_pos = name.find("/home/");
+            if (home_pos != std::string::npos) {
+                std::string sub = name.substr(home_pos + 6);
+                size_t slash = sub.find('/');
+                coll.owner_name = (slash == std::string::npos) ? sub : sub.substr(0, slash);
+            }
+        }
+
         if (coll.owner_name.empty()) {
             coll.owner_name = _ctx.comm()->clientUser.userName;
         }
@@ -323,6 +415,8 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
             const auto& config = irods::server_properties::instance().map().get_json();
             coll.owner_zone = config.at(KW_CFG_ZONE_NAME).get<std::string>();
         }
+        coll.create_ts = get_timestamp(safe_string(_info->collCreate));
+        coll.modify_ts = get_timestamp(safe_string(_info->collModify));
         if (coll.id <= 0) g_catalog->get_next_sequence_value("R_COLL_MAIN", coll.id);
         irods::catalog::coll_id_t out_id;
         auto ret = g_catalog->register_collection(coll, out_id);
@@ -754,9 +848,25 @@ irods::error db_mod_access_control_op(irods::plugin_context& _ctx, int _recursiv
 }
 
 irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context& _ctx, rodsLong_t _data_id) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_check_permission_to_modify_data_object_op id [%ld]", _data_id);
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_check_permission_to_modify_data_object_op SUCCESS");
-    return SUCCESS();
+    try {
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_check_permission_to_modify_data_object_op id [%ld]", _data_id);
+        bool allowed = false;
+        
+        std::string user_name = _ctx.comm()->clientUser.userName;
+        irods::catalog::snowflake_id_t usid = 0;
+        if (g_catalog->resolve_user_name(user_name, usid).ok()) {
+            irods::catalog::snowflake_id_t dsid = g_catalog->make_id(irods::catalog::EntityType::DataObject, (uint64_t)_data_id);
+            g_catalog->check_permission_to_modify_data_object(usid, dsid, allowed);
+        }
+
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_check_permission_to_modify_data_object_op id [%ld] allowed [%d]", _data_id, allowed);
+        if (allowed) return SUCCESS();
+        rodsLog(LOG_ERROR, "L3_PLUGIN: Access Denied for user [%s] on object [%ld]", user_name.c_str(), _data_id);
+        return ERROR(CAT_NO_ACCESS_PERMISSION, "User does not have permission to modify data object");
+    } catch(const std::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_check_permission_to_modify_data_object_op EXCEPTION: %s", e.what());
+        return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
 }
 
 irods::error db_update_ticket_write_byte_count_op(irods::plugin_context& _ctx, rodsLong_t _data_id, rodsLong_t _bytes) {
@@ -790,9 +900,9 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
                     repl.resource_id = resc_id;
                     repl.physical_path = after.value("data_path", "");
                     repl.resc_hier = after.value("resc_hier", "");
-                    repl.status = after.value("data_status", "");
+                    repl.status = after.value("data_is_dirty", "1");
                     repl.checksum = checksum;
-                    repl.modify_ts = modify_ts;
+                    repl.modify_ts = get_timestamp(modify_ts);
 
                     // Update the replica in the catalog
                     g_catalog->register_replica(repl);
