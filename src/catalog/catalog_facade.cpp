@@ -310,9 +310,29 @@ namespace irods::catalog {
             // Update node 'n' property
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (!payload.empty()) {
-                 lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
-                 buf.set_str(0, "n", std::string(new_name));
-                 client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
+                 lite3cpp::Buffer old_buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                 lite3cpp::Buffer new_buf; new_buf.init_object();
+                 
+                 std::string owner = safe_get_str(old_buf, 0, "o");
+                 int64_t size = 0;
+                 try { size = old_buf.get_i64(0, "s"); } catch(...) {}
+                 std::string type = safe_get_str(old_buf, 0, "t");
+                 std::string path = safe_get_str(old_buf, 0, "p");
+                 std::string ct = safe_get_str(old_buf, 0, "ct");
+                 std::string mt = safe_get_str(old_buf, 0, "mt");
+                 int64_t id = static_cast<int64_t>(obj_id);
+                 try { id = old_buf.get_i64(0, "id"); } catch(...) {}
+
+                 new_buf.set_str(0, "n", std::string(new_name));
+                 new_buf.set_str(0, "o", owner);
+                 new_buf.set_i64(0, "s", size);
+                 new_buf.set_str(0, "t", type);
+                 new_buf.set_str(0, "p", path);
+                 new_buf.set_str(0, "ct", ct);
+                 new_buf.set_str(0, "mt", mt);
+                 new_buf.set_i64(0, "id", id);
+
+                 client_->put_node_async(local_cluster_id_, sid, new_buf.move_to_string()).get();
             }
 
             add_index(EntityType::DataObject, "path", new_name, sid);
@@ -446,6 +466,12 @@ namespace irods::catalog {
             buf.set_str(0, "o", coll.owner_name); 
             buf.set_str(0, "z", coll.owner_zone); 
             buf.set_str(0, "t", coll.type);
+            buf.set_str(0, "ct", coll.create_ts);
+            buf.set_str(0, "mt", coll.modify_ts);
+            buf.set_str(0, "c1", coll.info1);
+            buf.set_str(0, "c2", coll.info2);
+            buf.set_str(0, "i", coll.inheritance);
+            buf.set_str(0, "m", coll.comments);
             buf.set_i64(0, "id", static_cast<int64_t>(coll.id));
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
             add_index(EntityType::Collection, "n", coll.name, sid);

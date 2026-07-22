@@ -58,14 +58,14 @@ namespace irods::catalog::test {
                             std::cerr << "  Frame " << i << ": size=" << msgs[i].size() << " content=[" << msgs[i].to_string() << "]" << std::endl;
                         }
 
-                        if (msgs.size() < 4) continue;
+                        if (msgs.size() < 3) continue;
 
-                        std::string cmd = msgs[3].to_string();
-                        std::string key = (msgs.size() > 4) ? msgs[4].to_string() : "";
+                        std::string cmd = msgs[2].to_string();
+                        std::string key = (msgs.size() > 3) ? msgs[3].to_string() : "";
                         
                         if (cmd == "P") {
-                            if (msgs.size() < 6) continue;
-                            std::string payload = msgs[5].to_string();
+                            if (msgs.size() < 5) continue;
+                            std::string payload = msgs[4].to_string();
                             std::lock_guard<std::mutex> lock(mu_);
                             
                             size_t n_start = key.find("n:{");
@@ -93,8 +93,8 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "D") {
-                            if (msgs.size() < 5) continue;
-                            std::string key = msgs[4].to_string();
+                            if (msgs.size() < 4) continue;
+                            std::string key = msgs[3].to_string();
                             std::lock_guard<std::mutex> lock(mu_);
                             
                             if (key.starts_with("n:{")) {
@@ -127,8 +127,8 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "G") {
-                            if (msgs.size() < 5) continue;
-                            std::string key = msgs[4].to_string();
+                            if (msgs.size() < 4) continue;
+                            std::string key = msgs[3].to_string();
                             std::string payload = "";
                             {
                                 std::lock_guard<std::mutex> lock(mu_);
@@ -159,8 +159,8 @@ namespace irods::catalog::test {
                             continue;
                         } else if (cmd == "N") {
                             if (msgs.size() < 5) continue;
-                            uint64_t id = std::stoull(msgs[4].to_string(), nullptr, 16);
-                            std::string label = msgs[5].to_string();
+                            uint64_t id = std::stoull(msgs[3].to_string(), nullptr, 16);
+                            std::string label = msgs[4].to_string();
                             
                             std::vector<uint64_t> neighs;
                             {
@@ -185,8 +185,8 @@ namespace irods::catalog::test {
                             continue;
                         } else if (cmd == "I") {
                             if (msgs.size() < 5) continue;
-                            uint64_t id = std::stoull(msgs[4].to_string(), nullptr, 16);
-                            std::string label = msgs[5].to_string();
+                            uint64_t id = std::stoull(msgs[3].to_string(), nullptr, 16);
+                            std::string label = msgs[4].to_string();
                             
                             std::vector<uint64_t> neighs;
                             {
@@ -214,8 +214,8 @@ namespace irods::catalog::test {
                              socket_.send(zmq::message_t(), zmq::send_flags::none);
                              continue;
                         } else if (cmd == "R") {
-                             if (msgs.size() < 6) continue;
-                             std::string query_json = msgs[5].to_string();
+                             if (msgs.size() < 5) continue;
+                             std::string query_json = msgs[4].to_string();
                              nlohmann::json q = nlohmann::json::parse(query_json);
                              
                              nlohmann::json results = nlohmann::json::array();
