@@ -78,11 +78,13 @@ namespace irods::catalog::test {
                                 uint64_t src = std::stoull(key.substr(e_start + 7, 16), nullptr, 16);
                                 size_t label_start = e_start + 7 + 16 + 2;
                                 size_t label_end = key.find(':', label_start);
-                                std::string label = key.substr(label_start, label_end - label_start);
-                                size_t dst_start = key.find(":{", label_end + 13);
-                                uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
-                                nodes_[src].edges.push_back({label, dst});
-                                std::cerr << "[MockServer] Stored Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
+                                size_t dst_start = (label_end != std::string::npos) ? key.find(":{", label_end) : std::string::npos;
+                                if (label_end != std::string::npos && dst_start != std::string::npos) {
+                                    std::string label = key.substr(label_start, label_end - label_start);
+                                    uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
+                                    nodes_[src].edges.push_back({label, dst});
+                                    std::cerr << "[MockServer] Stored Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
+                                }
                             } else {
                                 // Generic key (e.g. index)
                                 generic_store_[key] = payload;
@@ -105,18 +107,20 @@ namespace irods::catalog::test {
                                 uint64_t src = std::stoull(key.substr(7, 16), nullptr, 16);
                                 size_t label_start = 7 + 16 + 2;
                                 size_t label_end = key.find(':', label_start);
-                                std::string label = key.substr(label_start, label_end - label_start);
-                                size_t dst_start = key.find(":{", label_end + 13);
-                                uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
-                                
-                                auto it = nodes_.find(src);
-                                if (it != nodes_.end()) {
-                                    auto& edges = it->second.edges;
-                                    edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const auto& e) {
-                                        return e.first == label && e.second == dst;
-                                    }), edges.end());
+                                size_t dst_start = (label_end != std::string::npos) ? key.find(":{", label_end) : std::string::npos;
+                                if (label_end != std::string::npos && dst_start != std::string::npos) {
+                                    std::string label = key.substr(label_start, label_end - label_start);
+                                    uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
+                                    
+                                    auto it = nodes_.find(src);
+                                    if (it != nodes_.end()) {
+                                        auto& edges = it->second.edges;
+                                        edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const auto& e) {
+                                            return e.first == label && e.second == dst;
+                                        }), edges.end());
+                                    }
+                                    std::cerr << "[MockServer] Deleted Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
                                 }
-                                std::cerr << "[MockServer] Deleted Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
                             } else {
                                 generic_store_.erase(key);
                                 std::cerr << "[MockServer] Deleted Generic Key [" << key << "]" << std::endl;

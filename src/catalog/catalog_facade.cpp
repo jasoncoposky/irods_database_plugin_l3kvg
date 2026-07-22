@@ -512,7 +512,8 @@ namespace irods::catalog {
                  client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
             }
 
-            add_index(EntityType::Collection, "path", new_name, sid);
+            del_index(EntityType::Collection, "n", old_name);
+            add_index(EntityType::Collection, "n", new_name, sid);
             return SUCCESS(); 
         }
         irods::error delete_collection(coll_id_t coll_id) { 
