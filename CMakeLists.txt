@@ -7,9 +7,11 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_compile_options(-Wno-changes-meaning)
 
+set(IRODS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../irods" CACHE PATH "Path to iRODS source tree")
+
 # Include Directories
 include_directories(include)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/lib/filesystem/include)
+include_directories(${IRODS_DIR}/lib/filesystem/include)
 
 # Check for iRODS headers in system paths first (for Docker builds)
 find_path(IRODS_EXTERNALS_PATH NAMES irods_externals PATHS /opt/irods-externals)
@@ -24,17 +26,17 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../L3KV/src/engine
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/lite3-cpp/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../yyjson/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/core/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/lib/core/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/lib/api/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/genquery2/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/server/genquery2/dsl
+    ${IRODS_DIR}/server/core/include
+    ${IRODS_DIR}/lib/core/include
+    ${IRODS_DIR}/lib/api/include
+    ${IRODS_DIR}/server/genquery2/include
+    ${IRODS_DIR}/build/server/genquery2/dsl
 )
 
 # External Libraries
 link_directories(
     /usr/lib/irods/plugins/database
-    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/lib
+    ${IRODS_DIR}/build/lib
 )
 
 # Dependencies
@@ -56,9 +58,9 @@ add_library(irods_database_plugin_l3kvg SHARED
     src/gq1_bridge.cpp
     src/catalog/catalog_facade.cpp
     src/compiler/gq2_compiler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods/server/genquery2/src/genquery2_driver.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/server/genquery2/dsl/lexer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../irods_dev/irods_build_output_dir/server/genquery2/dsl/parser.cpp
+    ${IRODS_DIR}/server/genquery2/src/genquery2_driver.cpp
+    ${IRODS_DIR}/build/server/genquery2/dsl/lexer.cpp
+    ${IRODS_DIR}/build/server/genquery2/dsl/parser.cpp
 )
 
 set_target_properties(irods_database_plugin_l3kvg PROPERTIES
