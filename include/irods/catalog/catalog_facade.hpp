@@ -10,9 +10,11 @@
 #include "irods/catalog/binary_key.hpp"
 #include "irods/irods_error.hpp"
 #include "irods/private/genquery2_ast_types.hpp"
+#include "irods/catalog/gq2_compiler.hpp"
 #include "irods/atomic_apply_database_operations.hpp"
 #include "L3KVG/Query.hpp"
 #include "L3KVG/Settings.hpp"
+#include <nlohmann/json.hpp>
 
 namespace irods::catalog {
 
@@ -144,6 +146,7 @@ namespace irods::catalog {
 
         // Query Operations
         irods::error execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes = {}, std::string_view root_type = "");
+        irods::error execute_dml(const compiler::DmlPlan& plan, nlohmann::json& result);
         irods::error apply_atomic_operations(const std::vector<irods::experimental::dml::operation_type>& ops);
         irods::error get_next_sequence_value(std::string_view seq_name, uint64_t& out_val);
         snowflake_id_t make_id(EntityType type, uint64_t irods_id);

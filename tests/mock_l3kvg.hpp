@@ -277,6 +277,26 @@ namespace irods::catalog::test {
                              socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
                              socket_.send(zmq::message_t(results.dump()), zmq::send_flags::none);
                              continue;
+                        } else if (cmd == "+") {
+                             if (msgs.size() < 5) continue;
+                             std::string key = msgs[3].to_string();
+                             int64_t delta = 1;
+                             try { delta = std::stoll(msgs[4].to_string()); } catch (...) {}
+                             uint64_t val = 0;
+                             {
+                                 std::lock_guard<std::mutex> lock(mu_);
+                                 auto it = sequences_.find(key);
+                                 if (it == sequences_.end()) {
+                                     sequences_[key] = 1000;
+                                 }
+                                 sequences_[key] += delta;
+                                 val = sequences_[key];
+                             }
+                             socket_.send(msgs[0], zmq::send_flags::sndmore);
+                             socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                             std::string val_str = std::to_string(val);
+                             socket_.send(zmq::message_t(val_str.data(), val_str.size()), zmq::send_flags::none);
+                             continue;
                         }
 
                         // Unknown command, send dummy ack to avoid hanging
@@ -325,6 +345,7 @@ namespace irods::catalog::test {
         mutable std::mutex mu_;
         std::unordered_map<uint64_t, MockNode> nodes_;
         std::unordered_map<std::string, std::string> generic_store_;
+        std::unordered_map<std::string, uint64_t> sequences_;
     };
 
 } // namespace irods::catalog::test
