@@ -27,7 +27,7 @@ set_property(GLOBAL PROPERTY _CMAKE_FindGit_GIT_EXECUTABLE_VERSION
 
 include(ExternalProject)
 ExternalProject_Add(citor-populate
-                     "UPDATE_DISCONNECTED" "False" "GIT_REPOSITORY" "https://github.com/Lallapallooza/citor.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "main"
+                     "UPDATE_DISCONNECTED" "True" "GIT_REPOSITORY" "https://github.com/Lallapallooza/citor.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "main"
                     SOURCE_DIR          "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/_deps/citor-src"
                     BINARY_DIR          "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/_deps/citor-build"
                     CONFIGURE_COMMAND   ""

@@ -80,6 +80,7 @@ namespace irods::catalog {
         irods::error modify_resource(snowflake_id_t sid, std::string_view prop, std::string_view value);
         irods::error delete_resource(snowflake_id_t sid);
         irods::error resolve_resource_name(std::string_view name, snowflake_id_t& out_id);
+        irods::error resolve_user_name(std::string_view name, snowflake_id_t& out_id);
         irods::error get_hierarchy_for_resource(std::string_view name, std::string& out_hier);
         irods::error update_resource_object_count(resc_id_t resc_id, int delta);
         irods::error add_child_resource(std::string_view parent_name, std::string_view child_name, std::string_view context);
@@ -96,8 +97,8 @@ namespace irods::catalog {
 
         // ACL Operations
         irods::error set_access(std::string_view user_name, std::string_view zone, std::string_view target_path, std::string_view level, bool recursive);
-        irods::error check_permission(uint64_t user_id, uint64_t target_id, std::string_view level, bool& allowed);
-        irods::error check_permission_to_modify_data_object(uint64_t user_id, uint64_t target_id, bool& allowed);
+        irods::error check_permission(snowflake_id_t user_id, snowflake_id_t target_id, std::string_view level, bool& allowed);
+        irods::error check_permission_to_modify_data_object(snowflake_id_t user_id, snowflake_id_t target_id, bool& allowed);
 
         // Metadata (AVU) Operations
         irods::error add_avu_metadata(std::string_view type, std::string_view target_id, const avu& metadata);
@@ -145,6 +146,7 @@ namespace irods::catalog {
         irods::error execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes = {}, std::string_view root_type = "");
         irods::error apply_atomic_operations(const std::vector<irods::experimental::dml::operation_type>& ops);
         irods::error get_next_sequence_value(std::string_view seq_name, uint64_t& out_val);
+        snowflake_id_t make_id(EntityType type, uint64_t irods_id);
 
         l3kvg::RemoteL3KVClient* get_client() const;
         uint16_t get_cluster_id() const;

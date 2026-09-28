@@ -375,6 +375,10 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         coll.name = safe_string(_info->collName); 
         coll.parent_name = safe_string(_info->collParentName);
         coll.owner_name = safe_string(_info->collOwnerName);
+        coll.type = safe_string(_info->collType);
+        coll.info1 = safe_string(_info->collInfo1);
+        coll.info2 = safe_string(_info->collInfo2);
+        coll.inheritance = safe_string(_info->collInheritance);
 
         // Heuristic: If owner is empty, check if it's a home directory
         if (coll.owner_name.empty()) {

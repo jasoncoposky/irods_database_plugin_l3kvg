@@ -27,7 +27,7 @@ set_property(GLOBAL PROPERTY _CMAKE_FindGit_GIT_EXECUTABLE_VERSION
 
 include(ExternalProject)
 ExternalProject_Add(gtest-populate
-                     "UPDATE_DISCONNECTED" "False" "GIT_REPOSITORY" "https://github.com/google/googletest.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "v1.17.0"
+                     "UPDATE_DISCONNECTED" "True" "GIT_REPOSITORY" "https://github.com/google/googletest.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "v1.17.0"
                     SOURCE_DIR          "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/_deps/gtest-src"
                     BINARY_DIR          "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/_deps/gtest-build"
                     CONFIGURE_COMMAND   ""

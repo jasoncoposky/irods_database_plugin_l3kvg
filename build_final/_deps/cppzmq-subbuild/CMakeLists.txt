@@ -27,7 +27,7 @@ set_property(GLOBAL PROPERTY _CMAKE_FindGit_GIT_EXECUTABLE_VERSION
 
 include(ExternalProject)
 ExternalProject_Add(cppzmq-populate
-                     "UPDATE_DISCONNECTED" "False" "GIT_REPOSITORY" "https://github.com/zeromq/cppzmq.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "v4.10.0"
+                     "UPDATE_DISCONNECTED" "True" "GIT_REPOSITORY" "https://github.com/zeromq/cppzmq.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "v4.10.0"
                     SOURCE_DIR          "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/_deps/cppzmq-src"
                     BINARY_DIR          "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/_deps/cppzmq-build"
                     CONFIGURE_COMMAND   ""

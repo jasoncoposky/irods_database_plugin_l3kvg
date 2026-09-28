@@ -69,21 +69,29 @@ namespace irods::catalog::test {
                             std::lock_guard<std::mutex> lock(mu_);
                             
                             size_t n_start = key.find("n:{");
-                            if (n_start != std::string::npos) {
-                                uint64_t id = std::stoull(key.substr(n_start + 3, 16), nullptr, 16);
-                                nodes_[id].id = id; nodes_[id].payload = payload;
-                                std::cerr << "[MockServer] Stored Node [" << std::hex << id << "]" << std::endl;
-                            } else if (key.find("e:out:{") != std::string::npos) {
-                                size_t e_start = key.find("e:out:{");
-                                uint64_t src = std::stoull(key.substr(e_start + 7, 16), nullptr, 16);
-                                size_t label_start = e_start + 7 + 16 + 2;
-                                size_t label_end = key.find(':', label_start);
-                                size_t dst_start = (label_end != std::string::npos) ? key.find(":{", label_end) : std::string::npos;
-                                if (label_end != std::string::npos && dst_start != std::string::npos) {
-                                    std::string label = key.substr(label_start, label_end - label_start);
-                                    uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
-                                    nodes_[src].edges.push_back({label, dst});
-                                    std::cerr << "[MockServer] Stored Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
+                            size_t e_start = key.find("e:out:{");
+                            if (n_start != std::string::npos && key.size() >= n_start + 3 + 16) {
+                                try {
+                                    uint64_t id = std::stoull(key.substr(n_start + 3, 16), nullptr, 16);
+                                    nodes_[id].id = id; nodes_[id].payload = payload;
+                                    std::cerr << "[MockServer] Stored Node [" << std::hex << id << "]" << std::endl;
+                                } catch (...) {
+                                    generic_store_[key] = payload;
+                                }
+                            } else if (e_start != std::string::npos && key.size() >= e_start + 7 + 16) {
+                                try {
+                                    uint64_t src = std::stoull(key.substr(e_start + 7, 16), nullptr, 16);
+                                    size_t label_start = e_start + 7 + 16 + 2;
+                                    size_t label_end = key.find(':', label_start);
+                                    size_t dst_start = (label_end != std::string::npos) ? key.find(":{", label_end) : std::string::npos;
+                                    if (label_end != std::string::npos && dst_start != std::string::npos && key.size() >= dst_start + 2 + 16) {
+                                        std::string label = key.substr(label_start, label_end - label_start);
+                                        uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
+                                        nodes_[src].edges.push_back({label, dst});
+                                        std::cerr << "[MockServer] Stored Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
+                                    }
+                                } catch (...) {
+                                    generic_store_[key] = payload;
                                 }
                             } else {
                                 // Generic key (e.g. index)
@@ -99,27 +107,35 @@ namespace irods::catalog::test {
                             std::string key = msgs[3].to_string();
                             std::lock_guard<std::mutex> lock(mu_);
                             
-                            if (key.starts_with("n:{")) {
-                                uint64_t id = std::stoull(key.substr(3, 16), nullptr, 16);
-                                nodes_.erase(id);
-                                std::cerr << "[MockServer] Deleted Node [" << std::hex << id << "]" << std::endl;
-                            } else if (key.starts_with("e:out:{")) {
-                                uint64_t src = std::stoull(key.substr(7, 16), nullptr, 16);
-                                size_t label_start = 7 + 16 + 2;
-                                size_t label_end = key.find(':', label_start);
-                                size_t dst_start = (label_end != std::string::npos) ? key.find(":{", label_end) : std::string::npos;
-                                if (label_end != std::string::npos && dst_start != std::string::npos) {
-                                    std::string label = key.substr(label_start, label_end - label_start);
-                                    uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
-                                    
-                                    auto it = nodes_.find(src);
-                                    if (it != nodes_.end()) {
-                                        auto& edges = it->second.edges;
-                                        edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const auto& e) {
-                                            return e.first == label && e.second == dst;
-                                        }), edges.end());
+                            if (key.starts_with("n:{") && key.size() >= 3 + 16) {
+                                try {
+                                    uint64_t id = std::stoull(key.substr(3, 16), nullptr, 16);
+                                    nodes_.erase(id);
+                                    std::cerr << "[MockServer] Deleted Node [" << std::hex << id << "]" << std::endl;
+                                } catch (...) {
+                                    generic_store_.erase(key);
+                                }
+                            } else if (key.starts_with("e:out:{") && key.size() >= 7 + 16) {
+                                try {
+                                    uint64_t src = std::stoull(key.substr(7, 16), nullptr, 16);
+                                    size_t label_start = 7 + 16 + 2;
+                                    size_t label_end = key.find(':', label_start);
+                                    size_t dst_start = (label_end != std::string::npos) ? key.find(":{", label_end) : std::string::npos;
+                                    if (label_end != std::string::npos && dst_start != std::string::npos && key.size() >= dst_start + 2 + 16) {
+                                        std::string label = key.substr(label_start, label_end - label_start);
+                                        uint64_t dst = std::stoull(key.substr(dst_start + 2, 16), nullptr, 16);
+                                        
+                                        auto it = nodes_.find(src);
+                                        if (it != nodes_.end()) {
+                                            auto& edges = it->second.edges;
+                                            edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const auto& e) {
+                                                return e.first == label && e.second == dst;
+                                            }), edges.end());
+                                        }
+                                        std::cerr << "[MockServer] Deleted Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
                                     }
-                                    std::cerr << "[MockServer] Deleted Edge [" << std::hex << src << "] --(" << label << ")--> [" << std::hex << dst << "]" << std::endl;
+                                } catch (...) {
+                                    generic_store_.erase(key);
                                 }
                             } else {
                                 generic_store_.erase(key);
@@ -163,7 +179,8 @@ namespace irods::catalog::test {
                             continue;
                         } else if (cmd == "N") {
                             if (msgs.size() < 5) continue;
-                            uint64_t id = std::stoull(msgs[3].to_string(), nullptr, 16);
+                            uint64_t id = 0;
+                            try { id = std::stoull(msgs[3].to_string(), nullptr, 16); } catch (...) {}
                             std::string label = msgs[4].to_string();
                             
                             std::vector<uint64_t> neighs;
@@ -189,7 +206,8 @@ namespace irods::catalog::test {
                             continue;
                         } else if (cmd == "I") {
                             if (msgs.size() < 5) continue;
-                            uint64_t id = std::stoull(msgs[3].to_string(), nullptr, 16);
+                            uint64_t id = 0;
+                            try { id = std::stoull(msgs[3].to_string(), nullptr, 16); } catch (...) {}
                             std::string label = msgs[4].to_string();
                             
                             std::vector<uint64_t> neighs;

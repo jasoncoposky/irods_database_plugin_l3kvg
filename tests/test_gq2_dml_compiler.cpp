@@ -56,8 +56,9 @@ TEST(Gq2DmlCompilerTest, CompileUpdateDataObject) {
     EXPECT_EQ(plan.properties.at("s"), "1024");
     EXPECT_EQ(plan.properties.at("cs"), "sha2:xyz");
     ASSERT_EQ(plan.conditions.size(), 1u);
-    EXPECT_EQ(plan.conditions[0].first, "n");
-    EXPECT_EQ(plan.conditions[0].second, "file.txt");
+    EXPECT_EQ(plan.conditions[0].property, "n");
+    EXPECT_EQ(plan.conditions[0].value, "file.txt");
+    EXPECT_EQ(plan.conditions[0].op, 0);
 }
 
 TEST(Gq2DmlCompilerTest, CompileRemoveDataObject) {
@@ -73,8 +74,9 @@ TEST(Gq2DmlCompilerTest, CompileRemoveDataObject) {
     EXPECT_EQ(plan.action, DmlAction::Remove);
     EXPECT_EQ(plan.entity_type, "DataObject");
     ASSERT_EQ(plan.conditions.size(), 1u);
-    EXPECT_EQ(plan.conditions[0].first, "n");
-    EXPECT_EQ(plan.conditions[0].second, "file.txt");
+    EXPECT_EQ(plan.conditions[0].property, "n");
+    EXPECT_EQ(plan.conditions[0].value, "file.txt");
+    EXPECT_EQ(plan.conditions[0].op, 0);
 }
 
 TEST(Gq2DmlCompilerTest, CompileStatementVariant) {
@@ -124,6 +126,15 @@ TEST(Gq2DmlCompilerTest, InferEntityFromColumnsAndConditions) {
     EXPECT_EQ(plan1.entity_type, "User");
     EXPECT_EQ(plan1.properties.at("n"), "alice");
 
+    // Priority inference: COLL_NAME + DATA_NAME -> DataObject (prio 4 > prio 3)
+    gq2::insert insert_prio;
+    insert_prio.target_entity = "";
+    insert_prio.assignments = {{"COLL_NAME", "/tempZone/home"}, {"DATA_NAME", "data.dat"}};
+    auto plan_prio = compiler.compile(insert_prio);
+    EXPECT_EQ(plan_prio.entity_type, "DataObject");
+    EXPECT_EQ(plan_prio.properties.at("parent_coll"), "/tempZone/home");
+    EXPECT_EQ(plan_prio.properties.at("n"), "data.dat");
+
     // Infer from remove condition
     gq2::remove remove_ast;
     remove_ast.target_entity = "";
@@ -133,8 +144,53 @@ TEST(Gq2DmlCompilerTest, InferEntityFromColumnsAndConditions) {
     auto plan2 = compiler.compile(remove_ast);
     EXPECT_EQ(plan2.entity_type, "Collection");
     ASSERT_EQ(plan2.conditions.size(), 1u);
-    EXPECT_EQ(plan2.conditions[0].first, "n");
-    EXPECT_EQ(plan2.conditions[0].second, "/tempZone/home");
+    EXPECT_EQ(plan2.conditions[0].property, "n");
+    EXPECT_EQ(plan2.conditions[0].value, "/tempZone/home");
+}
+
+TEST(Gq2DmlCompilerTest, CompoundConditionsAndOperators) {
+    Gq2ToL3kvgCompiler compiler;
+
+    gq2::update update_ast;
+    update_ast.target_entity = "DataObject";
+    update_ast.assignments = {{"DATA_MODIFY_TIME", "1700000000"}};
+
+    // Compound AND condition: DATA_NAME = "foo" AND DATA_SIZE > "500"
+    gq2::logical_and and_node;
+    and_node.condition.push_back(gq2::condition{gq2::column{"DATA_NAME"}, gq2::condition_equal{"foo"}});
+    and_node.condition.push_back(gq2::condition{gq2::column{"DATA_SIZE"}, gq2::condition_greater_than{"500"}});
+    update_ast.where_conditions.push_back(and_node);
+
+    auto plan = compiler.compile(update_ast);
+    ASSERT_EQ(plan.conditions.size(), 2u);
+    EXPECT_EQ(plan.conditions[0].property, "n");
+    EXPECT_EQ(plan.conditions[0].value, "foo");
+    EXPECT_EQ(plan.conditions[0].op, 0);
+
+    EXPECT_EQ(plan.conditions[1].property, "s");
+    EXPECT_EQ(plan.conditions[1].value, "500");
+    EXPECT_EQ(plan.conditions[1].op, 2); // greater than
+}
+
+TEST(Gq2DmlCompilerTest, RejectUnsupportedLogicalOperators) {
+    Gq2ToL3kvgCompiler compiler;
+
+    // Reject OR in DML
+    gq2::remove remove_or;
+    remove_or.target_entity = "DataObject";
+    gq2::logical_or or_node;
+    or_node.condition.push_back(gq2::condition{gq2::column{"DATA_NAME"}, gq2::condition_equal{"foo"}});
+    or_node.condition.push_back(gq2::condition{gq2::column{"DATA_NAME"}, gq2::condition_equal{"bar"}});
+    remove_or.where_conditions.push_back(or_node);
+    EXPECT_THROW(compiler.compile(remove_or), std::invalid_argument);
+
+    // Reject NOT in DML
+    gq2::remove remove_not;
+    remove_not.target_entity = "DataObject";
+    gq2::logical_not not_node;
+    not_node.condition.push_back(gq2::condition{gq2::column{"DATA_NAME"}, gq2::condition_equal{"foo"}});
+    remove_not.where_conditions.push_back(not_node);
+    EXPECT_THROW(compiler.compile(remove_not), std::invalid_argument);
 }
 
 int main(int argc, char **argv) {

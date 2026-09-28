@@ -27,7 +27,7 @@ set_property(GLOBAL PROPERTY _CMAKE_FindGit_GIT_EXECUTABLE_VERSION
 
 include(ExternalProject)
 ExternalProject_Add(concurrentqueue-populate
-                     "UPDATE_DISCONNECTED" "False" "GIT_REPOSITORY" "https://github.com/cameron314/concurrentqueue.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "master"
+                     "UPDATE_DISCONNECTED" "True" "GIT_REPOSITORY" "https://github.com/cameron314/concurrentqueue.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "master"
                     SOURCE_DIR          "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/_deps/concurrentqueue-src"
                     BINARY_DIR          "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/_deps/concurrentqueue-build"
                     CONFIGURE_COMMAND   ""

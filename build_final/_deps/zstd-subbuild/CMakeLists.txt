@@ -27,7 +27,7 @@ set_property(GLOBAL PROPERTY _CMAKE_FindGit_GIT_EXECUTABLE_VERSION
 
 include(ExternalProject)
 ExternalProject_Add(zstd-populate
-                     "UPDATE_DISCONNECTED" "False" "GIT_REPOSITORY" "https://github.com/facebook/zstd.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "v1.5.5" "SOURCE_SUBDIR" "build/cmake"
+                     "UPDATE_DISCONNECTED" "True" "GIT_REPOSITORY" "https://github.com/facebook/zstd.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "v1.5.5" "SOURCE_SUBDIR" "build/cmake"
                     SOURCE_DIR          "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/_deps/zstd-src"
                     BINARY_DIR          "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/_deps/zstd-build"
                     CONFIGURE_COMMAND   ""

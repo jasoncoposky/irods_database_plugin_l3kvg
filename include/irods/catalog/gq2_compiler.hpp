@@ -22,11 +22,21 @@ namespace irods::catalog::compiler {
         Remove
     };
 
+    struct DmlCondition {
+        std::string property;
+        int op = 0; // 0: =, 1: !=, 2: >, 3: >=, 4: <, 5: <=, 6: like
+        std::string value;
+
+        bool operator==(const DmlCondition& o) const {
+            return property == o.property && op == o.op && value == o.value;
+        }
+    };
+
     struct DmlPlan {
         DmlAction action;
         std::string entity_type; // e.g. "DataObject", "Collection", "User", "Resource", etc.
         std::unordered_map<std::string, std::string> properties; // mapped BSON property keys, e.g. "n" -> "file.txt"
-        std::vector<std::pair<std::string, std::string>> conditions; // e.g. [("n", "file.txt")]
+        std::vector<DmlCondition> conditions;
         std::vector<std::string> target_edges;
     };
 
@@ -40,10 +50,10 @@ namespace irods::catalog::compiler {
         
         std::string compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias = "");
 
-        DmlPlan compile(const irods::experimental::genquery2::insert& ast);
-        DmlPlan compile(const irods::experimental::genquery2::update& ast);
-        DmlPlan compile(const irods::experimental::genquery2::remove& ast);
-        DmlPlan compile(const irods::experimental::genquery2::statement& ast);
+        DmlPlan compile(const irods::experimental::genquery2::insert& ast) const;
+        DmlPlan compile(const irods::experimental::genquery2::update& ast) const;
+        DmlPlan compile(const irods::experimental::genquery2::remove& ast) const;
+        DmlPlan compile(const irods::experimental::genquery2::statement& ast) const;
 
         struct PathStep {
             enum class Direction { Out, In };

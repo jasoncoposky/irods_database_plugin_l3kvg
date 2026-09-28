@@ -634,14 +634,15 @@ namespace irods::catalog::compiler {
                 return "Quota";
             }
 
-            if (raw == "DataObject" || raw == "Collection" || raw == "User" ||
-                raw == "Resource" || raw == "Zone" || raw == "Metadata" ||
-                raw == "Replica" || raw == "Group" || raw == "Access" ||
-                raw == "Ticket") {
-                return std::string(raw);
-            }
-
             return std::string(raw);
+        }
+
+        int entity_priority(std::string_view et) {
+            if (et == "DataObject") return 4;
+            if (et == "Collection") return 3;
+            if (et == "User" || et == "Resource") return 2;
+            if (et == "Zone") return 1;
+            return 0;
         }
 
         const GraphMap* find_column_mapping(std::string_view col) {
@@ -679,54 +680,52 @@ namespace irods::catalog::compiler {
 
         struct entity_infer_visitor : public boost::static_visitor<void> {
             std::string& entity_type;
-            explicit entity_infer_visitor(std::string& et) : entity_type(et) {}
+            int& best_priority;
+            entity_infer_visitor(std::string& et, int& bp) : entity_type(et), best_priority(bp) {}
 
             void operator()(const irods::experimental::genquery2::condition& c) const {
-                if (!entity_type.empty()) return;
                 std::string col_name;
                 if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) {
                     col_name = col->name;
                 } else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) {
-                    col_name = func->name;
+                    for (const auto& arg : func->arguments) {
+                        if (auto* arg_col = std::get_if<irods::experimental::genquery2::column>(&arg)) {
+                            col_name = arg_col->name;
+                            break;
+                        }
+                    }
+                    if (col_name.empty()) col_name = func->name;
                 }
                 if (col_name.empty()) return;
                 const auto* gm = find_column_mapping(col_name);
                 if (gm) {
-                    entity_type = std::string(gm->node_type);
+                    int p = entity_priority(gm->node_type);
+                    if (p > best_priority) {
+                        best_priority = p;
+                        entity_type = std::string(gm->node_type);
+                    }
                 }
             }
 
             void operator()(const irods::experimental::genquery2::logical_and& l) const {
-                for (const auto& c : l.condition) {
-                    if (!entity_type.empty()) break;
-                    boost::apply_visitor(*this, c);
-                }
+                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
             }
             void operator()(const irods::experimental::genquery2::logical_or& l) const {
-                for (const auto& c : l.condition) {
-                    if (!entity_type.empty()) break;
-                    boost::apply_visitor(*this, c);
-                }
+                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
             }
             void operator()(const irods::experimental::genquery2::logical_grouping& l) const {
-                for (const auto& c : l.conditions) {
-                    if (!entity_type.empty()) break;
-                    boost::apply_visitor(*this, c);
-                }
+                for (const auto& c : l.conditions) boost::apply_visitor(*this, c);
             }
             void operator()(const irods::experimental::genquery2::logical_not& l) const {
-                for (const auto& c : l.condition) {
-                    if (!entity_type.empty()) break;
-                    boost::apply_visitor(*this, c);
-                }
+                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
             }
         };
 
         struct dml_condition_visitor : public boost::static_visitor<void> {
             const std::string& entity_type;
-            std::vector<std::pair<std::string, std::string>>& conditions;
+            std::vector<DmlCondition>& conditions;
 
-            dml_condition_visitor(const std::string& et, std::vector<std::pair<std::string, std::string>>& conds)
+            dml_condition_visitor(const std::string& et, std::vector<DmlCondition>& conds)
                 : entity_type(et), conditions(conds) {}
 
             void operator()(const irods::experimental::genquery2::condition& c) const {
@@ -734,7 +733,13 @@ namespace irods::catalog::compiler {
                 if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) {
                     col_name = col->name;
                 } else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) {
-                    col_name = func->name;
+                    for (const auto& arg : func->arguments) {
+                        if (auto* arg_col = std::get_if<irods::experimental::genquery2::column>(&arg)) {
+                            col_name = arg_col->name;
+                            break;
+                        }
+                    }
+                    if (col_name.empty()) col_name = func->name;
                 }
                 if (col_name.empty()) return;
 
@@ -755,35 +760,39 @@ namespace irods::catalog::compiler {
 
                 pc_visitor pcv;
                 auto pc = boost::apply_visitor(pcv, c.expression);
-                conditions.emplace_back(std::move(key), std::move(pc.second));
+                conditions.push_back({std::move(key), pc.first, std::move(pc.second)});
             }
 
             void operator()(const irods::experimental::genquery2::logical_and& l) const {
                 for (const auto& c : l.condition) boost::apply_visitor(*this, c);
             }
-            void operator()(const irods::experimental::genquery2::logical_or& l) const {
-                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
+            void operator()(const irods::experimental::genquery2::logical_or&) const {
+                throw std::invalid_argument("DML WHERE clause does not support logical OR");
             }
             void operator()(const irods::experimental::genquery2::logical_grouping& l) const {
                 for (const auto& c : l.conditions) boost::apply_visitor(*this, c);
             }
-            void operator()(const irods::experimental::genquery2::logical_not& l) const {
-                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
+            void operator()(const irods::experimental::genquery2::logical_not&) const {
+                throw std::invalid_argument("DML WHERE clause does not support logical NOT");
             }
         };
     } // anonymous namespace
 
-    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::insert& ast) {
+    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::insert& ast) const {
         DmlPlan plan;
         plan.action = DmlAction::Insert;
         plan.entity_type = normalize_entity_type(ast.target_entity);
 
         if (plan.entity_type.empty()) {
+            int best_prio = 0;
             for (const auto& [col, val] : ast.assignments) {
                 const auto* gm = find_column_mapping(col);
                 if (gm) {
-                    plan.entity_type = std::string(gm->node_type);
-                    break;
+                    int p = entity_priority(gm->node_type);
+                    if (p > best_prio) {
+                        best_prio = p;
+                        plan.entity_type = std::string(gm->node_type);
+                    }
                 }
             }
         }
@@ -795,25 +804,28 @@ namespace irods::catalog::compiler {
         return plan;
     }
 
-    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::update& ast) {
+    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::update& ast) const {
         DmlPlan plan;
         plan.action = DmlAction::Update;
         plan.entity_type = normalize_entity_type(ast.target_entity);
 
+        int best_prio = 0;
         if (plan.entity_type.empty()) {
             for (const auto& [col, val] : ast.assignments) {
                 const auto* gm = find_column_mapping(col);
                 if (gm) {
-                    plan.entity_type = std::string(gm->node_type);
-                    break;
+                    int p = entity_priority(gm->node_type);
+                    if (p > best_prio) {
+                        best_prio = p;
+                        plan.entity_type = std::string(gm->node_type);
+                    }
                 }
             }
         }
 
-        if (plan.entity_type.empty()) {
-            entity_infer_visitor eiv(plan.entity_type);
+        if (plan.entity_type.empty() || best_prio < 4) {
+            entity_infer_visitor eiv(plan.entity_type, best_prio);
             for (const auto& w : ast.where_conditions) {
-                if (!plan.entity_type.empty()) break;
                 boost::apply_visitor(eiv, w);
             }
         }
@@ -830,15 +842,15 @@ namespace irods::catalog::compiler {
         return plan;
     }
 
-    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::remove& ast) {
+    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::remove& ast) const {
         DmlPlan plan;
         plan.action = DmlAction::Remove;
         plan.entity_type = normalize_entity_type(ast.target_entity);
 
         if (plan.entity_type.empty()) {
-            entity_infer_visitor eiv(plan.entity_type);
+            int best_prio = 0;
+            entity_infer_visitor eiv(plan.entity_type, best_prio);
             for (const auto& w : ast.where_conditions) {
-                if (!plan.entity_type.empty()) break;
                 boost::apply_visitor(eiv, w);
             }
         }
@@ -851,7 +863,7 @@ namespace irods::catalog::compiler {
         return plan;
     }
 
-    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::statement& ast) {
+    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::statement& ast) const {
         return std::visit([this](const auto& s) -> DmlPlan {
             using T = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<T, irods::experimental::genquery2::insert>) {
