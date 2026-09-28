@@ -1375,7 +1375,12 @@ namespace irods::catalog {
                     if (prop == "n" || prop == "name" || prop == "DATA_NAME" || prop == "COLL_NAME") {
                         return safe_get_str(b, 0, "n");
                     }
-                    if (prop == "p" || prop == "path" || prop == "COLL_PARENT_NAME") {
+                    if (prop == "p" || prop == "path") {
+                        return safe_get_str(b, 0, "p");
+                    }
+                    if (prop == "COLL_PARENT_NAME" || prop == "parent_coll" || prop == "parent_collection" || prop == "pn") {
+                        std::string pn = safe_get_str(b, 0, "pn");
+                        if (!pn.empty()) return pn;
                         return safe_get_str(b, 0, "p");
                     }
                     if (prop == "o" || prop == "owner" || prop == "owner_name" || prop == "COLL_OWNER_NAME" || prop == "DATA_OWNER_NAME") {
@@ -1402,20 +1407,20 @@ namespace irods::catalog {
                         switch (op) {
                             case 0: return a_num == e_num;
                             case 1: return a_num != e_num;
-                            case 2: return a_num < e_num;
-                            case 3: return a_num <= e_num;
-                            case 4: return a_num > e_num;
-                            case 5: return a_num >= e_num;
+                            case 2: return a_num > e_num;
+                            case 3: return a_num >= e_num;
+                            case 4: return a_num < e_num;
+                            case 5: return a_num <= e_num;
                             default: return a_num == e_num;
                         }
                     } else {
                         switch (op) {
                             case 0: return actual == expected;
                             case 1: return actual != expected;
-                            case 2: return actual < expected;
-                            case 3: return actual <= expected;
-                            case 4: return actual > expected;
-                            case 5: return actual >= expected;
+                            case 2: return actual > expected;
+                            case 3: return actual >= expected;
+                            case 4: return actual < expected;
+                            case 5: return actual <= expected;
                             default: return actual == expected;
                         }
                     }

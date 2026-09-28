@@ -67,6 +67,30 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     ASSERT_TRUE(mismatch_err.ok()) << mismatch_err.result();
     EXPECT_EQ(mismatch_res["rows_affected"], 0);
 
+    // 2b. Test Inequality Operator: s < 500 fails (actual is 1024)
+    DmlPlan ineq_fail;
+    ineq_fail.action = DmlAction::Update;
+    ineq_fail.entity_type = "DataObject";
+    ineq_fail.properties["s"] = "2048";
+    ineq_fail.conditions.push_back(DmlCondition{"n", 0, "test_file.dat"});
+    ineq_fail.conditions.push_back(DmlCondition{"s", 4, "500"}); // op 4 is '<'
+
+    nlohmann::json ineq_fail_res;
+    ASSERT_TRUE(facade_.execute_dml(ineq_fail, ineq_fail_res).ok());
+    EXPECT_EQ(ineq_fail_res["rows_affected"], 0);
+
+    // 2c. Test Inequality Operator: s > 500 succeeds (actual is 1024)
+    DmlPlan ineq_pass;
+    ineq_pass.action = DmlAction::Update;
+    ineq_pass.entity_type = "DataObject";
+    ineq_pass.properties["s"] = "1500";
+    ineq_pass.conditions.push_back(DmlCondition{"n", 0, "test_file.dat"});
+    ineq_pass.conditions.push_back(DmlCondition{"s", 2, "500"}); // op 2 is '>'
+
+    nlohmann::json ineq_pass_res;
+    ASSERT_TRUE(facade_.execute_dml(ineq_pass, ineq_pass_res).ok());
+    EXPECT_EQ(ineq_pass_res["rows_affected"], 1);
+
     // 3. Test Update with "name" attribute and rename: change "name" -> "test_file_renamed.dat" and "s" -> "2048"
     DmlPlan update_plan;
     update_plan.action = DmlAction::Update;
