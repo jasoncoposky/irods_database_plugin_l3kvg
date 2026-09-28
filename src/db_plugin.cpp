@@ -224,12 +224,15 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
 
         irods::catalog::data_id_t out_id;
         auto ret = g_catalog->register_data_object(obj, out_id);
-        if (ret.ok()) {
-            _info->dataId = out_id;
+        if (!ret.ok()) {
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_data_obj_op ERROR: %ld - %s", ret.code(), ret.result().c_str());
+            return ret;
+        }
+        _info->dataId = out_id;
             
-            // Also register the initial replica, as R_DATA_MAIN traditionally holds both
-            irods::catalog::replica repl;
-            repl.data_id = (uint64_t)out_id;
+        // Also register the initial replica, as R_DATA_MAIN traditionally holds both
+        irods::catalog::replica repl;
+        repl.data_id = (uint64_t)out_id;
             repl.replica_number = (uint32_t)_info->replNum;
             repl.resource_id = (uint64_t)_info->rescId;
             repl.physical_path = safe_string(_info->filePath);
@@ -253,7 +256,7 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
             if (!repl_ret.ok()) {
                 rodsLog(LOG_ERROR, "L3_PLUGIN: db_reg_data_obj_op failed to register replica: %s", repl_ret.result().c_str());
             }
-        }
+
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_data_obj_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -445,6 +448,17 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         // Normal collections have empty type string, but some iRODS layers pass "collection"
         if (coll.type == "collection") coll.type = "";
         
+        // Ensure trailing slash is removed if any (unless just "/")
+        if (coll.name.size() > 1 && coll.name.back() == '/') {
+            coll.name.pop_back();
+        }
+        if (coll.parent_name.empty() && coll.name != "/") {
+            size_t last_slash = coll.name.find_last_of('/');
+            if (last_slash != std::string::npos) {
+                coll.parent_name = (last_slash == 0) ? "/" : coll.name.substr(0, last_slash);
+            }
+        }
+
         if (coll.owner_zone.empty()) {
             const auto& config = irods::server_properties::instance().map().get_json();
             coll.owner_zone = config.at(KW_CFG_ZONE_NAME).get<std::string>();
@@ -454,8 +468,12 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         if (coll.id <= 0) g_catalog->get_next_sequence_value("R_COLL_MAIN", coll.id);
         irods::catalog::coll_id_t out_id;
         auto ret = g_catalog->register_collection(coll, out_id);
-        if (ret.ok()) _info->collId = out_id;
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_coll_op SUCCESS");
+        if (ret.ok()) {
+            _info->collId = out_id;
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_coll_op SUCCESS");
+        } else {
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_coll_op ERROR: %ld - %s", ret.code(), ret.result().c_str());
+        }
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_coll_op EXCEPTION: %s", e.what());
@@ -490,7 +508,14 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
             irods::catalog::snowflake_id_t sid;
             irods::catalog::EntityType type;
             if (g_catalog->resolve_path(_info->collName, sid, type).ok()) {
-                coll_id = sid;
+                auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
+                if (!payload.empty()) {
+                    try {
+                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        coll_id = buf.get_i64(0, "id");
+                    } catch (...) {}
+                }
+                if (coll_id == 0) coll_id = sid;
             }
         }
 
