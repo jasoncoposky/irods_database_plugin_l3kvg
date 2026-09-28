@@ -6,6 +6,8 @@
 #include "irods/filesystem/path.hpp"
 #include "irods/catalog/gq2_compiler.hpp"
 #include "irods/private/genquery2_driver.hpp"
+#include "irods/private/genquery2_sql.hpp"
+#include <nlohmann/json.hpp>
 #include "L3KVG/Node.hpp"
 #include "irods/rodsLog.h"
 #include "irods/rodsErrorTable.h"
@@ -1266,6 +1268,70 @@ irods::error db_gen_query_op(irods::plugin_context& _ctx, genQueryInp_t* _inp, g
     }
 }
 
+irods::error db_execute_genquery2_op(
+    irods::plugin_context& _ctx,
+    const irods::experimental::genquery2::statement* _stmt,
+    const irods::experimental::genquery2::options* _opts,
+    char** _output)
+{
+    if (!_stmt || !_opts || !_output) {
+        return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Null input pointers.");
+    }
+
+    *_output = nullptr;
+
+    if (auto err = init_l3kvg_catalog(); !err.ok()) {
+        return err;
+    }
+
+    if (!g_catalog) {
+        return ERROR(SYS_CONFIG_FILE_ERR, "Catalog facade not initialized.");
+    }
+
+    try {
+        if (const auto* sel = std::get_if<irods::experimental::genquery2::select>(_stmt)) {
+            irods::catalog::ResultSet results;
+            std::vector<uint64_t> starting_nodes;
+            auto ret = g_catalog->execute_query(*sel, results, starting_nodes);
+            if (!ret.ok()) {
+                return ret;
+            }
+
+            nlohmann::json json_array = nlohmann::json::array();
+            for (size_t r = 0; r < results.rows.size(); ++r) {
+                nlohmann::json json_row = nlohmann::json::array();
+                for (size_t c = 0; c < sel->projections.size(); ++c) {
+                    json_row.push_back(std::string(results.get_field(r, c)));
+                }
+                json_array.push_back(json_row);
+            }
+
+            *_output = strdup(json_array.dump().c_str());
+            return SUCCESS();
+        }
+
+        // Handle DML Mutations
+        irods::catalog::compiler::Gq2ToL3kvgCompiler compiler;
+        auto plan = compiler.compile(*_stmt);
+        nlohmann::json dml_result;
+        auto ret = g_catalog->execute_dml(plan, dml_result);
+        if (!ret.ok()) {
+            return ret;
+        }
+
+        *_output = strdup(dml_result.dump().c_str());
+        return SUCCESS();
+    }
+    catch (const std::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op exception: %s", e.what());
+        return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
+    catch (...) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op unknown exception");
+        return ERROR(SYS_INTERNAL_ERR, "Unknown exception in db_execute_genquery2_op");
+    }
+}
+
 class l3kvg_database_plugin : public irods::database {
 public:
     l3kvg_database_plugin(const std::string& _inst, const std::string& _ctx) : irods::database(_inst, _ctx) {
@@ -1360,6 +1426,14 @@ public:
         add_operation<int*>("database_get_catalog_version", std::function<irods::error(irods::plugin_context&, int*)>(db_get_catalog_version_op));
         add_operation("database_initialize_catalog", std::function<irods::error(irods::plugin_context&)>(db_initialize_catalog_op));
         add_operation<genQueryInp_t*, genQueryOut_t*>(irods::DATABASE_OP_GEN_QUERY, std::function<irods::error(irods::plugin_context&, genQueryInp_t*, genQueryOut_t*)>(db_gen_query_op));
+        add_operation<const irods::experimental::genquery2::statement*,
+                      const irods::experimental::genquery2::options*,
+                      char**>(
+            irods::DATABASE_OP_EXECUTE_GENQUERY2,
+            std::function<irods::error(irods::plugin_context&,
+                                       const irods::experimental::genquery2::statement*,
+                                       const irods::experimental::genquery2::options*,
+                                       char**)>(db_execute_genquery2_op));
     }
 };
 
