@@ -115,6 +115,9 @@ target_link_libraries(test_collections PRIVATE irods_database_plugin_l3kvg l3kvg
 add_executable(test_gq2_metadata_compiler tests/test_gq2_metadata_compiler.cpp)
 target_link_libraries(test_gq2_metadata_compiler PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
+add_executable(test_gq2_dml_compiler tests/test_gq2_dml_compiler.cpp)
+target_link_libraries(test_gq2_dml_compiler PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
+
 add_executable(test_multihop_query tests/test_multihop_query.cpp)
 target_link_libraries(test_multihop_query PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 

@@ -4,6 +4,9 @@
 #include <unordered_set>
 #include <vector>
 #include <string>
+#include <cctype>
+#include <stdexcept>
+#include <type_traits>
 #include <nlohmann/json.hpp>
 #include <boost/variant.hpp>
 #include "irods/rodsGenQuery.h"
@@ -566,6 +569,301 @@ namespace irods::catalog::compiler {
         auto it = ROUTING_TABLE.find({std::string(source), std::string(target)});
         if (it != ROUTING_TABLE.end()) return it->second;
         return {};
+    }
+
+    namespace {
+        std::string normalize_entity_type(std::string_view raw) {
+            if (raw.empty()) {
+                return "";
+            }
+            std::string s;
+            s.reserve(raw.size());
+            for (char c : raw) {
+                s.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+            }
+
+            if (s == "DATA_OBJECT" || s == "DATAOBJECT" || s == "DATA_NAME" || s == "DATA" || s == "DATAOBJECTS") {
+                return "DataObject";
+            }
+            if (s == "COLLECTION" || s == "COLL" || s == "COLL_NAME" || s == "COLLECTIONS") {
+                return "Collection";
+            }
+            if (s == "USER" || s == "USER_NAME" || s == "USERS") {
+                return "User";
+            }
+            if (s == "RESOURCE" || s == "RESC" || s == "RESC_NAME" || s == "RESOURCES") {
+                return "Resource";
+            }
+            if (s == "ZONE" || s == "ZONE_NAME" || s == "ZONES") {
+                return "Zone";
+            }
+            if (s == "METADATA" || s == "AVU" || s == "META") {
+                return "Metadata";
+            }
+            if (s == "REPLICA" || s == "REPL" || s == "REPLICAS") {
+                return "Replica";
+            }
+            if (s == "GROUP" || s == "GROUPS") {
+                return "Group";
+            }
+            if (s == "ACCESS") {
+                return "Access";
+            }
+            if (s == "TICKET" || s == "TICKETS") {
+                return "Ticket";
+            }
+            if (s == "MSRVC") {
+                return "MSRVC";
+            }
+            if (s == "AUDIT") {
+                return "Audit";
+            }
+            if (s == "SERVERLOAD" || s == "SERVER_LOAD") {
+                return "ServerLoad";
+            }
+            if (s == "RULE" || s == "RULES") {
+                return "Rule";
+            }
+            if (s == "DVM") {
+                return "DVM";
+            }
+            if (s == "FNM") {
+                return "FNM";
+            }
+            if (s == "QUOTA") {
+                return "Quota";
+            }
+
+            if (raw == "DataObject" || raw == "Collection" || raw == "User" ||
+                raw == "Resource" || raw == "Zone" || raw == "Metadata" ||
+                raw == "Replica" || raw == "Group" || raw == "Access" ||
+                raw == "Ticket") {
+                return std::string(raw);
+            }
+
+            return std::string(raw);
+        }
+
+        const GraphMap* find_column_mapping(std::string_view col) {
+            auto it = COLUMN_NAME_MAP.find(col);
+            if (it != COLUMN_NAME_MAP.end()) {
+                return &it->second;
+            }
+            std::string upper;
+            upper.reserve(col.size());
+            for (char c : col) upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+            auto it_upper = COLUMN_NAME_MAP.find(upper);
+            if (it_upper != COLUMN_NAME_MAP.end()) {
+                return &it_upper->second;
+            }
+            return nullptr;
+        }
+
+        void map_assignment(const std::string& col, const std::string& val, const std::string& entity_type, std::unordered_map<std::string, std::string>& properties) {
+            std::string col_upper;
+            col_upper.reserve(col.size());
+            for (char c : col) col_upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+
+            if (entity_type == "DataObject" && (col_upper == "COLL_NAME" || col_upper == "PARENT_COLL" || col == "parent_coll")) {
+                properties["parent_coll"] = val;
+                return;
+            }
+
+            const auto* gm = find_column_mapping(col);
+            if (gm) {
+                properties[std::string(gm->bson_key)] = val;
+            } else {
+                properties[col] = val;
+            }
+        }
+
+        struct entity_infer_visitor : public boost::static_visitor<void> {
+            std::string& entity_type;
+            explicit entity_infer_visitor(std::string& et) : entity_type(et) {}
+
+            void operator()(const irods::experimental::genquery2::condition& c) const {
+                if (!entity_type.empty()) return;
+                std::string col_name;
+                if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) {
+                    col_name = col->name;
+                } else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) {
+                    col_name = func->name;
+                }
+                if (col_name.empty()) return;
+                const auto* gm = find_column_mapping(col_name);
+                if (gm) {
+                    entity_type = std::string(gm->node_type);
+                }
+            }
+
+            void operator()(const irods::experimental::genquery2::logical_and& l) const {
+                for (const auto& c : l.condition) {
+                    if (!entity_type.empty()) break;
+                    boost::apply_visitor(*this, c);
+                }
+            }
+            void operator()(const irods::experimental::genquery2::logical_or& l) const {
+                for (const auto& c : l.condition) {
+                    if (!entity_type.empty()) break;
+                    boost::apply_visitor(*this, c);
+                }
+            }
+            void operator()(const irods::experimental::genquery2::logical_grouping& l) const {
+                for (const auto& c : l.conditions) {
+                    if (!entity_type.empty()) break;
+                    boost::apply_visitor(*this, c);
+                }
+            }
+            void operator()(const irods::experimental::genquery2::logical_not& l) const {
+                for (const auto& c : l.condition) {
+                    if (!entity_type.empty()) break;
+                    boost::apply_visitor(*this, c);
+                }
+            }
+        };
+
+        struct dml_condition_visitor : public boost::static_visitor<void> {
+            const std::string& entity_type;
+            std::vector<std::pair<std::string, std::string>>& conditions;
+
+            dml_condition_visitor(const std::string& et, std::vector<std::pair<std::string, std::string>>& conds)
+                : entity_type(et), conditions(conds) {}
+
+            void operator()(const irods::experimental::genquery2::condition& c) const {
+                std::string col_name;
+                if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) {
+                    col_name = col->name;
+                } else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) {
+                    col_name = func->name;
+                }
+                if (col_name.empty()) return;
+
+                const auto* gm = find_column_mapping(col_name);
+
+                std::string col_upper;
+                col_upper.reserve(col_name.size());
+                for (char ch : col_name) col_upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+
+                std::string key;
+                if (entity_type == "DataObject" && (col_upper == "COLL_NAME" || col_upper == "PARENT_COLL" || col_name == "parent_coll")) {
+                    key = "parent_coll";
+                } else if (gm) {
+                    key = std::string(gm->bson_key);
+                } else {
+                    key = col_name;
+                }
+
+                pc_visitor pcv;
+                auto pc = boost::apply_visitor(pcv, c.expression);
+                conditions.emplace_back(std::move(key), std::move(pc.second));
+            }
+
+            void operator()(const irods::experimental::genquery2::logical_and& l) const {
+                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
+            }
+            void operator()(const irods::experimental::genquery2::logical_or& l) const {
+                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
+            }
+            void operator()(const irods::experimental::genquery2::logical_grouping& l) const {
+                for (const auto& c : l.conditions) boost::apply_visitor(*this, c);
+            }
+            void operator()(const irods::experimental::genquery2::logical_not& l) const {
+                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
+            }
+        };
+    } // anonymous namespace
+
+    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::insert& ast) {
+        DmlPlan plan;
+        plan.action = DmlAction::Insert;
+        plan.entity_type = normalize_entity_type(ast.target_entity);
+
+        if (plan.entity_type.empty()) {
+            for (const auto& [col, val] : ast.assignments) {
+                const auto* gm = find_column_mapping(col);
+                if (gm) {
+                    plan.entity_type = std::string(gm->node_type);
+                    break;
+                }
+            }
+        }
+
+        for (const auto& [col, val] : ast.assignments) {
+            map_assignment(col, val, plan.entity_type, plan.properties);
+        }
+
+        return plan;
+    }
+
+    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::update& ast) {
+        DmlPlan plan;
+        plan.action = DmlAction::Update;
+        plan.entity_type = normalize_entity_type(ast.target_entity);
+
+        if (plan.entity_type.empty()) {
+            for (const auto& [col, val] : ast.assignments) {
+                const auto* gm = find_column_mapping(col);
+                if (gm) {
+                    plan.entity_type = std::string(gm->node_type);
+                    break;
+                }
+            }
+        }
+
+        if (plan.entity_type.empty()) {
+            entity_infer_visitor eiv(plan.entity_type);
+            for (const auto& w : ast.where_conditions) {
+                if (!plan.entity_type.empty()) break;
+                boost::apply_visitor(eiv, w);
+            }
+        }
+
+        for (const auto& [col, val] : ast.assignments) {
+            map_assignment(col, val, plan.entity_type, plan.properties);
+        }
+
+        dml_condition_visitor cv(plan.entity_type, plan.conditions);
+        for (const auto& w : ast.where_conditions) {
+            boost::apply_visitor(cv, w);
+        }
+
+        return plan;
+    }
+
+    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::remove& ast) {
+        DmlPlan plan;
+        plan.action = DmlAction::Remove;
+        plan.entity_type = normalize_entity_type(ast.target_entity);
+
+        if (plan.entity_type.empty()) {
+            entity_infer_visitor eiv(plan.entity_type);
+            for (const auto& w : ast.where_conditions) {
+                if (!plan.entity_type.empty()) break;
+                boost::apply_visitor(eiv, w);
+            }
+        }
+
+        dml_condition_visitor cv(plan.entity_type, plan.conditions);
+        for (const auto& w : ast.where_conditions) {
+            boost::apply_visitor(cv, w);
+        }
+
+        return plan;
+    }
+
+    DmlPlan Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::statement& ast) {
+        return std::visit([this](const auto& s) -> DmlPlan {
+            using T = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<T, irods::experimental::genquery2::insert>) {
+                return this->compile(s);
+            } else if constexpr (std::is_same_v<T, irods::experimental::genquery2::update>) {
+                return this->compile(s);
+            } else if constexpr (std::is_same_v<T, irods::experimental::genquery2::remove>) {
+                return this->compile(s);
+            } else {
+                throw std::invalid_argument("Cannot compile select statement to DmlPlan");
+            }
+        }, ast);
     }
 
 } // namespace irods::catalog::compiler

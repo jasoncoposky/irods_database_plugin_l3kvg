@@ -16,6 +16,20 @@ namespace irods::catalog::compiler {
     extern const std::unordered_map<int, GraphMap> COLUMN_MAP;
     extern const std::unordered_map<std::string_view, GraphMap> COLUMN_NAME_MAP;
 
+    enum class DmlAction {
+        Insert,
+        Update,
+        Remove
+    };
+
+    struct DmlPlan {
+        DmlAction action;
+        std::string entity_type; // e.g. "DataObject", "Collection", "User", "Resource", etc.
+        std::unordered_map<std::string, std::string> properties; // mapped BSON property keys, e.g. "n" -> "file.txt"
+        std::vector<std::pair<std::string, std::string>> conditions; // e.g. [("n", "file.txt")]
+        std::vector<std::string> target_edges;
+    };
+
     /**
      * Gq2ToL3kvgCompiler translates iRODS GenQuery2 AST into 
      * L3KVG Federated Query JSON.
@@ -25,6 +39,11 @@ namespace irods::catalog::compiler {
         Gq2ToL3kvgCompiler() = default;
         
         std::string compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias = "");
+
+        DmlPlan compile(const irods::experimental::genquery2::insert& ast);
+        DmlPlan compile(const irods::experimental::genquery2::update& ast);
+        DmlPlan compile(const irods::experimental::genquery2::remove& ast);
+        DmlPlan compile(const irods::experimental::genquery2::statement& ast);
 
         struct PathStep {
             enum class Direction { Out, In };
