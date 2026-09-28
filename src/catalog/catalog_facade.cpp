@@ -39,6 +39,9 @@ namespace irods::catalog {
                 client_->add_peer(cfg.node_id, cfg.zmq_endpoint);
                 client_->add_peer(local_cluster_id_, cfg.zmq_endpoint);
                 for (const auto& fed : cfg.federation) { client_->add_peer(fed.id, fed.endpoint); }
+                if (!cfg.federation.empty()) {
+                    bootstrap_federation(cfg.federation);
+                }
                 return SUCCESS();
             } catch (const std::exception& e) { return ERROR(-1, e.what()); }
         }
@@ -47,7 +50,7 @@ namespace irods::catalog {
              for (const auto& peer : peers) {
                  snowflake_id_t zid = (static_cast<uint64_t>(peer.id) << 48) | (XXH3_64bits(peer.name.data(), peer.name.size()) & SnowflakeID::LOCAL_HASH_MASK);
                  lite3cpp::Buffer buf; buf.init_object(); buf.set_str(0, "n", peer.name); buf.set_str(0, "t", "remote");
-                 client_->put_node_async(local_cluster_id_, zid, buf.move_to_string());
+                 client_->put_node_async(local_cluster_id_, zid, buf.move_to_string()).get();
                  add_index(EntityType::Zone, "t", "zone", zid);
              }
              return SUCCESS();
@@ -112,14 +115,18 @@ namespace irods::catalog {
         }
 
         snowflake_id_t resolve_id_from_index(EntityType type, std::string_view attr, std::string_view value) {
-             std::string idx_key = get_idx_key(type, attr, value);
-             auto fut = client_->get_raw_key_async(local_cluster_id_, idx_key);
-             std::string payload = fut.get();
-             #ifdef IRODS_SERVER
-             rodsLog(LOG_NOTICE, "L3_CATALOG: resolve_id_from_index idx_key=[%s] payload=[%s]", idx_key.c_str(), payload.c_str());
-             #endif
-             if (payload.empty()) return 0;
-             try { return std::stoull(payload, nullptr, 16); } catch(...) { return 0; }
+             try {
+                 std::string idx_key = get_idx_key(type, attr, value);
+                 auto fut = client_->get_raw_key_async(local_cluster_id_, idx_key);
+                 std::string payload = fut.get();
+                 #ifdef IRODS_SERVER
+                 rodsLog(LOG_NOTICE, "L3_CATALOG: resolve_id_from_index idx_key=[%s] payload=[%s]", idx_key.c_str(), payload.c_str());
+                 #endif
+                 if (payload.empty()) return 0;
+                 return std::stoull(payload, nullptr, 16);
+             } catch (...) {
+                 return 0;
+             }
         }
 
         void add_edge(snowflake_id_t src, std::string_view label, double weight, snowflake_id_t dst) {

@@ -191,12 +191,25 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
         obj.size = (uint64_t)_info->dataSize;
         obj.owner_name = safe_string(_info->dataOwnerName); 
         if (obj.owner_name.empty()) {
-            obj.owner_name = _ctx.comm()->clientUser.userName;
+            if (_ctx.comm()) {
+                obj.owner_name = _ctx.comm()->clientUser.userName;
+            } else {
+                const auto& config = irods::server_properties::instance().map().get_json();
+                if (config.contains(KW_CFG_ZONE_USER)) {
+                    obj.owner_name = config.at(KW_CFG_ZONE_USER).get<std::string>();
+                }
+            }
         }
         obj.owner_zone = safe_string(_info->dataOwnerZone);
         if (obj.owner_zone.empty()) {
-            const auto& config = irods::server_properties::instance().map().get_json();
-            obj.owner_zone = config.at(KW_CFG_ZONE_NAME).get<std::string>();
+            if (_ctx.comm()) {
+                obj.owner_zone = _ctx.comm()->clientUser.rodsZone;
+            } else {
+                const auto& config = irods::server_properties::instance().map().get_json();
+                if (config.contains(KW_CFG_ZONE_NAME)) {
+                    obj.owner_zone = config.at(KW_CFG_ZONE_NAME).get<std::string>();
+                }
+            }
         }
         obj.create_ts = get_timestamp(safe_string(_info->dataCreate)); 
         obj.modify_ts = get_timestamp(safe_string(_info->dataModify));
@@ -395,11 +408,25 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         }
 
         if (coll.owner_name.empty()) {
-            coll.owner_name = _ctx.comm()->clientUser.userName;
+            if (_ctx.comm()) {
+                coll.owner_name = _ctx.comm()->clientUser.userName;
+            } else {
+                const auto& config = irods::server_properties::instance().map().get_json();
+                if (config.contains(KW_CFG_ZONE_USER)) {
+                    coll.owner_name = config.at(KW_CFG_ZONE_USER).get<std::string>();
+                }
+            }
         }
         coll.owner_zone = safe_string(_info->collOwnerZone);
         if (coll.owner_zone.empty()) {
-            coll.owner_zone = _ctx.comm()->clientUser.rodsZone;
+            if (_ctx.comm()) {
+                coll.owner_zone = _ctx.comm()->clientUser.rodsZone;
+            } else {
+                const auto& config = irods::server_properties::instance().map().get_json();
+                if (config.contains(KW_CFG_ZONE_NAME)) {
+                    coll.owner_zone = config.at(KW_CFG_ZONE_NAME).get<std::string>();
+                }
+            }
         }
 
         if (coll.parent_id == 0 && !coll.parent_name.empty()) {
@@ -652,13 +679,19 @@ irods::error db_reg_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
             user.zone = irods::server_properties::instance().map().get_json().at(KW_CFG_ZONE_NAME).get<std::string>();
         }
 
-        // Ensure a unique ID for the new user
-        g_catalog->get_next_sequence_value("R_USER_MAIN", user.id);
+        if (_info->sysUid > 0) {
+            user.id = (uint64_t)_info->sysUid;
+        } else {
+            g_catalog->get_next_sequence_value("R_USER_MAIN", user.id);
+        }
 
         rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_user_re_op: registering user [%s] type [%s] zone [%s] id [%lu]", user.name.c_str(), user.type.c_str(), user.zone.c_str(), user.id);
         
         irods::catalog::user_id_t out_id;
         auto ret = g_catalog->register_user(user, out_id);
+        if (ret.ok()) {
+            _info->sysUid = (int)out_id;
+        }
         
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_user_re_op SUCCESS");
         return ret;
@@ -859,7 +892,15 @@ irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context&
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_check_permission_to_modify_data_object_op id [%ld]", _data_id);
         bool allowed = false;
         
-        std::string user_name = _ctx.comm()->clientUser.userName;
+        std::string user_name;
+        if (_ctx.comm()) {
+            user_name = _ctx.comm()->clientUser.userName;
+        } else {
+            const auto& config = irods::server_properties::instance().map().get_json();
+            if (config.contains(KW_CFG_ZONE_USER)) {
+                user_name = config.at(KW_CFG_ZONE_USER).get<std::string>();
+            }
+        }
         irods::catalog::snowflake_id_t usid = 0;
         if (g_catalog->resolve_user_name(user_name, usid).ok()) {
             irods::catalog::snowflake_id_t dsid = g_catalog->make_id(irods::catalog::EntityType::DataObject, (uint64_t)_data_id);
