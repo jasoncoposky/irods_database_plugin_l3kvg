@@ -11,6 +11,7 @@
 #include "L3KVG/Node.hpp"
 #include "irods/rodsLog.h"
 #include "irods/rodsErrorTable.h"
+#include "irods/irods_exception.hpp"
 #include "irods/objInfo.h"
 #include "irods/rsGenQuery.hpp"
 #include "irods/rcMisc.h"
@@ -1307,6 +1308,9 @@ irods::error db_execute_genquery2_op(
             }
 
             *_output = strdup(json_array.dump().c_str());
+            if (!*_output) {
+                return ERROR(SYS_MALLOC_ERR, "Failed to allocate memory for GenQuery2 output.");
+            }
             return SUCCESS();
         }
 
@@ -1320,7 +1324,14 @@ irods::error db_execute_genquery2_op(
         }
 
         *_output = strdup(dml_result.dump().c_str());
+        if (!*_output) {
+            return ERROR(SYS_MALLOC_ERR, "Failed to allocate memory for GenQuery2 output.");
+        }
         return SUCCESS();
+    }
+    catch (const irods::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op irods::exception: %s", e.what());
+        return ERROR(e.code(), e.what());
     }
     catch (const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op exception: %s", e.what());
@@ -1328,7 +1339,7 @@ irods::error db_execute_genquery2_op(
     }
     catch (...) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op unknown exception");
-        return ERROR(SYS_INTERNAL_ERR, "Unknown exception in db_execute_genquery2_op");
+        return ERROR(SYS_UNKNOWN_ERROR, "Unknown exception in db_execute_genquery2_op");
     }
 }
 

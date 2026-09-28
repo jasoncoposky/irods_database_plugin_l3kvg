@@ -247,6 +247,26 @@ TEST_F(PluginGenQuery2Test, EndToEndGenQuery2Execution) {
     std::free(output);
     EXPECT_EQ(res["rows_affected"], 1);
 
+    // 3b. Test Select AST querying the updated record before deleting it
+    ASSERT_EQ(drv.parse("select DATA_NAME where DATA_NAME = 'plugin_file.txt'"), 0);
+    output = nullptr;
+    ret = plugin()->call<const irods::experimental::genquery2::statement*,
+                         const irods::experimental::genquery2::options*,
+                         char**>(
+        nullptr,
+        irods::DATABASE_OP_EXECUTE_GENQUERY2,
+        nullptr,
+        &drv.statement,
+        &opts,
+        &output);
+    ASSERT_TRUE(ret.ok()) << ret.result();
+    ASSERT_NE(output, nullptr);
+    res = nlohmann::json::parse(output);
+    std::free(output);
+    ASSERT_TRUE(res.is_array());
+    ASSERT_EQ(res.size(), 1);
+    EXPECT_EQ(res[0][0], "plugin_file.txt");
+
     // 4. Test Remove AST via driver.parse("delete from DATA where DATA_NAME = 'plugin_file.txt'") -> rows_affected == 1
     ASSERT_EQ(drv.parse("delete from DATA where DATA_NAME = 'plugin_file.txt'"), 0);
     output = nullptr;
@@ -300,4 +320,28 @@ TEST_F(PluginGenQuery2Test, EndToEndGenQuery2Execution) {
     std::free(output);
     EXPECT_TRUE(res.is_array());
     EXPECT_TRUE(res.empty());
+}
+
+TEST_F(PluginGenQuery2Test, NullInputHandling) {
+    irods::experimental::genquery2::options opts;
+    char* output = nullptr;
+    irods::experimental::genquery2::statement stmt = irods::experimental::genquery2::select{};
+
+    auto ret1 = plugin()->call<const irods::experimental::genquery2::statement*,
+                               const irods::experimental::genquery2::options*,
+                               char**>(nullptr, irods::DATABASE_OP_EXECUTE_GENQUERY2, nullptr, nullptr, &opts, &output);
+    EXPECT_FALSE(ret1.ok());
+    EXPECT_EQ(ret1.code(), SYS_INTERNAL_NULL_INPUT_ERR);
+
+    auto ret2 = plugin()->call<const irods::experimental::genquery2::statement*,
+                               const irods::experimental::genquery2::options*,
+                               char**>(nullptr, irods::DATABASE_OP_EXECUTE_GENQUERY2, nullptr, &stmt, nullptr, &output);
+    EXPECT_FALSE(ret2.ok());
+    EXPECT_EQ(ret2.code(), SYS_INTERNAL_NULL_INPUT_ERR);
+
+    auto ret3 = plugin()->call<const irods::experimental::genquery2::statement*,
+                               const irods::experimental::genquery2::options*,
+                               char**>(nullptr, irods::DATABASE_OP_EXECUTE_GENQUERY2, nullptr, &stmt, &opts, nullptr);
+    EXPECT_FALSE(ret3.ok());
+    EXPECT_EQ(ret3.code(), SYS_INTERNAL_NULL_INPUT_ERR);
 }
