@@ -8,6 +8,7 @@
 #include "irods/catalog/catalog_schemas.hpp"
 #include "irods/catalog/gq2_compiler.hpp"
 #include "irods/filesystem/path.hpp"
+#include "irods/rodsErrorTable.h"
 #include <iostream>
 #include <cstdio>
 #include <random>
@@ -75,6 +76,10 @@ namespace irods::catalog {
                  case EntityType::Collection: type_str = "Collection"; break;
                  case EntityType::DataObject: type_str = "DataObject"; break;
                  case EntityType::Resource: type_str = "Resource"; break;
+                 case EntityType::Replica: type_str = "Replica"; break;
+                 case EntityType::Rule: type_str = "Rule"; break;
+                 case EntityType::Metadata: type_str = "Metadata"; break;
+                 case EntityType::Ticket: type_str = "Ticket"; break;
                  default: type_str = std::to_string(static_cast<int>(type)); break;
              }
              if (attr == "t") return "idx:type:" + std::string(value);
@@ -1313,29 +1318,35 @@ namespace irods::catalog {
 
         irods::error execute_dml(const compiler::DmlPlan& plan, nlohmann::json& result) {
             try {
-                auto get_entity_type = [](std::string_view name) -> EntityType {
+                auto get_entity_type = [](std::string_view name, EntityType& out) -> bool {
                     if (name == "DataObject" || name == "DATA_NAME" || name == "DATA" || name == "data_object") {
-                        return EntityType::DataObject;
+                        out = EntityType::DataObject; return true;
                     }
                     if (name == "Collection" || name == "COLLECTION" || name == "COLL" || name == "collection") {
-                        return EntityType::Collection;
+                        out = EntityType::Collection; return true;
                     }
                     if (name == "User" || name == "USER" || name == "Group" || name == "GROUP" || name == "user") {
-                        return EntityType::User;
+                        out = EntityType::User; return true;
                     }
                     if (name == "Resource" || name == "RESOURCE" || name == "RESC" || name == "resource") {
-                        return EntityType::Resource;
+                        out = EntityType::Resource; return true;
                     }
                     if (name == "Zone" || name == "ZONE" || name == "zone") {
-                        return EntityType::Zone;
+                        out = EntityType::Zone; return true;
                     }
                     if (name == "Replica" || name == "REPLICA" || name == "replica") {
-                        return EntityType::Replica;
+                        out = EntityType::Replica; return true;
                     }
                     if (name == "Rule" || name == "RULE" || name == "rule") {
-                        return EntityType::Rule;
+                        out = EntityType::Rule; return true;
                     }
-                    return EntityType::DataObject;
+                    if (name == "Metadata" || name == "METADATA" || name == "metadata") {
+                        out = EntityType::Metadata; return true;
+                    }
+                    if (name == "Ticket" || name == "TICKET" || name == "ticket") {
+                        out = EntityType::Ticket; return true;
+                    }
+                    return false;
                 };
 
                 auto get_seq_name = [](EntityType et) -> std::string {
@@ -1349,7 +1360,100 @@ namespace irods::catalog {
                     }
                 };
 
-                EntityType et = get_entity_type(plan.entity_type);
+                EntityType et;
+                if (!get_entity_type(plan.entity_type, et)) {
+                    return ERROR(SYS_INVALID_INPUT_PARAM, "Unknown or unsupported entity type: " + plan.entity_type);
+                }
+
+                auto get_prop_val = [&](lite3cpp::Buffer& b, const std::string& prop) -> std::string {
+                    if (prop == "id") {
+                        return safe_get_str(b, 0, "id");
+                    }
+                    if (prop == "s" || prop == "size" || prop == "DATA_SIZE") {
+                        return safe_get_str(b, 0, "s");
+                    }
+                    if (prop == "n" || prop == "name" || prop == "DATA_NAME" || prop == "COLL_NAME") {
+                        return safe_get_str(b, 0, "n");
+                    }
+                    if (prop == "p" || prop == "path" || prop == "COLL_PARENT_NAME") {
+                        return safe_get_str(b, 0, "p");
+                    }
+                    if (prop == "o" || prop == "owner" || prop == "owner_name" || prop == "COLL_OWNER_NAME" || prop == "DATA_OWNER_NAME") {
+                        return safe_get_str(b, 0, "o");
+                    }
+                    return safe_get_str(b, 0, prop);
+                };
+
+                auto compare_vals = [](const std::string& actual, int op, const std::string& expected) -> bool {
+                    bool is_num = false;
+                    int64_t a_num = 0, e_num = 0;
+                    try {
+                        size_t a_pos = 0, e_pos = 0;
+                        if (!actual.empty() && !expected.empty()) {
+                            a_num = std::stoll(actual, &a_pos);
+                            e_num = std::stoll(expected, &e_pos);
+                            if (a_pos == actual.size() && e_pos == expected.size()) {
+                                is_num = true;
+                            }
+                        }
+                    } catch (...) {}
+
+                    if (is_num) {
+                        switch (op) {
+                            case 0: return a_num == e_num;
+                            case 1: return a_num != e_num;
+                            case 2: return a_num < e_num;
+                            case 3: return a_num <= e_num;
+                            case 4: return a_num > e_num;
+                            case 5: return a_num >= e_num;
+                            default: return a_num == e_num;
+                        }
+                    } else {
+                        switch (op) {
+                            case 0: return actual == expected;
+                            case 1: return actual != expected;
+                            case 2: return actual < expected;
+                            case 3: return actual <= expected;
+                            case 4: return actual > expected;
+                            case 5: return actual >= expected;
+                            default: return actual == expected;
+                        }
+                    }
+                };
+
+                auto resolve_target_sid = [&](EntityType target_et, const std::vector<compiler::DmlCondition>& conditions) -> snowflake_id_t {
+                    // 1. Specificity: check ID
+                    for (const auto& cond : conditions) {
+                        if (cond.op == 0 && cond.property == "id") {
+                            try {
+                                snowflake_id_t s = make_id(target_et, std::stoull(cond.value));
+                                if (s) return s;
+                            } catch (...) {}
+                        }
+                    }
+                    // 2. Specificity: check path / p
+                    for (const auto& cond : conditions) {
+                        if (cond.op == 0 && (cond.property == "path" || cond.property == "p" || cond.property == "COLL_NAME")) {
+                            snowflake_id_t s = resolve_id_from_index(target_et, "path", cond.value);
+                            if (s) return s;
+                        }
+                    }
+                    // 3. Specificity: check n / name
+                    for (const auto& cond : conditions) {
+                        if (cond.op == 0 && (cond.property == "n" || cond.property == "name" || cond.property == "DATA_NAME")) {
+                            snowflake_id_t s = resolve_id_from_index(target_et, "n", cond.value);
+                            if (s) return s;
+                        }
+                    }
+                    // 4. Other equality conditions
+                    for (const auto& cond : conditions) {
+                        if (cond.op == 0) {
+                            snowflake_id_t s = resolve_id_from_index(target_et, cond.property, cond.value);
+                            if (s) return s;
+                        }
+                    }
+                    return 0;
+                };
 
                 if (plan.action == compiler::DmlAction::Insert) {
                     uint64_t irods_id = 0;
@@ -1415,13 +1519,28 @@ namespace irods::catalog {
                         }
                     }
 
+                    std::string owner_name;
+                    auto o_it = plan.properties.find("o");
+                    if (o_it == plan.properties.end()) o_it = plan.properties.find("owner");
+                    if (o_it == plan.properties.end()) o_it = plan.properties.find("owner_name");
+                    if (o_it != plan.properties.end()) owner_name = o_it->second;
+
                     lite3cpp::Buffer buf;
                     buf.init_object();
                     buf.set_i64(0, "id", static_cast<int64_t>(irods_id));
 
                     for (const auto& [k, v] : plan.properties) {
                         if (k == "id") continue;
-                        if (k == "parent_coll" || k == "parent_collection") continue;
+                        if (k == "parent_coll" || k == "parent_collection" || k == "pn") continue;
+                        if (k == "path" || k == "p") continue;
+                        if (k == "name") {
+                            buf.set_str(0, "n", v);
+                            continue;
+                        }
+                        if (k == "owner" || k == "owner_name") {
+                            buf.set_str(0, "o", v);
+                            continue;
+                        }
                         if (k == "s" || k == "rid" || k == "rn" || k == "size" || k == "DATA_SIZE") {
                             try {
                                 buf.set_i64(0, (k == "size" || k == "DATA_SIZE" ? "s" : k), std::stoll(v));
@@ -1431,7 +1550,7 @@ namespace irods::catalog {
                         buf.set_str(0, k, v);
                     }
 
-                    if (!full_path.empty() && explicit_path.empty()) {
+                    if (!full_path.empty()) {
                         buf.set_str(0, "p", full_path);
                     }
 
@@ -1441,8 +1560,15 @@ namespace irods::catalog {
                         add_index(et, "n", name, sid);
                     }
 
+                    if (!full_path.empty()) {
+                        add_index(et, "path", full_path, sid);
+                    }
+
                     if (!parent_coll.empty()) {
                         snowflake_id_t parent_sid = resolve_id_from_index(EntityType::Collection, "n", parent_coll);
+                        if (!parent_sid) {
+                            parent_sid = resolve_id_from_index(EntityType::Collection, "path", parent_coll);
+                        }
                         if (!parent_sid) {
                             try {
                                 parent_sid = make_id(EntityType::Collection, std::stoull(parent_coll));
@@ -1453,34 +1579,18 @@ namespace irods::catalog {
                         }
                     }
 
-                    if (!full_path.empty()) {
-                        add_index(et, "path", full_path, sid);
+                    if (!owner_name.empty()) {
+                        snowflake_id_t user_sid = resolve_id_from_index(EntityType::User, "n", owner_name);
+                        if (user_sid) {
+                            add_edge(user_sid, "OWNS", 1.0, sid);
+                        }
                     }
 
                     result["rows_affected"] = 1;
                     result["status"] = "SUCCESS";
                     return SUCCESS();
                 } else if (plan.action == compiler::DmlAction::Update) {
-                    snowflake_id_t sid = 0;
-
-                    for (const auto& cond : plan.conditions) {
-                        if (cond.op != 0) continue;
-                        if (cond.property == "id") {
-                            try {
-                                sid = make_id(et, std::stoull(cond.value));
-                                if (sid) break;
-                            } catch (...) {}
-                        } else if (cond.property == "path" || cond.property == "p") {
-                            sid = resolve_id_from_index(et, "path", cond.value);
-                            if (sid) break;
-                        } else if (cond.property == "n" || cond.property == "name") {
-                            sid = resolve_id_from_index(et, "n", cond.value);
-                            if (sid) break;
-                        } else {
-                            sid = resolve_id_from_index(et, cond.property, cond.value);
-                            if (sid) break;
-                        }
-                    }
+                    snowflake_id_t sid = resolve_target_sid(et, plan.conditions);
 
                     if (sid == 0) {
                         result["rows_affected"] = 0;
@@ -1496,6 +1606,17 @@ namespace irods::catalog {
                     }
 
                     lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+
+                    // Secondary filter verification against buf
+                    for (const auto& cond : plan.conditions) {
+                        std::string actual = get_prop_val(buf, cond.property);
+                        if (!compare_vals(actual, cond.op, cond.value)) {
+                            result["rows_affected"] = 0;
+                            result["status"] = "SUCCESS";
+                            return SUCCESS();
+                        }
+                    }
+
                     std::string old_n = safe_get_str(buf, 0, "n");
                     std::string old_p = safe_get_str(buf, 0, "p");
 
@@ -1503,9 +1624,20 @@ namespace irods::catalog {
                     std::string new_p;
 
                     for (const auto& [k, v] : plan.properties) {
-                        if (k == "n") new_n = v;
-                        if (k == "path" || k == "p") new_p = v;
-
+                        if (k == "n" || k == "name") {
+                            new_n = v;
+                            buf.set_str(0, "n", v);
+                            continue;
+                        }
+                        if (k == "path" || k == "p") {
+                            new_p = v;
+                            buf.set_str(0, "p", v);
+                            continue;
+                        }
+                        if (k == "owner" || k == "owner_name") {
+                            buf.set_str(0, "o", v);
+                            continue;
+                        }
                         if (k == "s" || k == "rid" || k == "rn" || k == "size" || k == "DATA_SIZE" || k == "id") {
                             try {
                                 buf.set_i64(0, (k == "size" || k == "DATA_SIZE" ? "s" : k), std::stoll(v));
@@ -1513,6 +1645,15 @@ namespace irods::catalog {
                             } catch (...) {}
                         }
                         buf.set_str(0, k, v);
+                    }
+
+                    // Recompute path index if basename changed without explicit path
+                    if (!new_n.empty() && new_n != old_n && new_p.empty() && !old_p.empty()) {
+                        auto last_slash = old_p.find_last_of('/');
+                        if (last_slash != std::string::npos) {
+                            new_p = old_p.substr(0, last_slash + 1) + new_n;
+                            buf.set_str(0, "p", new_p);
+                        }
                     }
 
                     if (!new_n.empty() && new_n != old_n) {
@@ -1531,26 +1672,7 @@ namespace irods::catalog {
                     result["status"] = "SUCCESS";
                     return SUCCESS();
                 } else if (plan.action == compiler::DmlAction::Remove) {
-                    snowflake_id_t sid = 0;
-
-                    for (const auto& cond : plan.conditions) {
-                        if (cond.op != 0) continue;
-                        if (cond.property == "id") {
-                            try {
-                                sid = make_id(et, std::stoull(cond.value));
-                                if (sid) break;
-                            } catch (...) {}
-                        } else if (cond.property == "path" || cond.property == "p") {
-                            sid = resolve_id_from_index(et, "path", cond.value);
-                            if (sid) break;
-                        } else if (cond.property == "n" || cond.property == "name") {
-                            sid = resolve_id_from_index(et, "n", cond.value);
-                            if (sid) break;
-                        } else {
-                            sid = resolve_id_from_index(et, cond.property, cond.value);
-                            if (sid) break;
-                        }
-                    }
+                    snowflake_id_t sid = resolve_target_sid(et, plan.conditions);
 
                     if (sid == 0) {
                         result["rows_affected"] = 0;
@@ -1559,27 +1681,41 @@ namespace irods::catalog {
                     }
 
                     std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
-                    if (!payload.empty()) {
-                        try {
-                            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
-                            std::string name = safe_get_str(buf, 0, "n");
-                            if (!name.empty()) del_index(et, "n", name);
-                            std::string path = safe_get_str(buf, 0, "p");
-                            if (!path.empty()) del_index(et, "path", path);
-                        } catch (...) {}
+                    if (payload.empty()) {
+                        result["rows_affected"] = 0;
+                        result["status"] = "SUCCESS";
+                        return SUCCESS();
                     }
 
+                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+
+                    // Secondary filter verification against buf
                     for (const auto& cond : plan.conditions) {
-                        if (cond.op == 0) {
-                            if (cond.property == "n" || cond.property == "name") {
-                                del_index(et, "n", cond.value);
-                            } else if (cond.property == "path" || cond.property == "p") {
-                                del_index(et, "path", cond.value);
-                            }
+                        std::string actual = get_prop_val(buf, cond.property);
+                        if (!compare_vals(actual, cond.op, cond.value)) {
+                            result["rows_affected"] = 0;
+                            result["status"] = "SUCCESS";
+                            return SUCCESS();
                         }
                     }
 
-                    // Delete incoming edges (CONTAINS, OWNS)
+                    // 1. Delete outgoing HAS_REPLICA edges and child replica nodes if DataObject
+                    if (et == EntityType::DataObject) {
+                        try {
+                            auto replicas = client_->get_neighbors_async(local_cluster_id_, sid, "HAS_REPLICA", 0.0).get();
+                            for (auto rid : replicas) {
+                                client_->del_node_async(local_cluster_id_, rid);
+                            }
+                        } catch (...) {}
+                    }
+
+                    // 2. Clean up indices extracted directly from buf
+                    std::string name = safe_get_str(buf, 0, "n");
+                    if (!name.empty()) del_index(et, "n", name);
+                    std::string path = safe_get_str(buf, 0, "p");
+                    if (!path.empty()) del_index(et, "path", path);
+
+                    // 3. Delete incoming edges (CONTAINS, OWNS)
                     try {
                         auto collections = client_->get_in_neighbors_async(local_cluster_id_, sid, "CONTAINS").get();
                         for (auto cid : collections) {
@@ -1591,6 +1727,7 @@ namespace irods::catalog {
                         }
                     } catch (...) {}
 
+                    // 4. Delete the node itself
                     client_->del_node_async(local_cluster_id_, sid).get();
 
                     result["rows_affected"] = 1;

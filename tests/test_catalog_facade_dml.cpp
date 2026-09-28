@@ -12,7 +12,10 @@ using namespace irods::catalog::test;
 class CatalogFacadeDmlTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        int port = 5600 + (rand() % 2000);
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(5600, 7600);
+        int port = dis(gen);
         endpoint_ = "tcp://127.0.0.1:" + std::to_string(port);
         mock_server_ = std::make_unique<MockL3KVGServer>(endpoint_);
         mock_server_->start();
@@ -51,10 +54,24 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     EXPECT_EQ(insert_res["rows_affected"], 1);
     EXPECT_EQ(insert_res["status"], "SUCCESS");
 
-    // 2. Test Update: plan with action Update, entity_type "DataObject", properties "s" -> "2048", condition on "n" == "test_file.dat".
+    // 2. Test Secondary Condition Mismatch: update with correct "n" but mismatched "s" (9999 != 1024)
+    DmlPlan mismatch_update;
+    mismatch_update.action = DmlAction::Update;
+    mismatch_update.entity_type = "DataObject";
+    mismatch_update.properties["s"] = "2048";
+    mismatch_update.conditions.push_back(DmlCondition{"n", 0, "test_file.dat"});
+    mismatch_update.conditions.push_back(DmlCondition{"s", 0, "9999"});
+
+    nlohmann::json mismatch_res;
+    auto mismatch_err = facade_.execute_dml(mismatch_update, mismatch_res);
+    ASSERT_TRUE(mismatch_err.ok()) << mismatch_err.result();
+    EXPECT_EQ(mismatch_res["rows_affected"], 0);
+
+    // 3. Test Update with "name" attribute and rename: change "name" -> "test_file_renamed.dat" and "s" -> "2048"
     DmlPlan update_plan;
     update_plan.action = DmlAction::Update;
     update_plan.entity_type = "DataObject";
+    update_plan.properties["name"] = "test_file_renamed.dat";
     update_plan.properties["s"] = "2048";
     update_plan.conditions.push_back(DmlCondition{"n", 0, "test_file.dat"});
 
@@ -64,17 +81,47 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     EXPECT_EQ(update_res["rows_affected"], 1);
     EXPECT_EQ(update_res["status"], "SUCCESS");
 
-    // 3. Test Remove: plan with action Remove, entity_type "DataObject", condition on "n" == "test_file.dat".
+    // 4. Test Update targeting new name index:
+    DmlPlan update2_plan;
+    update2_plan.action = DmlAction::Update;
+    update2_plan.entity_type = "DataObject";
+    update2_plan.properties["s"] = "4096";
+    update2_plan.conditions.push_back(DmlCondition{"name", 0, "test_file_renamed.dat"});
+
+    nlohmann::json update2_res;
+    auto update2_err = facade_.execute_dml(update2_plan, update2_res);
+    ASSERT_TRUE(update2_err.ok()) << update2_err.result();
+    EXPECT_EQ(update2_res["rows_affected"], 1);
+
+    // 5. Test Secondary Condition Mismatch on Remove:
+    DmlPlan mismatch_remove;
+    mismatch_remove.action = DmlAction::Remove;
+    mismatch_remove.entity_type = "DataObject";
+    mismatch_remove.conditions.push_back(DmlCondition{"n", 0, "test_file_renamed.dat"});
+    mismatch_remove.conditions.push_back(DmlCondition{"s", 0, "9999"});
+
+    nlohmann::json mismatch_rem_res;
+    auto mismatch_rem_err = facade_.execute_dml(mismatch_remove, mismatch_rem_res);
+    ASSERT_TRUE(mismatch_rem_err.ok()) << mismatch_rem_err.result();
+    EXPECT_EQ(mismatch_rem_res["rows_affected"], 0);
+
+    // 6. Test Remove: plan with action Remove, entity_type "DataObject", condition on "name" == "test_file_renamed.dat".
     DmlPlan remove_plan;
     remove_plan.action = DmlAction::Remove;
     remove_plan.entity_type = "DataObject";
-    remove_plan.conditions.push_back(DmlCondition{"n", 0, "test_file.dat"});
+    remove_plan.conditions.push_back(DmlCondition{"name", 0, "test_file_renamed.dat"});
 
     nlohmann::json remove_res;
     auto remove_err = facade_.execute_dml(remove_plan, remove_res);
     ASSERT_TRUE(remove_err.ok()) << remove_err.result();
     EXPECT_EQ(remove_res["rows_affected"], 1);
     EXPECT_EQ(remove_res["status"], "SUCCESS");
+
+    // 7. Test Repeated Remove: asserting rows_affected == 0 confirming complete deletion
+    nlohmann::json repeat_res;
+    auto repeat_err = facade_.execute_dml(remove_plan, repeat_res);
+    ASSERT_TRUE(repeat_err.ok()) << repeat_err.result();
+    EXPECT_EQ(repeat_res["rows_affected"], 0);
 }
 
 TEST_F(CatalogFacadeDmlTest, ExecuteDmlInsertWithParentCollAndPath) {
@@ -87,12 +134,22 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlInsertWithParentCollAndPath) {
     c.owner_zone = "tempZone";
     ASSERT_TRUE(facade_.register_collection(c, root_id).ok());
 
-    // Insert DataObject with parent_coll
+    // Bootstrap user rods
+    user u;
+    u.id = 1;
+    u.name = "rods";
+    u.zone = "tempZone";
+    u.type = "rodsadmin";
+    user_id_t u_id;
+    ASSERT_TRUE(facade_.register_user(u, u_id).ok());
+
+    // Insert DataObject with parent_coll and owner
     DmlPlan insert_plan;
     insert_plan.action = DmlAction::Insert;
     insert_plan.entity_type = "DataObject";
     insert_plan.properties["n"] = "sub_file.txt";
     insert_plan.properties["parent_coll"] = "/tempZone/home/rods";
+    insert_plan.properties["owner"] = "rods";
     insert_plan.properties["s"] = "4096";
 
     nlohmann::json insert_res;
@@ -100,10 +157,11 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlInsertWithParentCollAndPath) {
     ASSERT_TRUE(insert_err.ok()) << insert_err.result();
     EXPECT_EQ(insert_res["rows_affected"], 1);
 
-    // Update using path condition
+    // Update using path condition and rename basename without explicit path
     DmlPlan update_plan;
     update_plan.action = DmlAction::Update;
     update_plan.entity_type = "DataObject";
+    update_plan.properties["name"] = "sub_file_renamed.txt";
     update_plan.properties["s"] = "8192";
     update_plan.conditions.push_back(DmlCondition{"path", 0, "/tempZone/home/rods/sub_file.txt"});
 
@@ -112,14 +170,31 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlInsertWithParentCollAndPath) {
     ASSERT_TRUE(update_err.ok()) << update_err.result();
     EXPECT_EQ(update_res["rows_affected"], 1);
 
-    // Remove using path condition
+    // Remove using recomputed path condition
     DmlPlan remove_plan;
     remove_plan.action = DmlAction::Remove;
     remove_plan.entity_type = "DataObject";
-    remove_plan.conditions.push_back(DmlCondition{"path", 0, "/tempZone/home/rods/sub_file.txt"});
+    remove_plan.conditions.push_back(DmlCondition{"path", 0, "/tempZone/home/rods/sub_file_renamed.txt"});
 
     nlohmann::json remove_res;
     auto remove_err = facade_.execute_dml(remove_plan, remove_res);
     ASSERT_TRUE(remove_err.ok()) << remove_err.result();
     EXPECT_EQ(remove_res["rows_affected"], 1);
+
+    // Repeated remove on newly removed path yields 0
+    nlohmann::json repeat_res;
+    auto repeat_err = facade_.execute_dml(remove_plan, repeat_res);
+    ASSERT_TRUE(repeat_err.ok()) << repeat_err.result();
+    EXPECT_EQ(repeat_res["rows_affected"], 0);
+}
+
+TEST_F(CatalogFacadeDmlTest, ExecuteDmlUnknownEntityType) {
+    DmlPlan plan;
+    plan.action = DmlAction::Insert;
+    plan.entity_type = "InvalidUnknownType";
+    plan.properties["n"] = "file.dat";
+
+    nlohmann::json res;
+    auto err = facade_.execute_dml(plan, res);
+    EXPECT_FALSE(err.ok());
 }
