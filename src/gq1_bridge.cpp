@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <unordered_set>
 #include <regex>
 #include <cstring>
 #include <iostream>
@@ -326,16 +327,36 @@ namespace irods::catalog::bridge {
                     }
                 }
             } else if (std::regex_match(cond, match, parent_regex)) {
-                irods::experimental::filesystem::path p(match[1].str());
-                std::string parent_path = unescape_sql_literal(p.parent_path().string());
+                std::string target_path = unescape_sql_literal(match[1].str());
                 int priority = 4;
                 if ((inx == COL_COLL_NAME || inx == COL_COLL_PARENT_NAME) && priority > best_start_priority && _catalog != nullptr) {
-                    snowflake_id_t sid = 0; EntityType type;
-                    if (_catalog->resolve_path(parent_path, sid, type).ok()) {
-                        _starting_nodes.clear();
-                        _starting_nodes.push_back(sid);
+                    while (target_path.size() > 1 && target_path.back() == '/') {
+                        target_path.pop_back();
+                    }
+
+                    std::vector<snowflake_id_t> candidate_nodes;
+                    std::unordered_set<snowflake_id_t> seen;
+                    auto add_node = [&](const std::string& path_str) {
+                        snowflake_id_t sid = 0; EntityType type;
+                        if (_catalog->resolve_path(path_str, sid, type).ok() && type == EntityType::Collection) {
+                            if (seen.insert(sid).second) {
+                                candidate_nodes.push_back(sid);
+                            }
+                        }
+                    };
+
+                    irods::experimental::filesystem::path cur_p(target_path);
+                    while (!cur_p.empty() && cur_p.string() != "/") {
+                        add_node(cur_p.string());
+                        cur_p = cur_p.parent_path();
+                    }
+                    add_node("/");
+
+                    if (!candidate_nodes.empty()) {
+                        _starting_nodes = std::move(candidate_nodes);
                         resolved_start = true;
                         best_start_priority = priority;
+                        rodsLog(LOG_NOTICE, "L3_BRIDGE: parent_of resolved %zu candidate collection starting nodes for '%s'", _starting_nodes.size(), target_path.c_str());
                     }
                 }
             }
@@ -361,8 +382,12 @@ namespace irods::catalog::bridge {
                 } else if (std::regex_match(cond, match, like_regex)) {
                     ast.conditions.push_back(gq2::condition(col, gq2::condition_like(unescape_sql_literal(match[1].str()))));
                 } else if (std::regex_match(cond, match, parent_regex)) {
-                    irods::experimental::filesystem::path p(match[1].str());
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(unescape_sql_literal(p.parent_path().string()))));
+                    if (_catalog == nullptr) {
+                        irods::experimental::filesystem::path p(match[1].str());
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(unescape_sql_literal(p.string()))));
+                    } else if (!resolved_start || _starting_nodes.empty()) {
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_equal("__NON_EXISTENT_PARENT_OF_PATH__")));
+                    }
                 }
             }
         }

@@ -5,6 +5,7 @@
 #include <thread>
 #include <atomic>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <string>
 #include <iostream>
@@ -240,19 +241,41 @@ namespace irods::catalog::test {
                              std::string query_json = msgs[4].to_string();
                              nlohmann::json q = nlohmann::json::parse(query_json);
                              
+                             std::vector<uint64_t> sn;
+                             try { sn = nlohmann::json::parse(msgs[3].to_string()).get<std::vector<uint64_t>>(); } catch (...) {}
+                             std::unordered_set<uint64_t> sn_set(sn.begin(), sn.end());
+
                              nlohmann::json results = nlohmann::json::array();
                              std::string root_alias = q["root_alias"];
                              
                              std::lock_guard<std::mutex> lock(mu_);
                              for (const auto& [id, node] : nodes_) {
+                                 if (!sn_set.empty() && !sn_set.count(id)) continue;
                                  bool match = true;
                                  if (q.contains("filters")) {
                                      for (const auto& f : q["filters"]) {
                                          if (f["alias"] == root_alias) {
                                              std::string key = f["key"];
                                              std::string val = f["value"];
-                                             if (node.get_attribute<std::string>(key) != val) {
-                                                 match = false; break;
+                                             int op = f.value("op", 0);
+                                             std::string attr = node.get_attribute<std::string>(key);
+                                             if (op == 0) {
+                                                 if (attr != val) { match = false; break; }
+                                             } else if (op == 1) {
+                                                 if (attr == val) { match = false; break; }
+                                             } else if (op == 6) {
+                                                 std::string regex_str = "^";
+                                                 for (char c : val) {
+                                                     if (c == '%') regex_str += ".*";
+                                                     else if (c == '_') regex_str += ".";
+                                                     else if (c == '.' || c == '*' || c == '+' || c == '?' || c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' || c == '|') { regex_str += "\\"; regex_str += c; }
+                                                     else regex_str += c;
+                                                 }
+                                                 regex_str += "$";
+                                                 try {
+                                                     std::regex re(regex_str, std::regex_constants::icase);
+                                                     if (!std::regex_match(attr, re)) { match = false; break; }
+                                                 } catch (...) { match = false; break; }
                                              }
                                          }
                                      }
