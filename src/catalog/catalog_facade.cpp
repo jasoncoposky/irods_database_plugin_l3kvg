@@ -553,13 +553,21 @@ namespace irods::catalog {
                 return ERROR(CAT_NAME_EXISTS_AS_DATAOBJ, "Data object already exists with collection name: " + coll.name);
             }
 
+            std::string parent_name = coll.parent_name;
+            if (parent_name.empty() && coll.name != "/" && !coll.name.empty()) {
+                size_t last_slash = coll.name.find_last_of('/');
+                if (last_slash != std::string::npos && last_slash > 0) {
+                    parent_name = coll.name.substr(0, last_slash);
+                }
+            }
+
             snowflake_id_t sid = make_id(EntityType::Collection, coll.id);
             #ifdef IRODS_SERVER
             rodsLog(LOG_NOTICE, "L3_CATALOG: Registering Collection [%s] with ID [%llu] (SID: %016llx)", coll.name.c_str(), (unsigned long long)coll.id, (unsigned long long)sid);
             #endif
             lite3cpp::Buffer buf; buf.init_object(); 
             buf.set_str(0, "n", coll.name); 
-            buf.set_str(0, "pn", coll.parent_name);
+            buf.set_str(0, "pn", parent_name);
             buf.set_str(0, "o", coll.owner_name); 
             buf.set_str(0, "z", coll.owner_zone); 
             buf.set_str(0, "t", coll.type);
@@ -573,13 +581,7 @@ namespace irods::catalog {
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
             add_index(EntityType::Collection, "n", coll.name, sid);
             add_index(EntityType::Collection, "id", std::to_string(coll.id), sid);
-            std::string parent_name = coll.parent_name;
-            if (parent_name.empty() && coll.name != "/" && !coll.name.empty()) {
-                size_t last_slash = coll.name.find_last_of('/');
-                if (last_slash != std::string::npos && last_slash > 0) {
-                    parent_name = coll.name.substr(0, last_slash);
-                }
-            }
+
             snowflake_id_t psid = 0;
             if (coll.parent_id != 0) {
                 psid = make_id(EntityType::Collection, coll.parent_id);
@@ -1395,30 +1397,6 @@ namespace irods::catalog {
                 std::vector<uint64_t> sn = starting_nodes;
                 if (!sn.empty() && sn[0] == 0) sn.clear();
 
-                if (effective_root_type.empty() && !sn.empty()) {
-                    // Try to infer root type from the first starting node
-                    std::string payload = client_->get_node_payload_async(local_cluster_id_, sn[0]).get();
-                    if (!payload.empty()) {
-                        try {
-                            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
-                            std::string t = safe_get_str(buf, 0, "t");
-                            if (t == "data_object" || t == "generic") effective_root_type = "DataObject";
-                            else if (t == "collection" || t == "" || t == "MISSING") effective_root_type = "Collection";
-                            else if (t == "user" || t == "rodsuser" || t == "rodsadmin") effective_root_type = "User";
-                            else if (t == "resource" || t == "unixfilesystem") effective_root_type = "Resource";
-                            else if (t == "zone") effective_root_type = "Zone";
-                            else if (t == "replica") effective_root_type = "Replica";
-                            
-                            #ifdef IRODS_SERVER
-                            rodsLog(LOG_NOTICE, "L3_CATALOG: Inferred root type [%s] from starting node %016llx (t=[%s])", effective_root_type.c_str(), (unsigned long long)sn[0], t.c_str());
-                            #endif
-                        } catch (const std::exception& e) {
-                            #ifdef IRODS_SERVER
-                            rodsLog(LOG_NOTICE, "L3_CATALOG: Root type inference failed: %s", e.what());
-                            #endif
-                        }
-                    }
-                }
 
                 compiler::Gq2ToL3kvgCompiler compiler;
                 std::string query_json = compiler.compile(ast, effective_root_type);

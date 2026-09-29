@@ -469,14 +469,17 @@ namespace irods::catalog::bridge {
                     if (val == "own") {
                         if (pure_inx == COL_DATA_ACCESS_TYPE || pure_inx == COL_COLL_ACCESS_TYPE) val = "1200";
                     }
-                    else if (val == "write") {
+                    else if (val == "write" || val == "modify_object") {
                         if (pure_inx == COL_DATA_ACCESS_TYPE || pure_inx == COL_COLL_ACCESS_TYPE) val = "1100";
+                        else if (pure_inx == COL_DATA_ACCESS_NAME || pure_inx == COL_COLL_ACCESS_NAME) val = "modify_object";
                     }
-                    else if (val == "read") {
+                    else if (val == "read" || val == "read_object") {
                         if (pure_inx == COL_DATA_ACCESS_TYPE || pure_inx == COL_COLL_ACCESS_TYPE) val = "1050";
+                        else if (pure_inx == COL_DATA_ACCESS_NAME || pure_inx == COL_COLL_ACCESS_NAME) val = "read_object";
                     }
                     else if (val == "null" || val.empty()) {
                         if (pure_inx == COL_DATA_ACCESS_TYPE || pure_inx == COL_COLL_ACCESS_TYPE) val = "1000";
+                        else if (pure_inx == COL_DATA_ACCESS_NAME || pure_inx == COL_COLL_ACCESS_NAME) val = "null";
                     }
                 }
 
