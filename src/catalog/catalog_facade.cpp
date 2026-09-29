@@ -157,6 +157,7 @@ namespace irods::catalog {
             lite3cpp::Buffer zbuf; zbuf.init_object(); zbuf.set_str(0, "n", std::string(zone_name)); zbuf.set_str(0, "t", "zone");
             client_->put_node_async(local_cluster_id_, zid, zbuf.move_to_string()).get();
             add_index(EntityType::Zone, "n", zone_name, zid);
+            add_index(EntityType::Zone, "id", "1", zid);
             
             snowflake_id_t uid = make_id(EntityType::User, 1);
             lite3cpp::Buffer ubuf; ubuf.init_object(); 
@@ -168,6 +169,7 @@ namespace irods::catalog {
             ubuf.set_i64(0, "id", 1);
             client_->put_node_async(local_cluster_id_, uid, ubuf.move_to_string()).get();
             add_index(EntityType::User, "n", admin_name, uid);
+            add_index(EntityType::User, "id", "1", uid);
             add_edge(zid, "HAS_USER", 1.0, uid);
 
             // Bootstrap default groups
@@ -179,6 +181,7 @@ namespace irods::catalog {
             gbuf_public.set_i64(0, "id", 2);
             client_->put_node_async(local_cluster_id_, gid_public, gbuf_public.move_to_string()).get();
             add_index(EntityType::User, "n", "public", gid_public);
+            add_index(EntityType::User, "id", "2", gid_public);
             add_edge(zid, "HAS_USER", 1.0, gid_public);
 
             snowflake_id_t gid_admin = make_id(EntityType::User, 3);
@@ -189,6 +192,7 @@ namespace irods::catalog {
             gbuf_admin.set_i64(0, "id", 3);
             client_->put_node_async(local_cluster_id_, gid_admin, gbuf_admin.move_to_string()).get();
             add_index(EntityType::User, "n", "rodsadmin", gid_admin);
+            add_index(EntityType::User, "id", "3", gid_admin);
             add_edge(zid, "HAS_USER", 1.0, gid_admin);
 
             // Add rods user to rodsadmin group
@@ -211,6 +215,7 @@ namespace irods::catalog {
             cbuf.set_i64(0, "id", 1);
             client_->put_node_async(local_cluster_id_, rcid, cbuf.move_to_string()).get();
             add_index(EntityType::Collection, "n", root_coll_name, rcid);
+            add_index(EntityType::Collection, "id", "1", rcid);
             add_edge(zid, "HAS_ROOT_COLL", 1.0, rcid);
             
             // home
@@ -219,6 +224,7 @@ namespace irods::catalog {
             cbuf.set_i64(0, "id", 2);
             client_->put_node_async(local_cluster_id_, hcid, cbuf.move_to_string()).get();
             add_index(EntityType::Collection, "n", home_coll_name, hcid);
+            add_index(EntityType::Collection, "id", "2", hcid);
             add_edge(rcid, "CONTAINS", 1.0, hcid);
             
             // public
@@ -227,6 +233,7 @@ namespace irods::catalog {
             cbuf.set_i64(0, "id", 3);
             client_->put_node_async(local_cluster_id_, pcid, cbuf.move_to_string()).get();
             add_index(EntityType::Collection, "n", public_coll_name, pcid);
+            add_index(EntityType::Collection, "id", "3", pcid);
             add_edge(hcid, "CONTAINS", 1.0, pcid);
 
             return SUCCESS();
@@ -273,6 +280,7 @@ namespace irods::catalog {
             buf.set_i64(0, "id", static_cast<int64_t>(obj.id));
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
             add_index(EntityType::DataObject, "n", obj.name, sid);
+            add_index(EntityType::DataObject, "id", std::to_string(obj.id), sid);
             if (!full_path.empty()) {
                 add_index(EntityType::DataObject, "path", full_path, sid);
             }
@@ -322,6 +330,12 @@ namespace irods::catalog {
                     lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
                     std::string name = safe_get_str(buf, 0, "n");
                     del_index(EntityType::DataObject, "n", name);
+                    std::string id_str = safe_get_str(buf, 0, "id");
+                    if (!id_str.empty()) {
+                        del_index(EntityType::DataObject, "id", id_str);
+                    } else if (id != 0) {
+                        del_index(EntityType::DataObject, "id", std::to_string(id));
+                    }
 
                     std::string path = safe_get_str(buf, 0, "p");
                     if (!path.empty()) {
@@ -558,6 +572,7 @@ namespace irods::catalog {
             buf.set_i64(0, "id", static_cast<int64_t>(coll.id));
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
             add_index(EntityType::Collection, "n", coll.name, sid);
+            add_index(EntityType::Collection, "id", std::to_string(coll.id), sid);
             if (coll.parent_id != 0) {
                 snowflake_id_t psid = make_id(EntityType::Collection, coll.parent_id);
                 #ifdef IRODS_SERVER
@@ -620,6 +635,12 @@ namespace irods::catalog {
                     lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
                     std::string path = safe_get_str(buf, 0, "n");
                     del_index(EntityType::Collection, "n", path);
+                    std::string id_str = safe_get_str(buf, 0, "id");
+                    if (!id_str.empty()) {
+                        del_index(EntityType::Collection, "id", id_str);
+                    } else if (coll_id != 0) {
+                        del_index(EntityType::Collection, "id", std::to_string(coll_id));
+                    }
 
                     // Delete incoming edges (CONTAINS, OWNS)
                     auto collections = client_->get_in_neighbors_async(local_cluster_id_, sid, "CONTAINS").get();
@@ -672,6 +693,7 @@ namespace irods::catalog {
             buf.set_str(0, "mt", resc.modify_ts);
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
             add_index(EntityType::Resource, "n", resc.name, sid);
+            add_index(EntityType::Resource, "id", std::to_string(resc.id), sid);
             snowflake_id_t zid = make_id(EntityType::Zone, 1);
             add_edge(zid, "HAS_RESC", 1.0, sid);
             out_id = sid; return SUCCESS();
@@ -712,6 +734,8 @@ namespace irods::catalog {
                     lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
                     std::string name = safe_get_str(buf, 0, "n");
                     del_index(EntityType::Resource, "n", name);
+                    std::string id_str = safe_get_str(buf, 0, "id");
+                    if (!id_str.empty()) del_index(EntityType::Resource, "id", id_str);
                 } catch (...) {}
             }
             client_->del_node_async(local_cluster_id_, sid).get();
@@ -819,6 +843,7 @@ namespace irods::catalog {
             buf.set_i64(0, "id", static_cast<int64_t>(usr.id));
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
             add_index(EntityType::User, "n", usr.name, sid);
+            add_index(EntityType::User, "id", std::to_string(usr.id), sid);
             snowflake_id_t zid = make_id(EntityType::Zone, 1);
             add_edge(zid, "HAS_USER", 1.0, sid);
             out_id = usr.id; return SUCCESS();
@@ -829,6 +854,14 @@ namespace irods::catalog {
                 snowflake_id_t zid = make_id(EntityType::Zone, 1);
                 del_edge(zid, "HAS_USER", 1.0, uid);
                 del_index(EntityType::User, "n", user_name);
+                std::string payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
+                if (!payload.empty()) {
+                    try {
+                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        std::string id_str = safe_get_str(buf, 0, "id");
+                        if (!id_str.empty()) del_index(EntityType::User, "id", id_str);
+                    } catch (...) {}
+                }
                 client_->del_node_async(local_cluster_id_, uid).get();
             }
             return SUCCESS(); 
@@ -1340,22 +1373,11 @@ namespace irods::catalog {
                     }
                 }
 
-                if (effective_root_type.empty() && !ast.projections.empty()) {
-                    const auto& first_proj = ast.projections[0];
-                    if (const auto* col = boost::get<irods::experimental::genquery2::column>(&first_proj)) {
-                        auto it = compiler::COLUMN_NAME_MAP.find(col->name);
-                        if (it != compiler::COLUMN_NAME_MAP.end()) {
-                            effective_root_type = it->second.node_type;
-                        }
-                    } 
-                }
-
-                if (effective_root_type.empty()) {
-                    effective_root_type = "DataObject";
-                }
-
                 compiler::Gq2ToL3kvgCompiler compiler;
                 std::string query_json = compiler.compile(ast, effective_root_type);
+                if (effective_root_type.empty()) {
+                    effective_root_type = compiler.get_entry_type();
+                }
 
             #ifdef IRODS_SERVER
             rodsLog(LOG_NOTICE, "L3_CATALOG: Executing Query with root_type [%s] and [%zu] starting nodes: %s", effective_root_type.c_str(), sn.size(), query_json.c_str());
@@ -1913,6 +1935,7 @@ namespace irods::catalog {
     irods::error CatalogFacade::apply_atomic_operations(const std::vector<irods::experimental::dml::operation_type>& ops) { return pImpl_->apply_atomic_operations(ops); }
     irods::error CatalogFacade::get_next_sequence_value(std::string_view seq_name, uint64_t& out_val) { return pImpl_->get_next_sequence_value(seq_name, out_val); }
     snowflake_id_t CatalogFacade::make_id(EntityType type, uint64_t irods_id) { return pImpl_->make_id(type, irods_id); }
+    snowflake_id_t CatalogFacade::resolve_id_from_index(EntityType type, std::string_view attr, std::string_view value) { return pImpl_->resolve_id_from_index(type, attr, value); }
 
     l3kvg::RemoteL3KVClient* CatalogFacade::get_client() const { return pImpl_->get_client(); }
     uint16_t CatalogFacade::get_cluster_id() const { return pImpl_->get_cluster_id(); }

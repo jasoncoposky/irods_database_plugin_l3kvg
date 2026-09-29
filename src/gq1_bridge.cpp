@@ -258,29 +258,70 @@ namespace irods::catalog::bridge {
 
             if (std::regex_match(cond, match, eq_regex)) {
                 std::string literal = unescape_sql_literal(match[1].str());
-                int priority = -1;
-                if (inx == COL_DATA_NAME || inx == COL_D_DATA_ID) priority = 4;
-                else if (inx == COL_COLL_NAME || inx == COL_COLL_ID) priority = 3;
-                else if (inx == COL_COLL_PARENT_NAME) priority = 2;
-                else if (inx == COL_USER_NAME || inx == COL_USER_ID || inx == COL_R_RESC_NAME || inx == COL_R_RESC_ID) priority = 1;
-                else if (inx == COL_ZONE_NAME || inx == COL_ZONE_ID) priority = -1;
-
-                if (priority > best_start_priority && _catalog != nullptr) {
-                    if (inx == COL_COLL_PARENT_NAME) {
-                        snowflake_id_t parent_sid = 0; EntityType type;
-                        if (_catalog->resolve_path(literal, parent_sid, type).ok()) {
-                            auto child_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), parent_sid, "CONTAINS", 0.0).get();
-                            _starting_nodes = std::move(child_nodes);
-                            resolved_start = true;
-                            best_start_priority = priority;
-                        }
-                    } else {
+                if (inx == COL_DATA_ACCESS_DATA_ID || inx == COL_D_DATA_ID) {
+                    if (_catalog != nullptr && best_start_priority < 4) {
+                        try {
+                            uint64_t data_id = std::stoull(literal);
+                            snowflake_id_t sid = _catalog->make_id(EntityType::DataObject, data_id);
+                            if (sid) {
+                                _starting_nodes.clear();
+                                _starting_nodes.push_back(sid);
+                                resolved_start = true;
+                                best_start_priority = 4;
+                            }
+                        } catch (...) {}
+                    }
+                } else if (inx == COL_COLL_ACCESS_COLL_ID || inx == COL_COLL_ID) {
+                    if (_catalog != nullptr && best_start_priority < 3) {
+                        try {
+                            uint64_t coll_id = std::stoull(literal);
+                            snowflake_id_t sid = _catalog->make_id(EntityType::Collection, coll_id);
+                            if (sid) {
+                                _starting_nodes.clear();
+                                _starting_nodes.push_back(sid);
+                                resolved_start = true;
+                                best_start_priority = 3;
+                            }
+                        } catch (...) {}
+                    }
+                } else if (inx == COL_DATA_NAME) {
+                    if (_catalog != nullptr && best_start_priority < 4) {
                         snowflake_id_t sid = 0; EntityType type;
                         if (_catalog->resolve_path(literal, sid, type).ok()) {
                             _starting_nodes.clear();
                             _starting_nodes.push_back(sid);
                             resolved_start = true;
-                            best_start_priority = priority;
+                            best_start_priority = 4;
+                        }
+                    }
+                } else if (inx == COL_COLL_NAME) {
+                    if (_catalog != nullptr && best_start_priority < 3) {
+                        snowflake_id_t sid = 0; EntityType type;
+                        if (_catalog->resolve_path(literal, sid, type).ok()) {
+                            _starting_nodes.clear();
+                            _starting_nodes.push_back(sid);
+                            resolved_start = true;
+                            best_start_priority = 3;
+                        }
+                    }
+                } else if (inx == COL_COLL_PARENT_NAME) {
+                    if (_catalog != nullptr && best_start_priority < 2) {
+                        snowflake_id_t parent_sid = 0; EntityType type;
+                        if (_catalog->resolve_path(literal, parent_sid, type).ok()) {
+                            auto child_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), parent_sid, "CONTAINS", 0.0).get();
+                            _starting_nodes = std::move(child_nodes);
+                            resolved_start = true;
+                            best_start_priority = 2;
+                        }
+                    }
+                } else if (inx == COL_USER_NAME || inx == COL_R_RESC_NAME) {
+                    if (_catalog != nullptr && best_start_priority < 1) {
+                        snowflake_id_t sid = 0; EntityType type;
+                        if (_catalog->resolve_path(literal, sid, type).ok()) {
+                            _starting_nodes.clear();
+                            _starting_nodes.push_back(sid);
+                            resolved_start = true;
+                            best_start_priority = 1;
                         }
                     }
                 }

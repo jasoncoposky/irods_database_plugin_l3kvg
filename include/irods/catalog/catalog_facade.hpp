@@ -150,6 +150,7 @@ namespace irods::catalog {
         irods::error apply_atomic_operations(const std::vector<irods::experimental::dml::operation_type>& ops);
         irods::error get_next_sequence_value(std::string_view seq_name, uint64_t& out_val);
         snowflake_id_t make_id(EntityType type, uint64_t irods_id);
+        snowflake_id_t resolve_id_from_index(EntityType type, std::string_view attr, std::string_view value);
 
         l3kvg::RemoteL3KVClient* get_client() const;
         uint16_t get_cluster_id() const;
