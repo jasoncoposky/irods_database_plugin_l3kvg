@@ -432,6 +432,17 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
             }
         }
 
+        // Ensure trailing slash is removed if any (unless just "/")
+        if (coll.name.size() > 1 && coll.name.back() == '/') {
+            coll.name.pop_back();
+        }
+        if (coll.parent_name.empty() && coll.name != "/") {
+            size_t last_slash = coll.name.find_last_of('/');
+            if (last_slash != std::string::npos) {
+                coll.parent_name = (last_slash == 0) ? "/" : coll.name.substr(0, last_slash);
+            }
+        }
+
         if (coll.parent_id == 0 && !coll.parent_name.empty()) {
             irods::catalog::EntityType type;
             irods::catalog::snowflake_id_t sid;
@@ -445,19 +456,21 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
             }
         }
         
-        // Normal collections have empty type string, but some iRODS layers pass "collection"
-        if (coll.type == "collection") coll.type = "";
-        
-        // Ensure trailing slash is removed if any (unless just "/")
-        if (coll.name.size() > 1 && coll.name.back() == '/') {
-            coll.name.pop_back();
-        }
-        if (coll.parent_name.empty() && coll.name != "/") {
-            size_t last_slash = coll.name.find_last_of('/');
-            if (last_slash != std::string::npos) {
-                coll.parent_name = (last_slash == 0) ? "/" : coll.name.substr(0, last_slash);
+        // Inspect condInput for special collection keywords
+        for (int i = 0; i < _info->condInput.len; ++i) {
+            std::string kw = safe_string(_info->condInput.keyWord[i]);
+            std::string val = safe_string(_info->condInput.value[i]);
+            if (kw == "collectionType" || kw == "coll_type" || kw == "collType") {
+                coll.type = val;
+            } else if (kw == "collectionInfo1" || kw == "coll_info1" || kw == "collInfo1") {
+                coll.info1 = val;
+            } else if (kw == "collectionInfo2" || kw == "coll_info2" || kw == "collInfo2") {
+                coll.info2 = val;
             }
         }
+
+        // Normal collections have empty type string, but some iRODS layers pass "collection"
+        if (coll.type == "collection") coll.type = "";
 
         if (coll.owner_zone.empty()) {
             const auto& config = irods::server_properties::instance().map().get_json();
@@ -485,8 +498,54 @@ irods::error db_mod_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_coll_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null collInfo_t");
+        
+        uint64_t coll_id = (uint64_t)_info->collId;
+        if (coll_id == 0 && _info->collName && strlen(_info->collName) > 0) {
+            std::string coll_name = _info->collName;
+            if (coll_name.size() > 1 && coll_name.back() == '/') {
+                coll_name.pop_back();
+            }
+            irods::catalog::snowflake_id_t sid = 0;
+            irods::catalog::EntityType type;
+            if (g_catalog->resolve_path(coll_name, sid, type).ok()) {
+                auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
+                if (!payload.empty()) {
+                    try {
+                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        coll_id = buf.get_i64(0, "id");
+                    } catch (...) {}
+                }
+                if (coll_id == 0) coll_id = sid;
+            }
+        }
+
+        if (coll_id == 0) {
+            rodsLog(LOG_ERROR, "L3_PLUGIN: db_mod_coll_op: No collection ID or name provided");
+            return ERROR(SYS_INVALID_INPUT_PARAM, "No collection ID or name provided");
+        }
+
+        if (_info->collType && strlen(_info->collType) > 0) {
+            std::string val = strcmp(_info->collType, "NULL_SPECIAL_VALUE") == 0 ? "" : _info->collType;
+            g_catalog->modify_collection(coll_id, "collectionType", val);
+        }
+        if (_info->collInfo1 && strlen(_info->collInfo1) > 0) {
+            std::string val = strcmp(_info->collInfo1, "NULL_SPECIAL_VALUE") == 0 ? "" : _info->collInfo1;
+            g_catalog->modify_collection(coll_id, "collectionInfo1", val);
+        }
+        if (_info->collInfo2 && strlen(_info->collInfo2) > 0) {
+            std::string val = strcmp(_info->collInfo2, "NULL_SPECIAL_VALUE") == 0 ? "" : _info->collInfo2;
+            g_catalog->modify_collection(coll_id, "collectionInfo2", val);
+        }
+        if (_info->collModify && strlen(_info->collModify) > 0) {
+            g_catalog->modify_collection(coll_id, "collectionMtime", _info->collModify);
+        }
+        if (_info->collComments && strlen(_info->collComments) > 0) {
+            std::string val = strcmp(_info->collComments, "NULL_SPECIAL_VALUE") == 0 ? "" : _info->collComments;
+            g_catalog->modify_collection(coll_id, "collComments", val);
+        }
+
         for (int i = 0; i < _info->condInput.len; ++i) {
-            g_catalog->modify_collection((uint64_t)_info->collId, 
+            g_catalog->modify_collection(coll_id, 
                 safe_string(_info->condInput.keyWord[i]), 
                 safe_string(_info->condInput.value[i]));
         }

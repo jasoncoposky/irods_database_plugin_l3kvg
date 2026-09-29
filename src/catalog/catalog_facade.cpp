@@ -573,8 +573,21 @@ namespace irods::catalog {
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
             add_index(EntityType::Collection, "n", coll.name, sid);
             add_index(EntityType::Collection, "id", std::to_string(coll.id), sid);
+            std::string parent_name = coll.parent_name;
+            if (parent_name.empty() && coll.name != "/" && !coll.name.empty()) {
+                size_t last_slash = coll.name.find_last_of('/');
+                if (last_slash != std::string::npos && last_slash > 0) {
+                    parent_name = coll.name.substr(0, last_slash);
+                }
+            }
+            snowflake_id_t psid = 0;
             if (coll.parent_id != 0) {
-                snowflake_id_t psid = make_id(EntityType::Collection, coll.parent_id);
+                psid = make_id(EntityType::Collection, coll.parent_id);
+            } else if (!parent_name.empty() && parent_name != "/") {
+                psid = resolve_id_from_index(EntityType::Collection, "n", parent_name);
+            }
+
+            if (psid != 0) {
                 #ifdef IRODS_SERVER
                 rodsLog(LOG_NOTICE, "L3_CATALOG: Creating CONTAINS edge (Coll-to-Coll): %016llx -- CONTAINS --> %016llx", (unsigned long long)psid, (unsigned long long)sid);
                 #endif
@@ -659,19 +672,26 @@ namespace irods::catalog {
         irods::error modify_collection(coll_id_t coll_id, std::string_view prop, std::string_view value) { 
             snowflake_id_t sid = make_id(EntityType::Collection, coll_id);
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
-            if (!payload.empty()) {
-                 lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
-                 
-                 std::string key(prop);
-                 if (prop == "inheritance") key = "i";
-                 else if (prop == "comment" || prop == "coll_comments") key = "m";
-                 else if (prop == "type" || prop == "coll_type") key = "t";
-                 else if (prop == "info1" || prop == "coll_info1") key = "c1";
-                 else if (prop == "info2" || prop == "coll_info2") key = "c2";
-                 
-                 buf.set_str(0, key, std::string(value));
-                 client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
+            if (payload.empty()) {
+                payload = client_->get_node_payload_async(local_cluster_id_, coll_id).get();
+                if (!payload.empty()) {
+                    sid = coll_id;
+                } else {
+                    return ERROR(-1, "Collection not found for modify");
+                }
             }
+            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            
+            std::string key(prop);
+            if (prop == "inheritance") key = "i";
+            else if (prop == "comment" || prop == "coll_comments" || prop == "collComments") key = "m";
+            else if (prop == "type" || prop == "coll_type" || prop == "collType" || prop == "collectionType") key = "t";
+            else if (prop == "info1" || prop == "coll_info1" || prop == "collInfo1" || prop == "collectionInfo1") key = "c1";
+            else if (prop == "info2" || prop == "coll_info2" || prop == "collInfo2" || prop == "collectionInfo2") key = "c2";
+            else if (prop == "modify_ts" || prop == "collModify" || prop == "collectionMtime" || prop == "mtime") key = "mt";
+            
+            buf.set_str(0, key, std::string(value));
+            client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
             return SUCCESS(); 
         }
 
@@ -977,11 +997,13 @@ namespace irods::catalog {
                 return SUCCESS(); // Target not found, let it proceed
             }
 
-            // Check user priv level
+            // Check user priv level and extract username
+            std::string user_name;
             std::string user_payload = client_->get_node_payload_async(local_cluster_id_, user_sid).get();
             if (!user_payload.empty()) {
                 try {
                     lite3cpp::Buffer buf(std::vector<uint8_t>(user_payload.begin(), user_payload.end()));
+                    user_name = safe_get_str(buf, 0, "n");
                     int priv = static_cast<int>(buf.get_i64(0, "p"));
                     if (priv >= 5) { // rodsadmin
                         allowed = true;
@@ -990,45 +1012,70 @@ namespace irods::catalog {
                 } catch (...) {}
             }
 
+            // Target owner check fast-path
+            try {
+                lite3cpp::Buffer tbuf(std::vector<uint8_t>(t_payload.begin(), t_payload.end()));
+                std::string target_owner = safe_get_str(tbuf, 0, "o");
+                if (!user_name.empty() && user_name == target_owner) {
+                    allowed = true;
+                    return SUCCESS();
+                }
+            } catch (...) {}
+
             // Gather all principals (user + groups)
             std::vector<snowflake_id_t> principals = {user_sid};
             auto groups = client_->get_neighbors_async(local_cluster_id_, user_sid, "MEMBER_OF", 0.0).get();
             principals.insert(principals.end(), groups.begin(), groups.end());
 
-            for (auto pid : principals) {
-                auto access_nodes = client_->get_neighbors_async(local_cluster_id_, pid, "HAS_ACCESS", 0.0).get();
-                for (auto aid : access_nodes) {
-                    auto target_nodes = client_->get_neighbors_async(local_cluster_id_, aid, "FOR_OBJECT", 0.0).get();
-                    for (auto tid : target_nodes) {
-                        // Check if tid matches target_sid
-                        if (tid == target_sid) {
-                             // Fetch access level
-                             std::string payload = client_->get_node_payload_async(local_cluster_id_, aid).get();
-                             if (!payload.empty()) {
-                                 try {
-                                     lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
-                                     std::string actual_level = safe_get_str(buf, 0, "l");
-                                     if (actual_level.starts_with("admin:")) actual_level = actual_level.substr(6);
+            auto check_principal_access = [&](snowflake_id_t tid) -> bool {
+                for (auto pid : principals) {
+                    std::string aid_uuid = std::to_string(pid) + ":" + std::to_string(tid);
+                    snowflake_id_t aid = SnowflakeID::create(local_cluster_id_, aid_uuid);
+                    std::string payload = client_->get_node_payload_async(local_cluster_id_, aid).get();
+                    if (!payload.empty()) {
+                        try {
+                            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                            std::string actual_level = safe_get_str(buf, 0, "l");
+                            if (actual_level.starts_with("admin:")) actual_level = actual_level.substr(6);
 
-                                     // Strict level check
-                                     if (actual_level == "own") {
-                                         allowed = true;
-                                         return SUCCESS();
-                                     }
-                                     if (actual_level == "write" && (level == "write" || level == "read")) {
-                                         allowed = true;
-                                         return SUCCESS();
-                                     }
-                                     if (actual_level == "read" && level == "read") {
-                                         allowed = true;
-                                         return SUCCESS();
-                                     }
-                                 } catch (...) {}
-                             }
-                        }
+                            // Strict level check
+                            if (actual_level == "own") return true;
+                            if (actual_level == "write" && (level == "write" || level == "read")) return true;
+                            if (actual_level == "read" && level == "read") return true;
+                        } catch (...) {}
                     }
                 }
+                return false;
+            };
+
+            // Direct check on target_sid
+            if (check_principal_access(target_sid)) {
+                allowed = true;
+                return SUCCESS();
             }
+
+            // Check parent collection if target is in a collection (e.g. data object or subcollection)
+            auto parents = client_->get_in_neighbors_async(local_cluster_id_, target_sid, "CONTAINS").get();
+            for (auto psid : parents) {
+                // Check parent owner
+                std::string p_payload = client_->get_node_payload_async(local_cluster_id_, psid).get();
+                if (!p_payload.empty()) {
+                    try {
+                        lite3cpp::Buffer pbuf(std::vector<uint8_t>(p_payload.begin(), p_payload.end()));
+                        std::string p_owner = safe_get_str(pbuf, 0, "o");
+                        if (!user_name.empty() && user_name == p_owner) {
+                            allowed = true;
+                            return SUCCESS();
+                        }
+                    } catch (...) {}
+                }
+                // Check parent access
+                if (check_principal_access(psid)) {
+                    allowed = true;
+                    return SUCCESS();
+                }
+            }
+
             return SUCCESS(); 
         }
         irods::error check_permission_to_modify_data_object(snowflake_id_t user_sid, snowflake_id_t target_sid, bool& allowed) {
