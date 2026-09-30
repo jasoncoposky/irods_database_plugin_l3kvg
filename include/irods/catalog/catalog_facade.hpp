@@ -144,6 +144,9 @@ namespace irods::catalog {
 
         // Rule Operations
         irods::error register_rule_execution(const rule_exec& re, uint64_t& out_id);
+        irods::error get_rule_execution(uint64_t id, rule_exec& out_re);
+        irods::error lock_rule_execution(uint64_t id, std::string_view lock_host, int lock_host_pid);
+        irods::error unlock_rule_execution(uint64_t id);
         irods::error delete_rule_execution(uint64_t id);
 
         // Specific Query Operations

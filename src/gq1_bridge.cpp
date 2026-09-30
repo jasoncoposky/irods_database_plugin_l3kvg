@@ -188,6 +188,51 @@ namespace irods::catalog::bridge {
                 case COL_DATA_USER_NAME: return "DATA_USER_NAME";
                 case COL_DATA_USER_ZONE: return "DATA_USER_ZONE";
 
+                case COL_RULE_EXEC_ID: return "RULE_EXEC_ID";
+                case COL_RULE_EXEC_NAME: return "RULE_EXEC_NAME";
+                case COL_RULE_EXEC_REI_FILE_PATH: return "RULE_EXEC_REI_FILE_PATH";
+                case COL_RULE_EXEC_USER_NAME: return "RULE_EXEC_USER_NAME";
+                case COL_RULE_EXEC_ADDRESS: return "RULE_EXEC_ADDRESS";
+                case COL_RULE_EXEC_TIME: return "RULE_EXEC_TIME";
+                case COL_RULE_EXEC_FREQUENCY: return "RULE_EXEC_FREQUENCY";
+                case COL_RULE_EXEC_PRIORITY: return "RULE_EXEC_PRIORITY";
+                case COL_RULE_EXEC_ESTIMATED_EXE_TIME: return "RULE_EXEC_ESTIMATED_EXE_TIME";
+                case COL_RULE_EXEC_NOTIFICATION_ADDR: return "RULE_EXEC_NOTIFICATION_ADDR";
+                case COL_RULE_EXEC_LAST_EXE_TIME: return "RULE_EXEC_LAST_EXE_TIME";
+                case COL_RULE_EXEC_STATUS: return "RULE_EXEC_STATUS";
+                case COL_RULE_EXEC_CONTEXT: return "RULE_EXEC_CONTEXT";
+                case COL_RULE_EXEC_LOCK_HOST: return "RULE_EXEC_LOCK_HOST";
+                case COL_RULE_EXEC_LOCK_HOST_PID: return "RULE_EXEC_LOCK_HOST_PID";
+                case COL_RULE_EXEC_LOCK_TIME: return "RULE_EXEC_LOCK_TIME";
+
+                case COL_META_DATA_ATTR_NAME: return "META_DATA_ATTR_NAME";
+                case COL_META_DATA_ATTR_VALUE: return "META_DATA_ATTR_VALUE";
+                case COL_META_DATA_ATTR_UNITS: return "META_DATA_ATTR_UNITS";
+                case COL_META_DATA_ATTR_ID: return "META_DATA_ATTR_ID";
+                case COL_META_DATA_CREATE_TIME: return "META_DATA_CREATE_TIME";
+                case COL_META_DATA_MODIFY_TIME: return "META_DATA_MODIFY_TIME";
+
+                case COL_META_COLL_ATTR_NAME: return "META_COLL_ATTR_NAME";
+                case COL_META_COLL_ATTR_VALUE: return "META_COLL_ATTR_VALUE";
+                case COL_META_COLL_ATTR_UNITS: return "META_COLL_ATTR_UNITS";
+                case COL_META_COLL_ATTR_ID: return "META_COLL_ATTR_ID";
+                case COL_META_COLL_CREATE_TIME: return "META_COLL_CREATE_TIME";
+                case COL_META_COLL_MODIFY_TIME: return "META_COLL_MODIFY_TIME";
+
+                case COL_META_RESC_ATTR_NAME: return "META_RESC_ATTR_NAME";
+                case COL_META_RESC_ATTR_VALUE: return "META_RESC_ATTR_VALUE";
+                case COL_META_RESC_ATTR_UNITS: return "META_RESC_ATTR_UNITS";
+                case COL_META_RESC_ATTR_ID: return "META_RESC_ATTR_ID";
+                case COL_META_RESC_CREATE_TIME: return "META_RESC_CREATE_TIME";
+                case COL_META_RESC_MODIFY_TIME: return "META_RESC_MODIFY_TIME";
+
+                case COL_META_USER_ATTR_NAME: return "META_USER_ATTR_NAME";
+                case COL_META_USER_ATTR_VALUE: return "META_USER_ATTR_VALUE";
+                case COL_META_USER_ATTR_UNITS: return "META_USER_ATTR_UNITS";
+                case COL_META_USER_ATTR_ID: return "META_USER_ATTR_ID";
+                case COL_META_USER_CREATE_TIME: return "META_USER_CREATE_TIME";
+                case COL_META_USER_MODIFY_TIME: return "META_USER_MODIFY_TIME";
+
                 default: return "";
             }
         };
@@ -204,15 +249,39 @@ namespace irods::catalog::bridge {
         };
 
         // Determine likely root alias for type-safe resolution
+        auto get_entity_for_inx = [](int inx) -> std::pair<std::string, int> {
+            if (inx >= 1000 && inx < 1100) return {"Rule", 10};
+            if (inx >= 400 && inx < 500)   return {"DataObject", 5};
+            if (inx >= 500 && inx < 600)   return {"Collection", 4};
+            if (inx >= 1300 && inx < 1310) return {"Collection", 4};
+            if (inx >= 300 && inx < 400)   return {"Resource", 3};
+            if (inx >= 200 && inx < 300)   return {"User", 3};
+            if (inx >= 100 && inx < 200)   return {"Zone", 2};
+            if (inx >= 600 && inx < 700)   return {"Metadata", 1};
+            return {"", 0};
+        };
+
         std::string likely_root = "DataObject";
+        int best_prio = 0;
+
         for (int i = 0; i < _inp->selectInp.len; ++i) {
-            int inx = _inp->selectInp.inx[i];
-            int pure_inx = get_pure_inx(inx);
-            if (pure_inx >= 500 && pure_inx < 600) { likely_root = "Collection"; break; }
-            if (pure_inx >= 1300 && pure_inx < 1310) { likely_root = "Collection"; break; }
-            if ((pure_inx >= 300 && pure_inx < 400) || (pure_inx >= 600 && pure_inx < 700)) { likely_root = "Resource"; break; }
-            if (pure_inx >= 200 && pure_inx < 300) { likely_root = "User"; break; }
-            if (pure_inx >= 100 && pure_inx < 200) { likely_root = "Zone"; break; }
+            int pure_inx = get_pure_inx(_inp->selectInp.inx[i]);
+            auto [entity, prio] = get_entity_for_inx(pure_inx);
+            if (prio > best_prio) {
+                best_prio = prio;
+                likely_root = entity;
+            }
+        }
+        for (int i = 0; i < _inp->sqlCondInp.len; ++i) {
+            int pure_inx = get_pure_inx(_inp->sqlCondInp.inx[i]);
+            auto [entity, prio] = get_entity_for_inx(pure_inx);
+            if (prio > best_prio) {
+                best_prio = prio;
+                likely_root = entity;
+            }
+        }
+        if (likely_root.empty()) {
+            likely_root = "DataObject";
         }
 
         // 1. Projections
@@ -251,9 +320,23 @@ namespace irods::catalog::bridge {
         // 2. Conditions & Path Resolution
         bool resolved_start = false;
         int best_start_priority = -1;
-        std::regex eq_regex(R"(^\s*=\s*'(.*)'\s*$)");
-        std::regex ne_regex(R"(^\s*!=\s*'(.*)'\s*$)");
-        std::regex like_regex(R"(^\s*like\s*'(.*)'\s*$)", std::regex_constants::icase);
+        auto extract_literal = [](const std::smatch& m) -> std::string {
+            if (m[1].matched) {
+                return unescape_sql_literal(m[1].str());
+            }
+            if (m[2].matched) {
+                return m[2].str();
+            }
+            return "";
+        };
+
+        std::regex eq_regex(R"(^\s*=\s*(?:'((?:[^'\\]|\\.|'')*)'|(\S+))\s*$)");
+        std::regex ne_regex(R"(^\s*(?:!=|<>)\s*(?:'((?:[^'\\]|\\.|'')*)'|(\S+))\s*$)");
+        std::regex le_regex(R"(^\s*<=\s*(?:'((?:[^'\\]|\\.|'')*)'|(\S+))\s*$)");
+        std::regex ge_regex(R"(^\s*>=\s*(?:'((?:[^'\\]|\\.|'')*)'|(\S+))\s*$)");
+        std::regex lt_regex(R"(^\s*<\s*(?:'((?:[^'\\]|\\.|'')*)'|(\S+))\s*$)");
+        std::regex gt_regex(R"(^\s*>\s*(?:'((?:[^'\\]|\\.|'')*)'|(\S+))\s*$)");
+        std::regex like_regex(R"(^\s*like\s*(?:'((?:[^'\\]|\\.|'')*)'|(\S+))\s*$)", std::regex_constants::icase);
         std::regex eq_or_like_regex(R"(^\s*=\s*'(.*?)'\s*\|\|\s*like\s*'(.*)'\s*$)", std::regex_constants::icase);
         std::regex like_or_eq_regex(R"(^\s*like\s*'(.*?)'\s*\|\|\s*=\s*'(.*)'\s*$)", std::regex_constants::icase);
         std::regex parent_regex(R"(^\s*parent_of\s*'(.*)'\s*$)");
@@ -268,7 +351,7 @@ namespace irods::catalog::bridge {
             std::string cond(_inp->sqlCondInp.value[i]);
             std::smatch match;
             if (cond.find("||") == std::string::npos && std::regex_match(cond, match, eq_regex)) {
-                std::string literal = unescape_sql_literal(match[1].str());
+                std::string literal = extract_literal(match);
                 if (inx == COL_COLL_NAME) {
                     target_coll_name = literal;
                 } else if (inx == COL_DATA_NAME) {
@@ -295,7 +378,7 @@ namespace irods::catalog::bridge {
             std::smatch match;
 
             if (cond.find("||") == std::string::npos && std::regex_match(cond, match, eq_regex)) {
-                std::string literal = unescape_sql_literal(match[1].str());
+                std::string literal = extract_literal(match);
                 if (inx == COL_DATA_ACCESS_DATA_ID || inx == COL_D_DATA_ID) {
                     if (_catalog != nullptr && best_start_priority < 4) {
                         try {
@@ -361,6 +444,17 @@ namespace irods::catalog::bridge {
                             resolved_start = true;
                             best_start_priority = 1;
                         }
+                    }
+                } else if (inx == COL_RULE_EXEC_ID) {
+                    if (_catalog != nullptr && best_start_priority < 4) {
+                        try {
+                            uint64_t rid_num = std::stoull(literal);
+                            snowflake_id_t sid = _catalog->make_id(EntityType::Rule, rid_num);
+                            _starting_nodes.clear();
+                            _starting_nodes.push_back(sid);
+                            resolved_start = true;
+                            best_start_priority = 4;
+                        } catch (...) {}
                     }
                 } else if (inx == COL_ZONE_NAME || inx == COL_ZONE_ID) {
                     if (_catalog != nullptr && best_start_priority < 1) {
@@ -444,13 +538,20 @@ namespace irods::catalog::bridge {
             _starting_nodes = std::move(user_nodes);
             resolved_start = true;
             rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu User starting nodes from Zone HAS_USER", _starting_nodes.size());
+        } else if (!resolved_start && likely_root == "Rule" && _starting_nodes.empty() && _catalog != nullptr) {
+            snowflake_id_t zid = _catalog->make_id(EntityType::Zone, 1);
+            auto rule_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), zid, "HAS_RULE", 0.0).get();
+            _starting_nodes = std::move(rule_nodes);
+            resolved_start = true;
+            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu Rule starting nodes from Zone HAS_RULE", _starting_nodes.size());
         }
 
         // Pass 2: Build conditions
         for (int i = 0; i < _inp->sqlCondInp.len; ++i) {
             int inx = _inp->sqlCondInp.inx[i];
+            int pure_inx = get_pure_inx(inx);
             std::string cond(_inp->sqlCondInp.value[i]);
-            std::string name = get_col_name(inx);
+            std::string name = get_col_name(pure_inx);
             
             rodsLog(LOG_NOTICE, "L3_BRIDGE: Raw Condition Received: index=%d (%s), value='%s'", inx, name.c_str(), cond.c_str());
 
@@ -483,12 +584,20 @@ namespace irods::catalog::bridge {
                         }
                         ast.conditions.push_back(std::move(or_cond));
                     }
+                } else if (std::regex_match(cond, match, le_regex)) {
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_less_than_or_equal_to(extract_literal(match))));
+                } else if (std::regex_match(cond, match, ge_regex)) {
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_greater_than_or_equal_to(extract_literal(match))));
+                } else if (std::regex_match(cond, match, lt_regex)) {
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_less_than(extract_literal(match))));
+                } else if (std::regex_match(cond, match, gt_regex)) {
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_greater_than(extract_literal(match))));
                 } else if (std::regex_match(cond, match, eq_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(unescape_sql_literal(match[1].str()))));
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(extract_literal(match))));
                 } else if (std::regex_match(cond, match, ne_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_not_equal(unescape_sql_literal(match[1].str()))));
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_not_equal(extract_literal(match))));
                 } else if (std::regex_match(cond, match, like_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_like(unescape_sql_literal(match[1].str()))));
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_like(extract_literal(match))));
                 } else if (std::regex_match(cond, match, parent_regex)) {
                     if (_catalog == nullptr) {
                         irods::experimental::filesystem::path p(match[1].str());
@@ -496,6 +605,8 @@ namespace irods::catalog::bridge {
                     } else if (!resolved_start || _starting_nodes.empty()) {
                         ast.conditions.push_back(gq2::condition(col, gq2::condition_equal("__NON_EXISTENT_PARENT_OF_PATH__")));
                     }
+                } else {
+                    rodsLog(LOG_WARNING, "L3_BRIDGE: Condition on column '%s' was NOT recognized: '%s'", name.c_str(), cond.c_str());
                 }
             }
         }
@@ -576,12 +687,21 @@ namespace irods::catalog::bridge {
                                      pure_inx == COL_SL_HOST_NAME || pure_inx == COL_SL_RESC_NAME ||
                                      pure_inx == COL_COLL_USER_NAME || pure_inx == COL_COLL_USER_ZONE ||
                                      pure_inx == COL_DATA_USER_NAME || pure_inx == COL_DATA_USER_ZONE ||
-                                     pure_inx == COL_RESC_USER_NAME || pure_inx == COL_RESC_USER_ZONE);
+                                     pure_inx == COL_RESC_USER_NAME || pure_inx == COL_RESC_USER_ZONE ||
+                                     pure_inx == COL_RULE_EXEC_NAME || pure_inx == COL_RULE_EXEC_REI_FILE_PATH ||
+                                     pure_inx == COL_RULE_EXEC_USER_NAME || pure_inx == COL_RULE_EXEC_ADDRESS ||
+                                     pure_inx == COL_RULE_EXEC_TIME || pure_inx == COL_RULE_EXEC_FREQUENCY ||
+                                     pure_inx == COL_RULE_EXEC_ESTIMATED_EXE_TIME || pure_inx == COL_RULE_EXEC_NOTIFICATION_ADDR ||
+                                     pure_inx == COL_RULE_EXEC_LAST_EXE_TIME || pure_inx == COL_RULE_EXEC_STATUS ||
+                                     pure_inx == COL_RULE_EXEC_CONTEXT || pure_inx == COL_RULE_EXEC_LOCK_HOST ||
+                                     pure_inx == COL_RULE_EXEC_LOCK_HOST_PID || pure_inx == COL_RULE_EXEC_LOCK_TIME);
 
                 if (val.empty() && pure_inx == COL_COLL_TYPE) {
                     val = "";
                 } else if (val.empty() && pure_inx == COL_D_EXPIRY) {
                     val = "00000000000";
+                } else if (val.empty() && pure_inx == COL_RULE_EXEC_PRIORITY) {
+                    val = "5";
                 } else if (val.empty()) {
                     if (is_string_col) {
                         val = ""; 

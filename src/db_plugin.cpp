@@ -1522,18 +1522,52 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
 
 irods::error db_get_delay_rule_info_op(irods::plugin_context& _ctx, const char* _rule_id, std::vector<std::string>* _out_info) {
     rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_get_delay_rule_info_op [%s]", safe_string(_rule_id).c_str());
+    if (!_rule_id || !_out_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null pointers");
+    uint64_t id = 0;
+    try { id = std::stoull(_rule_id); } catch (...) { return ERROR(SYS_INVALID_INPUT_PARAM, "invalid rule id"); }
+    irods::catalog::rule_exec re;
+    auto ret = g_catalog->get_rule_execution(id, re);
+    if (!ret.ok()) {
+        return ret;
+    }
+    _out_info->push_back(re.name);
+    _out_info->push_back(re.rei_file_path);
+    _out_info->push_back(re.user_name);
+    _out_info->push_back(re.address);
+    _out_info->push_back(re.exec_time);
+    _out_info->push_back(re.frequency);
+    _out_info->push_back(re.priority);
+    _out_info->push_back(re.last_exec_time);
+    _out_info->push_back(re.status);
+    _out_info->push_back(re.estimate);
+    _out_info->push_back(re.notification_addr);
+    _out_info->push_back(re.context);
     rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_get_delay_rule_info_op SUCCESS");
     return SUCCESS();
 }
 
-irods::error db_delay_rule_lock_op(irods::plugin_context& _ctx, const char* _rule_id, const char* _lock_id) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_delay_rule_lock_op rule [%s] lock [%s]", safe_string(_rule_id).c_str(), safe_string(_lock_id).c_str());
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_delay_rule_lock_op SUCCESS");
-    return SUCCESS();
+irods::error db_delay_rule_lock_op(irods::plugin_context& _ctx, const char* _rule_id, const char* _lock_host, int _lock_host_pid) {
+    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_delay_rule_lock_op rule [%s] host [%s] pid [%d]", safe_string(_rule_id).c_str(), safe_string(_lock_host).c_str(), _lock_host_pid);
+    if (!_rule_id || !_lock_host) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "null pointers");
+    uint64_t id = 0;
+    try { id = std::stoull(_rule_id); } catch (...) { return ERROR(SYS_INVALID_INPUT_PARAM, "invalid rule id"); }
+    auto ret = g_catalog->lock_rule_execution(id, safe_string(_lock_host), _lock_host_pid);
+    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_delay_rule_lock_op ret=%d", ret.code());
+    return ret;
 }
 
-irods::error db_delay_rule_unlock_op(irods::plugin_context& _ctx, const char* _rule_id, const char* _lock_id) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_delay_rule_unlock_op rule [%s] lock [%s]", safe_string(_rule_id).c_str(), safe_string(_lock_id).c_str());
+irods::error db_delay_rule_unlock_op(irods::plugin_context& _ctx, const char* _rule_ids) {
+    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_delay_rule_unlock_op [%s]", safe_string(_rule_ids).c_str());
+    if (!_rule_ids) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "null pointers");
+    try {
+        auto j = nlohmann::json::parse(_rule_ids);
+        for (const auto& item : j) {
+            uint64_t id = 0;
+            if (item.is_string()) id = std::stoull(item.get<std::string>());
+            else if (item.is_number()) id = item.get<uint64_t>();
+            if (id) g_catalog->unlock_rule_execution(id);
+        }
+    } catch (...) {}
     rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_delay_rule_unlock_op SUCCESS");
     return SUCCESS();
 }
@@ -1667,6 +1701,11 @@ irods::error db_check_quota_op(irods::plugin_context& _ctx, const char* _user, c
 
 irods::error db_calc_usage_and_quota_op(irods::plugin_context& _ctx) { return SUCCESS(); }
 
+irods::error db_del_unused_avus_op(irods::plugin_context& _ctx) {
+    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_unused_avus_op");
+    return SUCCESS();
+}
+
 // Rules
 irods::error db_reg_rule_exec_op(irods::plugin_context& _ctx, ruleExecSubmitInp_t* _info) {
     try {
@@ -1674,13 +1713,28 @@ irods::error db_reg_rule_exec_op(irods::plugin_context& _ctx, ruleExecSubmitInp_
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null ruleExecSubmitInp_t");
         irods::catalog::rule_exec re;
         re.id = 0; 
-        re.name = _info->ruleName; 
-        re.exec_time = _info->exeTime; 
-        re.priority = _info->priority;
+        re.name = safe_string(_info->ruleName); 
+        re.rei_file_path = safe_string(_info->reiFilePath);
+        re.user_name = safe_string(_info->userName);
+        re.address = safe_string(_info->exeAddress);
+        re.exec_time = safe_string(_info->exeTime); 
+        re.frequency = safe_string(_info->exeFrequency);
+        re.priority = (_info->priority && _info->priority[0] != '\0') ? _info->priority : "5";
+        re.last_exec_time = safe_string(_info->lastExecTime);
+        re.status = safe_string(_info->exeStatus);
+        re.estimate = safe_string(_info->estimateExeTime);
+        re.notification_addr = safe_string(_info->notificationAddr);
+
+        const char* ctx_val = getValByKey(&_info->condInput, RULE_EXECUTION_CONTEXT_KW);
+        if (ctx_val) {
+            re.context = ctx_val;
+        }
+
         g_catalog->get_next_sequence_value("R_RULE_EXEC", re.id);
-        uint64_t out_id;
+        uint64_t out_id = 0;
         auto ret = g_catalog->register_rule_execution(re, out_id);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_rule_exec_op SUCCESS");
+        rstrcpy(_info->ruleExecId, std::to_string(re.id).c_str(), NAME_LEN);
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_rule_exec_op SUCCESS (id=%s, prio=%s, exeTime=%s)", _info->ruleExecId, re.priority.c_str(), re.exec_time.c_str());
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_rule_exec_op EXCEPTION: %s", e.what());
@@ -2019,9 +2073,10 @@ public:
         add_operation<rodsLong_t>(irods::DATABASE_OP_CHECK_PERMISSION_TO_MODIFY_DATA_OBJECT, std::function<irods::error(irods::plugin_context&, rodsLong_t)>(db_check_permission_to_modify_data_object_op));
         add_operation<rodsLong_t, rodsLong_t>(irods::DATABASE_OP_UPDATE_TICKET_WRITE_BYTE_COUNT, std::function<irods::error(irods::plugin_context&, rodsLong_t, rodsLong_t)>(db_update_ticket_write_byte_count_op));
         add_operation<const char*>(irods::DATABASE_OP_DATA_OBJECT_FINALIZE, std::function<irods::error(irods::plugin_context&, const char*)>(db_data_object_finalize_op));
+        add_operation(irods::DATABASE_OP_DEL_UNUSED_AVUS, std::function<irods::error(irods::plugin_context&)>(db_del_unused_avus_op));
         add_operation<const char*, std::vector<std::string>*>(irods::DATABASE_OP_GET_DELAY_RULE_INFO, std::function<irods::error(irods::plugin_context&, const char*, std::vector<std::string>*)>(db_get_delay_rule_info_op));
-        add_operation<const char*, const char*>(irods::DATABASE_OP_DELAY_RULE_LOCK, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_delay_rule_lock_op));
-        add_operation<const char*, const char*>(irods::DATABASE_OP_DELAY_RULE_UNLOCK, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_delay_rule_unlock_op));
+        add_operation<const char*, const char*, int>(irods::DATABASE_OP_DELAY_RULE_LOCK, std::function<irods::error(irods::plugin_context&, const char*, const char*, int)>(db_delay_rule_lock_op));
+        add_operation<const char*>(irods::DATABASE_OP_DELAY_RULE_UNLOCK, std::function<irods::error(irods::plugin_context&, const char*)>(db_delay_rule_unlock_op));
         add_operation<const char*, const char*, const char*, int*>(irods::DATABASE_OP_CHECK_PASSWORD, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, int*)>(db_check_password_op));
         add_operation<const char*, const char*, char*>(irods::DATABASE_OP_MAKE_SESSION_TOKEN, std::function<irods::error(irods::plugin_context&, const char*, const char*, char*)>(db_make_session_token_op));
         add_operation<const char*, const char*, const char*, int*>(irods::DATABASE_OP_CHECK_SESSION_TOKEN, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, int*)>(db_check_session_token_op));

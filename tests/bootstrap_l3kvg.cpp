@@ -76,6 +76,9 @@ int main() {
     char hostname[1024];
     gethostname(hostname, 1024);
 
+    catalog.set_grid_configuration_value("delay_server:leader", hostname);
+    catalog.set_grid_configuration_value("delay_server:successor", "");
+
     std::cout << "Registering resources for " << hostname << "...\n";
     resource resc;
     resc.id = 40001;

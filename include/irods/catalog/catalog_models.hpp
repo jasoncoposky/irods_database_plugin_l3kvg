@@ -100,13 +100,22 @@ namespace irods::catalog {
     };
 
     struct rule_exec {
-        uint64_t id;
+        uint64_t id{0};
         std::string name;
+        std::string rei_file_path;
+        std::string user_name;
+        std::string address;
         std::string exec_time;
-        std::string priority;
+        std::string frequency;
+        std::string priority{"5"};
         std::string last_exec_time;
         std::string status;
         std::string estimate;
+        std::string notification_addr;
+        std::string context;
+        std::string lock_host;
+        std::string lock_host_pid;
+        std::string lock_time;
     };
 
 } // namespace irods::catalog

@@ -92,7 +92,24 @@ namespace irods::catalog::compiler {
         {COL_COLL_USER_NAME,      {"User", "n"}},
         {COL_COLL_USER_ZONE,      {"User", "z"}},
         {COL_DATA_USER_NAME,      {"User", "n"}},
-        {COL_DATA_USER_ZONE,      {"User", "z"}}
+        {COL_DATA_USER_ZONE,      {"User", "z"}},
+
+        {COL_RULE_EXEC_ID,                  {"Rule", "id"}},
+        {COL_RULE_EXEC_NAME,                {"Rule", "n"}},
+        {COL_RULE_EXEC_REI_FILE_PATH,       {"Rule", "rei"}},
+        {COL_RULE_EXEC_USER_NAME,           {"Rule", "u"}},
+        {COL_RULE_EXEC_ADDRESS,             {"Rule", "addr"}},
+        {COL_RULE_EXEC_TIME,                {"Rule", "e"}},
+        {COL_RULE_EXEC_FREQUENCY,           {"Rule", "freq"}},
+        {COL_RULE_EXEC_PRIORITY,            {"Rule", "p"}},
+        {COL_RULE_EXEC_ESTIMATED_EXE_TIME,  {"Rule", "est"}},
+        {COL_RULE_EXEC_NOTIFICATION_ADDR,   {"Rule", "notif"}},
+        {COL_RULE_EXEC_LAST_EXE_TIME,       {"Rule", "last"}},
+        {COL_RULE_EXEC_STATUS,              {"Rule", "status"}},
+        {COL_RULE_EXEC_CONTEXT,             {"Rule", "ctx"}},
+        {COL_RULE_EXEC_LOCK_HOST,           {"Rule", "lh"}},
+        {COL_RULE_EXEC_LOCK_HOST_PID,       {"Rule", "lp"}},
+        {COL_RULE_EXEC_LOCK_TIME,           {"Rule", "lt"}}
     };
 
     const std::unordered_map<std::string_view, GraphMap> COLUMN_NAME_MAP = {
@@ -171,18 +188,26 @@ namespace irods::catalog::compiler {
         {"META_DATA_ATTR_VALUE", {"Metadata", "v"}},
         {"META_DATA_ATTR_UNITS", {"Metadata", "u"}},
         {"META_DATA_ATTR_ID",    {"Metadata", "id"}},
+        {"META_DATA_CREATE_TIME", {"Metadata", "ct"}},
+        {"META_DATA_MODIFY_TIME", {"Metadata", "mt"}},
         {"META_COLL_ATTR_NAME",  {"Metadata", "a"}},
         {"META_COLL_ATTR_VALUE", {"Metadata", "v"}},
         {"META_COLL_ATTR_UNITS", {"Metadata", "u"}},
         {"META_COLL_ATTR_ID",    {"Metadata", "id"}},
+        {"META_COLL_CREATE_TIME", {"Metadata", "ct"}},
+        {"META_COLL_MODIFY_TIME", {"Metadata", "mt"}},
         {"META_RESC_ATTR_NAME",  {"Metadata", "a"}},
         {"META_RESC_ATTR_VALUE", {"Metadata", "v"}},
         {"META_RESC_ATTR_UNITS", {"Metadata", "u"}},
         {"META_RESC_ATTR_ID",    {"Metadata", "id"}},
+        {"META_RESC_CREATE_TIME", {"Metadata", "ct"}},
+        {"META_RESC_MODIFY_TIME", {"Metadata", "mt"}},
         {"META_USER_ATTR_NAME",  {"Metadata", "a"}},
         {"META_USER_ATTR_VALUE", {"Metadata", "v"}},
         {"META_USER_ATTR_UNITS", {"Metadata", "u"}},
         {"META_USER_ATTR_ID",    {"Metadata", "id"}},
+        {"META_USER_CREATE_TIME", {"Metadata", "ct"}},
+        {"META_USER_MODIFY_TIME", {"Metadata", "mt"}},
 
         {"USER_GROUP_ID",        {"Group", "id"}},
         {"USER_GROUP_NAME",      {"Group", "n"}},
@@ -286,6 +311,23 @@ namespace irods::catalog::compiler {
         {"RULE_CREATE_TIME",  {"Rule", "ct"}},
         {"RULE_MODIFY_TIME",  {"Rule", "mt"}},
 
+        {"RULE_EXEC_ID",                  {"Rule", "id"}},
+        {"RULE_EXEC_NAME",                {"Rule", "n"}},
+        {"RULE_EXEC_REI_FILE_PATH",       {"Rule", "rei"}},
+        {"RULE_EXEC_USER_NAME",           {"Rule", "u"}},
+        {"RULE_EXEC_ADDRESS",             {"Rule", "addr"}},
+        {"RULE_EXEC_TIME",                {"Rule", "e"}},
+        {"RULE_EXEC_FREQUENCY",           {"Rule", "freq"}},
+        {"RULE_EXEC_PRIORITY",            {"Rule", "p"}},
+        {"RULE_EXEC_ESTIMATED_EXE_TIME",  {"Rule", "est"}},
+        {"RULE_EXEC_NOTIFICATION_ADDR",   {"Rule", "notif"}},
+        {"RULE_EXEC_LAST_EXE_TIME",       {"Rule", "last"}},
+        {"RULE_EXEC_STATUS",              {"Rule", "status"}},
+        {"RULE_EXEC_CONTEXT",             {"Rule", "ctx"}},
+        {"RULE_EXEC_LOCK_HOST",           {"Rule", "lh"}},
+        {"RULE_EXEC_LOCK_HOST_PID",       {"Rule", "lp"}},
+        {"RULE_EXEC_LOCK_TIME",           {"Rule", "lt"}},
+
         {"DVM_ID",            {"DVM", "id"}},
         {"DVM_BASE_NAME",     {"DVM", "bn"}},
         {"DVM_EXT_VAR_NAME",  {"DVM", "ev"}},
@@ -355,6 +397,8 @@ namespace irods::catalog::compiler {
         {{"Zone", "Collection"},       {{Direction::Out, "HAS_ROOT_COLL", "Collection"}}},
         {{"Zone", "User"},             {{Direction::Out, "HAS_USER", "User"}}},
         {{"Zone", "Resource"},         {{Direction::Out, "HAS_RESC", "Resource"}}},
+        {{"Zone", "Rule"},             {{Direction::Out, "HAS_RULE", "Rule"}}},
+        {{"Rule", "Zone"},             {{Direction::In, "HAS_RULE", "Zone"}}},
         {{"DataObject", "Ticket"},     {{Direction::In, "FOR_OBJECT", "Ticket"}}},
         {{"Collection", "Ticket"},     {{Direction::In, "FOR_OBJECT", "Ticket"}}},
         {{"User", "Ticket"},           {{Direction::In, "OWNED_BY", "Ticket"}}},
@@ -651,7 +695,7 @@ namespace irods::catalog::compiler {
             if (s == "SERVERLOAD" || s == "SERVER_LOAD") {
                 return "ServerLoad";
             }
-            if (s == "RULE" || s == "RULES") {
+            if (s == "RULE" || s == "RULES" || s == "RULE_EXEC" || s == "R_RULE_EXEC") {
                 return "Rule";
             }
             if (s == "DVM") {
