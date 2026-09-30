@@ -69,20 +69,18 @@ namespace irods::catalog::test {
                             std::string payload = msgs[4].to_string();
                             std::lock_guard<std::mutex> lock(mu_);
                             
-                            size_t n_start = key.find("n:{");
-                            size_t e_start = key.find("e:out:{");
-                            if (n_start != std::string::npos && key.size() >= n_start + 3 + 16) {
+                            if (key.starts_with("n:{") && key.size() >= 3 + 16) {
                                 try {
-                                    uint64_t id = std::stoull(key.substr(n_start + 3, 16), nullptr, 16);
+                                    uint64_t id = std::stoull(key.substr(3, 16), nullptr, 16);
                                     nodes_[id].id = id; nodes_[id].payload = payload;
                                     std::cerr << "[MockServer] Stored Node [" << std::hex << id << "]" << std::endl;
                                 } catch (...) {
                                     generic_store_[key] = payload;
                                 }
-                            } else if (e_start != std::string::npos && key.size() >= e_start + 7 + 16) {
+                            } else if (key.starts_with("e:out:{") && key.size() >= 7 + 16) {
                                 try {
-                                    uint64_t src = std::stoull(key.substr(e_start + 7, 16), nullptr, 16);
-                                    size_t label_start = e_start + 7 + 16 + 2;
+                                    uint64_t src = std::stoull(key.substr(7, 16), nullptr, 16);
+                                    size_t label_start = 7 + 16 + 2;
                                     size_t label_end = key.find(':', label_start);
                                     size_t dst_start = (label_end != std::string::npos) ? key.find(":{", label_end) : std::string::npos;
                                     if (label_end != std::string::npos && dst_start != std::string::npos && key.size() >= dst_start + 2 + 16) {

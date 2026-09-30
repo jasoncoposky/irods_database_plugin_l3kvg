@@ -41,6 +41,7 @@ namespace irods::catalog {
         std::string checksum;
         std::string modify_ts;
         std::string access_time;
+        int64_t size = 0;
     };
 
     struct collection {

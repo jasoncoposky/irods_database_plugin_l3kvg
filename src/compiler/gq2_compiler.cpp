@@ -21,7 +21,7 @@ namespace irods::catalog::compiler {
         {COL_D_DATA_ID,        {"DataObject", "id"}},
         {COL_D_COLL_ID,        {"Collection", "id"}},
         {COL_DATA_NAME,        {"DataObject", "n"}},
-        {COL_DATA_SIZE,        {"DataObject", "s"}},
+        {COL_DATA_SIZE,        {"Replica", "s"}},
         {COL_DATA_MODE,        {"DataObject", "mode"}},
         {COL_D_RESC_NAME,      {"Resource", "n"}},
         {COL_D_OWNER_NAME,     {"DataObject", "o"}},
@@ -72,6 +72,7 @@ namespace irods::catalog::compiler {
         {COL_DATA_REPL_NUM,    {"Replica", "rn"}},
         {COL_D_REPL_STATUS,    {"Replica", "st"}},
         {COL_D_RESC_HIER,      {"Replica", "rh"}},
+        {COL_D_ACCESS_TIME,    {"Replica", "at"}},
 
         {COL_ZONE_ID,          {"Zone", "id"}},
         {COL_ZONE_NAME,        {"Zone", "n"}},
@@ -98,7 +99,7 @@ namespace irods::catalog::compiler {
         {"DATA_ID",           {"DataObject", "id"}},
         {"DATA_COLL_ID",      {"Collection", "id"}},
         {"DATA_NAME",         {"DataObject", "n"}},
-        {"DATA_SIZE",         {"DataObject", "s"}},
+        {"DATA_SIZE",         {"Replica", "s"}},
         {"DATA_MODE",         {"DataObject", "mode"}},
         {"DATA_VERSION",      {"DataObject", "v"}},
         {"DATA_TYPE_NAME",    {"DataObject", "t"}},
@@ -142,7 +143,6 @@ namespace irods::catalog::compiler {
         {"RESC_ID",           {"Resource", "id"}},
         {"RESC_NAME",         {"Resource", "n"}},
         {"RESC_ZONE_NAME",    {"Resource", "z"}},
-        {"ZONE_NAME",         {"Resource", "z"}},
         {"RESC_TYPE_NAME",    {"Resource", "t"}},
         {"RESC_CLASS_NAME",   {"Resource", "c"}},
         {"RESC_LOC",          {"Resource", "l"}},
@@ -192,6 +192,8 @@ namespace irods::catalog::compiler {
         {"DATA_PATH",      {"Replica", "p"}},
         {"DATA_REPL_STATUS",{"Replica", "st"}},
         {"D_RESC_HIER",    {"Replica", "rh"}},
+        {"DATA_RESC_HIER", {"Replica", "rh"}},
+        {"DATA_ACCESS_TIME", {"Replica", "at"}},
 
         {"DATA_ACCESS_NAME",      {"Access", "l"}},
         {"DATA_ACCESS_TYPE",      {"Access", "l"}},
@@ -401,8 +403,31 @@ namespace irods::catalog::compiler {
         }
 
         void operator()(const irods::experimental::genquery2::logical_and& l) const { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
-        void operator()(const irods::experimental::genquery2::logical_or& l) const { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
-        void operator()(const irods::experimental::genquery2::logical_grouping& l) const { for(const auto& c : l.conditions) boost::apply_visitor(*this, c); }
+        void operator()(const irods::experimental::genquery2::logical_or& l) const {
+            json or_filters = json::array();
+            for(const auto& c : l.condition) {
+                condition_visitor sub_vis(compiler, or_filters);
+                boost::apply_visitor(sub_vis, c);
+            }
+            if (!or_filters.empty()) {
+                for (size_t idx = 0; idx < or_filters.size(); ++idx) {
+                    if (idx > 0 && or_filters[idx].is_object()) {
+                        or_filters[idx]["prepended_op"] = "or";
+                    }
+                }
+                j_filters.push_back({{"group", "or"}, {"filters", or_filters}, {"prepended_op", "and"}});
+            }
+        }
+        void operator()(const irods::experimental::genquery2::logical_grouping& l) const {
+            json grp_filters = json::array();
+            for(const auto& c : l.conditions) {
+                condition_visitor sub_vis(compiler, grp_filters);
+                boost::apply_visitor(sub_vis, c);
+            }
+            if (!grp_filters.empty()) {
+                j_filters.push_back({{"group", "and"}, {"filters", grp_filters}, {"prepended_op", "and"}});
+            }
+        }
         void operator()(const irods::experimental::genquery2::logical_not& l) const { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
     };
 

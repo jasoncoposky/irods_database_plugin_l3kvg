@@ -28,7 +28,8 @@ int main() {
     catalog.bootstrap_catalog("tempZone", "rods");
     std::cout << "Zone and Admin bootstrapped.\n";
 
-    // Set 'own' access for root
+    // Set 'own' access for roots
+    catalog.set_access("rods", "tempZone", "/", "own", false);
     catalog.set_access("rods", "tempZone", "/tempZone", "own", false);
 
     std::cout << "Creating collection hierarchy...\n";
@@ -40,7 +41,7 @@ int main() {
     home.owner_name = "rods";
     home.owner_zone = "tempZone";
     home.type = "";
-    home.parent_id = 10001; 
+    home.parent_id = 1; 
     home.create_ts = "01748200000";
     home.modify_ts = "01748200000";
     catalog.register_collection(home, home.id);
@@ -58,6 +59,19 @@ int main() {
     rods_home.modify_ts = "01748200000";
     catalog.register_collection(rods_home, rods_home.id);
     catalog.set_access("rods", "tempZone", "/tempZone/home/rods", "own", false);
+
+    collection rods_trash;
+    rods_trash.id = 10008;
+    rods_trash.name = "/tempZone/trash/home/rods";
+    rods_trash.parent_name = "/tempZone/trash/home";
+    rods_trash.owner_name = "rods";
+    rods_trash.owner_zone = "tempZone";
+    rods_trash.type = "";
+    rods_trash.parent_id = 5;
+    rods_trash.create_ts = "01748200000";
+    rods_trash.modify_ts = "01748200000";
+    catalog.register_collection(rods_trash, rods_trash.id);
+    catalog.set_access("rods", "tempZone", "/tempZone/trash/home/rods", "own", false);
 
     char hostname[1024];
     gethostname(hostname, 1024);

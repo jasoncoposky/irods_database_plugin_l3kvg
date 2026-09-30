@@ -65,17 +65,22 @@ namespace irods::catalog {
         irods::error rename_data_object(data_id_t obj_id, std::string_view new_name);
         irods::error move_data_object(data_id_t obj_id, coll_id_t target_coll_id);
         irods::error modify_data_object(data_id_t obj_id, std::string_view prop, std::string_view value);
+        irods::error rename_object(uint64_t obj_id, std::string_view new_name);
+        irods::error move_object(uint64_t obj_id, coll_id_t target_coll_id);
 
         // Replica Operations
         irods::error register_replica(const replica& repl);
         irods::error unregister_replica(data_id_t data_id, uint32_t repl_num);
         irods::error update_replica_access_time(data_id_t data_id, uint32_t repl_num, std::string_view time);
+        irods::error modify_replicas_for_data_object(data_id_t obj_id, uint32_t repl_num, const std::vector<std::pair<std::string, std::string>>& updates, bool all_repl_status);
+        uint32_t get_next_replica_number(data_id_t data_id);
 
         // Collection Operations
         irods::error register_collection(const collection& coll, coll_id_t& out_id);
         irods::error rename_collection(std::string_view old_name, std::string_view new_name);
         irods::error delete_collection(coll_id_t coll_id);
         irods::error modify_collection(coll_id_t coll_id, std::string_view prop, std::string_view value);
+        irods::error get_collection_subtree_ids(snowflake_id_t coll_sid, std::vector<snowflake_id_t>& out_ids);
 
         // Resource Operations
         irods::error register_resource(const resource& resc, resc_id_t& out_id);
@@ -93,6 +98,7 @@ namespace irods::catalog {
         irods::error delete_user(std::string_view user_name);
         irods::error modify_user(std::string_view user_name, std::string_view prop, std::string_view value);
         irods::error check_auth(std::string_view user_name, std::string_view zone, int& user_priv);
+        irods::error get_user_password_and_priv(std::string_view user_name, std::string_view zone, std::string& out_pw, int& out_priv);
         irods::error check_auth_credentials(std::string_view username, std::string_view zone, std::string_view password, bool& correct);
         irods::error add_user_to_group(std::string_view user_name, std::string_view zone, std::string_view group_name);
         irods::error remove_user_from_group(std::string_view user_name, std::string_view zone, std::string_view group_name);

@@ -19,6 +19,11 @@ namespace irods::catalog::bridge {
             str.replace(pos, 2, "'");
             pos += 1;
         }
+        pos = 0;
+        while ((pos = str.find("\\'", pos)) != std::string::npos) {
+            str.replace(pos, 2, "'");
+            pos += 1;
+        }
         return str;
     }
 
@@ -55,6 +60,7 @@ namespace irods::catalog::bridge {
                 case COL_DATA_MODE: return "DATA_MODE";
                 case COL_D_RESC_HIER: return "DATA_RESC_HIER";
                 case COL_D_RESC_ID: return "D_RESC_ID";
+                case COL_D_ACCESS_TIME: return "DATA_ACCESS_TIME";
                 
                 case COL_ZONE_ID: return "ZONE_ID";
                 case COL_ZONE_NAME: return "ZONE_NAME";
@@ -101,7 +107,7 @@ namespace irods::catalog::bridge {
 
                 case COL_R_RESC_ID: return "RESC_ID";
                 case COL_R_RESC_NAME: return "RESC_NAME";
-                case COL_R_ZONE_NAME: return "ZONE_NAME";
+                case COL_R_ZONE_NAME: return "RESC_ZONE_NAME";
                 case COL_R_TYPE_NAME: return "RESC_TYPE_NAME";
                 case COL_R_CLASS_NAME: return "RESC_CLASS_NAME";
                 case COL_R_LOC: return "RESC_LOC";
@@ -204,7 +210,7 @@ namespace irods::catalog::bridge {
             int pure_inx = get_pure_inx(inx);
             if (pure_inx >= 500 && pure_inx < 600) { likely_root = "Collection"; break; }
             if (pure_inx >= 1300 && pure_inx < 1310) { likely_root = "Collection"; break; }
-            if (pure_inx >= 600 && pure_inx < 700) { likely_root = "Resource"; break; }
+            if ((pure_inx >= 300 && pure_inx < 400) || (pure_inx >= 600 && pure_inx < 700)) { likely_root = "Resource"; break; }
             if (pure_inx >= 200 && pure_inx < 300) { likely_root = "User"; break; }
             if (pure_inx >= 100 && pure_inx < 200) { likely_root = "Zone"; break; }
         }
@@ -245,11 +251,42 @@ namespace irods::catalog::bridge {
         // 2. Conditions & Path Resolution
         bool resolved_start = false;
         int best_start_priority = -1;
-        std::regex eq_regex("^\\s*=\\s*'(.*)'\\s*$");
-        std::regex ne_regex("^\\s*!=\\s*'(.*)'\\s*$");
-        std::regex like_regex("^\\s*like\\s*'(.*)'\\s*$");
-        std::regex eq_or_like_regex("^\\s*=\\s*'(.*)'\\s*\\|\\|\\s*like\\s*'(.*)'\\s*$");
-        std::regex parent_regex("^\\s*parent_of\\s*'(.*)'\\s*$");
+        std::regex eq_regex(R"(^\s*=\s*'(.*)'\s*$)");
+        std::regex ne_regex(R"(^\s*!=\s*'(.*)'\s*$)");
+        std::regex like_regex(R"(^\s*like\s*'(.*)'\s*$)", std::regex_constants::icase);
+        std::regex eq_or_like_regex(R"(^\s*=\s*'(.*?)'\s*\|\|\s*like\s*'(.*)'\s*$)", std::regex_constants::icase);
+        std::regex like_or_eq_regex(R"(^\s*like\s*'(.*?)'\s*\|\|\s*=\s*'(.*)'\s*$)", std::regex_constants::icase);
+        std::regex parent_regex(R"(^\s*parent_of\s*'(.*)'\s*$)");
+        std::regex in_clause_regex(R"(IN\s*\()", std::regex_constants::icase);
+        std::regex quoted_literal_regex(R"('((?:[^'\\]|\\.|'')*)')");
+
+        // Pass 0: Combined COLL_NAME and DATA_NAME resolution (highest priority)
+        std::string target_coll_name;
+        std::string target_data_name;
+        for (int i = 0; i < _inp->sqlCondInp.len; ++i) {
+            int inx = _inp->sqlCondInp.inx[i];
+            std::string cond(_inp->sqlCondInp.value[i]);
+            std::smatch match;
+            if (cond.find("||") == std::string::npos && std::regex_match(cond, match, eq_regex)) {
+                std::string literal = unescape_sql_literal(match[1].str());
+                if (inx == COL_COLL_NAME) {
+                    target_coll_name = literal;
+                } else if (inx == COL_DATA_NAME) {
+                    target_data_name = literal;
+                }
+            }
+        }
+        if (!target_coll_name.empty() && !target_data_name.empty() && _catalog != nullptr) {
+            std::string full_path = (target_coll_name == "/" ? "/" + target_data_name : target_coll_name + "/" + target_data_name);
+            snowflake_id_t sid = 0;
+            EntityType type;
+            if (_catalog->resolve_path(full_path, sid, type).ok() && type == EntityType::DataObject) {
+                _starting_nodes.clear();
+                _starting_nodes.push_back(sid);
+                resolved_start = true;
+                best_start_priority = 10;
+            }
+        }
 
         // Pass 1: Find best starting node
         for (int i = 0; i < _inp->sqlCondInp.len; ++i) {
@@ -257,7 +294,7 @@ namespace irods::catalog::bridge {
             std::string cond(_inp->sqlCondInp.value[i]);
             std::smatch match;
 
-            if (std::regex_match(cond, match, eq_regex)) {
+            if (cond.find("||") == std::string::npos && std::regex_match(cond, match, eq_regex)) {
                 std::string literal = unescape_sql_literal(match[1].str());
                 if (inx == COL_DATA_ACCESS_DATA_ID || inx == COL_D_DATA_ID) {
                     if (_catalog != nullptr && best_start_priority < 4) {
@@ -286,7 +323,7 @@ namespace irods::catalog::bridge {
                         } catch (...) {}
                     }
                 } else if (inx == COL_DATA_NAME) {
-                    if (_catalog != nullptr && best_start_priority < 4) {
+                    if (_catalog != nullptr && best_start_priority < 4 && literal.starts_with('/')) {
                         snowflake_id_t sid = 0; EntityType type;
                         if (_catalog->resolve_path(literal, sid, type).ok()) {
                             _starting_nodes.clear();
@@ -323,6 +360,34 @@ namespace irods::catalog::bridge {
                             _starting_nodes.push_back(sid);
                             resolved_start = true;
                             best_start_priority = 1;
+                        }
+                    }
+                } else if (inx == COL_ZONE_NAME || inx == COL_ZONE_ID) {
+                    if (_catalog != nullptr && best_start_priority < 1) {
+                        snowflake_id_t zid = _catalog->make_id(EntityType::Zone, 1);
+                        _starting_nodes.clear();
+                        _starting_nodes.push_back(zid);
+                        resolved_start = true;
+                        best_start_priority = 1;
+                    }
+                }
+            } else if (std::regex_match(cond, match, eq_or_like_regex) || std::regex_match(cond, match, like_or_eq_regex)) {
+                std::string target_coll;
+                if (std::regex_match(cond, match, eq_or_like_regex)) {
+                    target_coll = unescape_sql_literal(match[1].str());
+                } else {
+                    target_coll = unescape_sql_literal(match[2].str());
+                }
+                if (inx == COL_COLL_NAME && _catalog != nullptr && best_start_priority < 3) {
+                    snowflake_id_t sid = 0; EntityType type;
+                    if (_catalog->resolve_path(target_coll, sid, type).ok() && type == EntityType::Collection) {
+                        std::vector<snowflake_id_t> coll_ids;
+                        _catalog->get_collection_subtree_ids(sid, coll_ids);
+                        if (!coll_ids.empty()) {
+                            _starting_nodes = std::move(coll_ids);
+                            resolved_start = true;
+                            best_start_priority = 3;
+                            rodsLog(LOG_NOTICE, "L3_BRIDGE: eq_or_like resolved %zu subtree collection starting nodes for '%s'", _starting_nodes.size(), target_coll.c_str());
                         }
                     }
                 }
@@ -362,6 +427,25 @@ namespace irods::catalog::bridge {
             }
         }
 
+        if (!resolved_start && likely_root == "Zone" && _starting_nodes.empty() && _catalog != nullptr) {
+            snowflake_id_t zid = _catalog->make_id(EntityType::Zone, 1);
+            _starting_nodes.push_back(zid);
+            resolved_start = true;
+            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved Zone starting node 0x%016llx", (unsigned long long)zid);
+        } else if (!resolved_start && likely_root == "Resource" && _starting_nodes.empty() && _catalog != nullptr) {
+            snowflake_id_t zid = _catalog->make_id(EntityType::Zone, 1);
+            auto resc_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), zid, "HAS_RESC", 0.0).get();
+            _starting_nodes = std::move(resc_nodes);
+            resolved_start = true;
+            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu Resource starting nodes from Zone HAS_RESC", _starting_nodes.size());
+        } else if (!resolved_start && likely_root == "User" && _starting_nodes.empty() && _catalog != nullptr) {
+            snowflake_id_t zid = _catalog->make_id(EntityType::Zone, 1);
+            auto user_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), zid, "HAS_USER", 0.0).get();
+            _starting_nodes = std::move(user_nodes);
+            resolved_start = true;
+            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu User starting nodes from Zone HAS_USER", _starting_nodes.size());
+        }
+
         // Pass 2: Build conditions
         for (int i = 0; i < _inp->sqlCondInp.len; ++i) {
             int inx = _inp->sqlCondInp.inx[i];
@@ -373,12 +457,36 @@ namespace irods::catalog::bridge {
             if (!name.empty()) {
                 gq2::column col(name);
                 std::smatch match;
-                if (std::regex_match(cond, match, eq_regex)) {
+                if (std::regex_match(cond, match, eq_or_like_regex)) {
+                    gq2::logical_or or_cond;
+                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_equal(unescape_sql_literal(match[1].str()))));
+                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_like(unescape_sql_literal(match[2].str()))));
+                    ast.conditions.push_back(std::move(or_cond));
+                } else if (std::regex_match(cond, match, like_or_eq_regex)) {
+                    gq2::logical_or or_cond;
+                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_like(unescape_sql_literal(match[1].str()))));
+                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_equal(unescape_sql_literal(match[2].str()))));
+                    ast.conditions.push_back(std::move(or_cond));
+                } else if (std::regex_search(cond, in_clause_regex) || (cond.find("||") != std::string::npos && cond.find("like") == std::string::npos && cond.find("LIKE") == std::string::npos)) {
+                    auto words_begin = std::sregex_iterator(cond.begin(), cond.end(), quoted_literal_regex);
+                    auto words_end = std::sregex_iterator();
+                    std::vector<std::string> literals;
+                    for (std::sregex_iterator it = words_begin; it != words_end; ++it) {
+                        literals.push_back(unescape_sql_literal((*it)[1].str()));
+                    }
+                    if (literals.size() == 1) {
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(literals[0])));
+                    } else if (literals.size() > 1) {
+                        gq2::logical_or or_cond;
+                        for (const auto& lit : literals) {
+                            or_cond.condition.push_back(gq2::condition(col, gq2::condition_equal(lit)));
+                        }
+                        ast.conditions.push_back(std::move(or_cond));
+                    }
+                } else if (std::regex_match(cond, match, eq_regex)) {
                     ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(unescape_sql_literal(match[1].str()))));
                 } else if (std::regex_match(cond, match, ne_regex)) {
                     ast.conditions.push_back(gq2::condition(col, gq2::condition_not_equal(unescape_sql_literal(match[1].str()))));
-                } else if (std::regex_match(cond, match, eq_or_like_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_like(unescape_sql_literal(match[2].str()))));
                 } else if (std::regex_match(cond, match, like_regex)) {
                     ast.conditions.push_back(gq2::condition(col, gq2::condition_like(unescape_sql_literal(match[1].str()))));
                 } else if (std::regex_match(cond, match, parent_regex)) {
@@ -436,7 +544,7 @@ namespace irods::catalog::bridge {
                                      pure_inx == COL_D_DATA_CHECKSUM || pure_inx == COL_D_OWNER_NAME || 
                                      pure_inx == COL_D_OWNER_ZONE || pure_inx == COL_COLL_OWNER_NAME || 
                                      pure_inx == COL_COLL_OWNER_ZONE || pure_inx == COL_D_RESC_NAME ||
-                                     pure_inx == COL_ZONE_NAME || pure_inx == COL_DATA_ACCESS_NAME ||
+                                     pure_inx == COL_ZONE_NAME || pure_inx == COL_R_ZONE_NAME || pure_inx == COL_DATA_ACCESS_NAME ||
                                      pure_inx == COL_DATA_TOKEN_NAMESPACE || pure_inx == COL_COLL_ACCESS_NAME ||
                                      pure_inx == COL_COLL_TOKEN_NAMESPACE || pure_inx == COL_COLL_PARENT_NAME ||
                                      pure_inx == COL_D_COMMENTS || pure_inx == COL_DATA_TYPE_NAME ||
@@ -472,6 +580,8 @@ namespace irods::catalog::bridge {
 
                 if (val.empty() && pure_inx == COL_COLL_TYPE) {
                     val = "";
+                } else if (val.empty() && pure_inx == COL_D_EXPIRY) {
+                    val = "00000000000";
                 } else if (val.empty()) {
                     if (is_string_col) {
                         val = ""; 
@@ -508,7 +618,9 @@ namespace irods::catalog::bridge {
                     }
                 }
 
-                rodsLog(LOG_NOTICE, "L3_BRIDGE: Packing Col %d (pure: %d) Row %d: [%s]", inx, pure_inx, r, val.c_str());
+                if (r < 5) {
+                    rodsLog(LOG_NOTICE, "L3_BRIDGE: Packing Col %d (pure: %d) Row %d: [%s]", inx, pure_inx, r, val.c_str());
+                }
                 strncpy(&_out->sqlResult[i].value[r * col_len], val.c_str(), col_len - 1);
             }
         }
