@@ -1379,6 +1379,30 @@ namespace irods::catalog {
             }
             return ERROR(CAT_UNKNOWN_COLLECTION, "Object not found for move: " + std::to_string(obj_id));
         }
+        irods::error is_collection_empty(coll_id_t coll_id, bool& is_empty) {
+            is_empty = true;
+            snowflake_id_t sid = make_id(EntityType::Collection, coll_id);
+            std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
+            if (payload.empty()) {
+                std::string direct_payload = client_->get_node_payload_async(local_cluster_id_, coll_id).get();
+                if (!direct_payload.empty()) {
+                    sid = coll_id;
+                    payload = direct_payload;
+                } else {
+                    return ERROR(CAT_UNKNOWN_COLLECTION, "Collection not found");
+                }
+            }
+            auto children = client_->get_neighbors_async(local_cluster_id_, sid, "CONTAINS", 0.0).get();
+            for (auto cid : children) {
+                std::string cpayload = client_->get_node_payload_async(local_cluster_id_, cid).get();
+                if (!cpayload.empty()) {
+                    is_empty = false;
+                    return SUCCESS();
+                }
+            }
+            return SUCCESS();
+        }
+
         irods::error delete_collection(coll_id_t coll_id) { 
             snowflake_id_t sid = make_id(EntityType::Collection, coll_id);
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
@@ -1393,6 +1417,15 @@ namespace irods::catalog {
             #ifdef IRODS_SERVER
             rodsLog(LOG_NOTICE, "L3_CATALOG: Deleting Collection %llu (SID: %016llx)", (unsigned long long)coll_id, (unsigned long long)sid);
             #endif
+
+            bool empty = true;
+            auto empty_res = is_collection_empty(sid, empty);
+            if (!empty_res.ok()) {
+                return empty_res;
+            }
+            if (!empty) {
+                return ERROR(CAT_COLLECTION_NOT_EMPTY, "Collection is not empty");
+            }
 
             // Delete path index and edges
             if (!payload.empty()) {
@@ -1413,21 +1446,10 @@ namespace irods::catalog {
                         del_edge(cid, "CONTAINS", 1.0, sid);
                     }
 
-                    // Delete outgoing edges and orphan data objects
+                    // Delete outgoing edges
                     auto children = client_->get_neighbors_async(local_cluster_id_, sid, "CONTAINS", 0.0).get();
                     for (auto child_id : children) {
                         del_edge(sid, "CONTAINS", 1.0, child_id);
-                        std::string cpayload = client_->get_node_payload_async(local_cluster_id_, child_id).get();
-                        if (!cpayload.empty()) {
-                            try {
-                                lite3cpp::Buffer cbuf(std::vector<uint8_t>(cpayload.begin(), cpayload.end()));
-                                std::string cet = safe_get_str(cbuf, 0, "entity_type");
-                                uint64_t cid_num = cbuf.get_i64(0, "id");
-                                if (cet == "data_object" && cid_num != 0) {
-                                    delete_data_object(cid_num);
-                                }
-                            } catch (...) {}
-                        }
                     }
                     auto owners = client_->get_in_neighbors_async(local_cluster_id_, sid, "OWNS").get();
                     for (auto oid : owners) {
@@ -3937,6 +3959,7 @@ namespace irods::catalog {
     irods::error CatalogFacade::register_collection(const collection& coll, coll_id_t& out_id) { return pImpl_->register_collection(coll, out_id); }
     irods::error CatalogFacade::rename_collection(std::string_view old_name, std::string_view new_name) { return pImpl_->rename_collection(old_name, new_name); }
     irods::error CatalogFacade::delete_collection(coll_id_t coll_id) { return pImpl_->delete_collection(coll_id); }
+    irods::error CatalogFacade::is_collection_empty(coll_id_t coll_id, bool& is_empty) { return pImpl_->is_collection_empty(coll_id, is_empty); }
     irods::error CatalogFacade::modify_collection(coll_id_t coll_id, std::string_view prop, std::string_view value) { return pImpl_->modify_collection(coll_id, prop, value); }
     irods::error CatalogFacade::register_resource(const resource& resc, resc_id_t& out_id) { return pImpl_->register_resource(resc, out_id); }
     irods::error CatalogFacade::modify_resource(snowflake_id_t sid, std::string_view prop, std::string_view value) { return pImpl_->modify_resource(sid, prop, value); }

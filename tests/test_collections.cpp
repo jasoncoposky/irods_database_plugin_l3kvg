@@ -29,7 +29,7 @@ TEST_F(CollectionTest, Lifecycle) {
     coll_id_t root_id, sub_id;
     collection c1;
     c1.id = 100;
-    c1.name = "/tempZone/home";
+    c1.name = "/tempZone/home/testcoll";
     c1.owner_name = "rods";
     c1.owner_zone = "tempZone";
     ASSERT_TRUE(catalog.register_collection(c1, root_id).ok());
@@ -37,7 +37,7 @@ TEST_F(CollectionTest, Lifecycle) {
     collection c2;
     c2.id = 200;
     c2.parent_id = 100;
-    c2.name = "/tempZone/home/sub";
+    c2.name = "/tempZone/home/testcoll/sub";
     c2.owner_name = "rods";
     c2.owner_zone = "tempZone";
     ASSERT_TRUE(catalog.register_collection(c2, sub_id).ok());

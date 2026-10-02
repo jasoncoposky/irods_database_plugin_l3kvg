@@ -28,7 +28,7 @@ TEST_F(CollectionPluginTest, Lifecycle) {
     collInfo_t coll;
     std::memset(&coll, 0, sizeof(coll));
     coll.collId = 100;
-    std::strncpy(coll.collName, "/tempZone/home/rods", NAME_LEN);
+    std::strncpy(coll.collName, "/tempZone/home/testcoll", NAME_LEN);
     std::strncpy(coll.collOwnerName, "rods", NAME_LEN);
     std::strncpy(coll.collOwnerZone, "tempZone", NAME_LEN);
     ASSERT_TRUE((plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_REG_COLL, nullptr, &coll).ok()));
@@ -53,7 +53,7 @@ TEST_F(CollectionPluginTest, Lifecycle) {
 
     // 3. Rename Collection
     ASSERT_TRUE((plugin()->call<const char*, const char*>(
-        nullptr, irods::DATABASE_OP_RENAME_COLL, nullptr, "/tempZone/home/rods", "/tempZone/home/alice").ok()));
+        nullptr, irods::DATABASE_OP_RENAME_COLL, nullptr, "/tempZone/home/testcoll", "/tempZone/home/alice").ok()));
     
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     ASSERT_EQ(server()->get_node(cid).get_attribute<std::string>("n"), "/tempZone/home/alice");

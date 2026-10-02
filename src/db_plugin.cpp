@@ -86,6 +86,10 @@ inline std::string safe_string(const char* s) {
     return sanitize_utf8(s);
 }
 
+inline std::string safe_string(std::string_view sv) {
+    return sanitize_utf8(sv);
+}
+
 template <size_t N>
 inline std::string safe_string(const char (&arr)[N]) {
     size_t len = 0;
@@ -933,10 +937,14 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null collInfo_t");
         
         uint64_t coll_id = (uint64_t)_info->collId;
-        if (coll_id == 0 && _info->collName && strlen(_info->collName) > 0) {
-            irods::catalog::snowflake_id_t sid;
+        std::string coll_name = _info->collName ? safe_string(_info->collName) : "";
+        irods::catalog::snowflake_id_t sid = 0;
+
+        if (!coll_name.empty()) {
+            irods::catalog::snowflake_id_t resolved_sid = 0;
             irods::catalog::EntityType type;
-            if (g_catalog->resolve_path(_info->collName, sid, type).ok()) {
+            if (g_catalog->resolve_path(coll_name, resolved_sid, type).ok()) {
+                sid = resolved_sid;
                 auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
                 if (!payload.empty()) {
                     try {
@@ -944,23 +952,178 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
                         coll_id = buf.get_i64(0, "id");
                     } catch (...) {}
                 }
-                if (coll_id == 0) coll_id = sid;
-            } else {
-                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_op: Collection [%s] not found", _info->collName);
-                return ERROR(CAT_UNKNOWN_COLLECTION, "Collection not found");
             }
         }
 
-        if (coll_id == 0) {
-            rodsLog(LOG_ERROR, "L3_PLUGIN: db_del_coll_op: No collection ID or name provided");
-            return ERROR(CAT_UNKNOWN_COLLECTION, "No collection ID or name provided");
+        if (sid == 0 && coll_id != 0) {
+            sid = g_catalog->make_id(irods::catalog::EntityType::Collection, coll_id);
+            std::string payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
+            if (payload.empty()) {
+                std::string direct_payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), coll_id).get();
+                if (!direct_payload.empty()) {
+                    sid = coll_id;
+                    payload = direct_payload;
+                }
+            }
+            if (!payload.empty() && coll_name.empty()) {
+                try {
+                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    coll_name = safe_string(buf.get_str(0, "n"));
+                } catch (...) {}
+            }
         }
 
-        auto ret = g_catalog->delete_collection(coll_id);
+        if (sid == 0 && coll_id == 0) {
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_op: Collection [%s] not found", coll_name.c_str());
+            if (_ctx.comm()) {
+                addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is unknown").c_str());
+            }
+            return ERROR(CAT_UNKNOWN_COLLECTION, "Collection not found");
+        }
+
+        if (_ctx.comm()) {
+            std::string user_name = safe_string(_ctx.comm()->clientUser.userName);
+            irods::catalog::snowflake_id_t usid = 0;
+            if (!user_name.empty()) {
+                g_catalog->resolve_user_name(user_name, usid);
+            }
+
+            // Check parent collection write permission if parent collection exists
+            if (!coll_name.empty()) {
+                char logicalEndName[MAX_NAME_LEN];
+                char logicalParentDirName[MAX_NAME_LEN];
+                if (splitPathByKey(coll_name.c_str(), logicalParentDirName, MAX_NAME_LEN, logicalEndName, MAX_NAME_LEN, '/') >= 0) {
+                    if (strlen(logicalParentDirName) == 0) {
+                        snprintf(logicalParentDirName, sizeof(logicalParentDirName), "/");
+                    }
+                    irods::catalog::snowflake_id_t psid = 0;
+                    irods::catalog::EntityType ptype;
+                    if (g_catalog->resolve_path(logicalParentDirName, psid, ptype).ok()) {
+                        bool parent_allowed = false;
+                        auto p_ret = g_catalog->check_permission(usid, psid, "modify_object", parent_allowed, /*check_parents=*/false);
+                        if (!p_ret.ok() || !parent_allowed) {
+                            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_op: parent permission denied for user [%s] on [%s]",
+                                    user_name.c_str(), logicalParentDirName);
+                            return ERROR(CAT_NO_ACCESS_PERMISSION, "check_parent_collection_access failed");
+                        }
+                    }
+                }
+            }
+
+            // Check collection delete permission
+            bool allowed = false;
+            auto perm_ret = g_catalog->check_permission(usid, sid ? sid : coll_id, "delete_object", allowed, /*check_parents=*/false);
+            if (perm_ret.code() == CAT_UNKNOWN_FILE) {
+                return ERROR(CAT_UNKNOWN_COLLECTION, "Collection not found");
+            }
+            if (!perm_ret.ok() || !allowed) {
+                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_op: permission denied for user [%s] on collection [%s]",
+                        user_name.c_str(), coll_name.c_str());
+                return ERROR(CAT_NO_ACCESS_PERMISSION, "check_collection_access failed");
+            }
+        }
+
+        // Check emptiness
+        bool is_empty = true;
+        auto empty_err = g_catalog->is_collection_empty(sid ? sid : coll_id, is_empty);
+        if (!empty_err.ok()) {
+            return empty_err;
+        }
+        if (!is_empty) {
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_op: collection [%s] is not empty", coll_name.c_str());
+            if (_ctx.comm()) {
+                addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is not empty").c_str());
+            }
+            return ERROR(CAT_COLLECTION_NOT_EMPTY, "Collection is not empty");
+        }
+
+        auto ret = g_catalog->delete_collection(coll_id ? coll_id : sid);
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_coll_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_coll_op EXCEPTION: %s", e.what());
+        return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
+}
+
+irods::error db_del_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _info) {
+    try {
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_coll_by_admin_op");
+        irods::error ret_ctx = _ctx.valid();
+        if (!ret_ctx.ok()) return PASS(ret_ctx);
+        if (!_info) return ERROR(CAT_INVALID_ARGUMENT, "null parameter");
+
+        if (_ctx.comm() && _ctx.comm()->clientUser.authInfo.authFlag < LOCAL_PRIV_USER_AUTH) {
+            return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "insufficient privilege");
+        }
+        if (_ctx.comm() && _ctx.comm()->proxyUser.authInfo.authFlag < LOCAL_PRIV_USER_AUTH) {
+            return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "insufficient privilege");
+        }
+
+        uint64_t coll_id = (uint64_t)_info->collId;
+        std::string coll_name = _info->collName ? safe_string(_info->collName) : "";
+        irods::catalog::snowflake_id_t sid = 0;
+
+        if (!coll_name.empty()) {
+            irods::catalog::snowflake_id_t resolved_sid = 0;
+            irods::catalog::EntityType type;
+            if (g_catalog->resolve_path(coll_name, resolved_sid, type).ok()) {
+                sid = resolved_sid;
+                auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
+                if (!payload.empty()) {
+                    try {
+                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        coll_id = buf.get_i64(0, "id");
+                    } catch (...) {}
+                }
+            }
+        }
+
+        if (sid == 0 && coll_id != 0) {
+            sid = g_catalog->make_id(irods::catalog::EntityType::Collection, coll_id);
+            std::string payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
+            if (payload.empty()) {
+                std::string direct_payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), coll_id).get();
+                if (!direct_payload.empty()) {
+                    sid = coll_id;
+                    payload = direct_payload;
+                }
+            }
+            if (!payload.empty() && coll_name.empty()) {
+                try {
+                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    coll_name = safe_string(buf.get_str(0, "n"));
+                } catch (...) {}
+            }
+        }
+
+        if (sid == 0 && coll_id == 0) {
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_by_admin_op: Collection [%s] not found", coll_name.c_str());
+            if (_ctx.comm()) {
+                addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is unknown").c_str());
+            }
+            return ERROR(CAT_UNKNOWN_COLLECTION, "unknown collection");
+        }
+
+        // Check emptiness
+        bool is_empty = true;
+        auto empty_err = g_catalog->is_collection_empty(sid ? sid : coll_id, is_empty);
+        if (!empty_err.ok()) {
+            return empty_err;
+        }
+        if (!is_empty) {
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_by_admin_op: collection [%s] is not empty", coll_name.c_str());
+            if (_ctx.comm()) {
+                addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is not empty").c_str());
+            }
+            return ERROR(CAT_COLLECTION_NOT_EMPTY, "collection not empty");
+        }
+
+        auto ret = g_catalog->delete_collection(coll_id ? coll_id : sid);
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_coll_by_admin_op SUCCESS");
+        return ret;
+    } catch(const std::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_coll_by_admin_op EXCEPTION: %s", e.what());
         return ERROR(SYS_INTERNAL_ERR, e.what());
     }
 }
@@ -2920,7 +3083,7 @@ public:
         add_operation<collInfo_t*>(irods::DATABASE_OP_REG_COLL_BY_ADMIN, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_reg_coll_op));
         add_operation<collInfo_t*>(irods::DATABASE_OP_MOD_COLL, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_mod_coll_op));
         add_operation<collInfo_t*>(irods::DATABASE_OP_DEL_COLL, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_del_coll_op));
-        add_operation<collInfo_t*>(irods::DATABASE_OP_DEL_COLL_BY_ADMIN, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_del_coll_op));
+        add_operation<collInfo_t*>(irods::DATABASE_OP_DEL_COLL_BY_ADMIN, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_del_coll_by_admin_op));
         add_operation<const char*, const char*>(irods::DATABASE_OP_RENAME_COLL, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_rename_coll_op));
 
         add_operation<std::map<std::string, std::string>*>(irods::DATABASE_OP_REG_RESC, std::function<irods::error(irods::plugin_context&, std::map<std::string, std::string>*)>(db_reg_resc_op));

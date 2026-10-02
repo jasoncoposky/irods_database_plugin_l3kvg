@@ -89,6 +89,7 @@ namespace irods::catalog {
         irods::error register_collection(const collection& coll, coll_id_t& out_id);
         irods::error rename_collection(std::string_view old_name, std::string_view new_name);
         irods::error delete_collection(coll_id_t coll_id);
+        irods::error is_collection_empty(coll_id_t coll_id, bool& is_empty);
         irods::error modify_collection(coll_id_t coll_id, std::string_view prop, std::string_view value);
         irods::error get_collection_subtree_ids(snowflake_id_t coll_sid, std::vector<snowflake_id_t>& out_ids);
 
