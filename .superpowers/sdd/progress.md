@@ -1,8 +1,10 @@
 # Subagent-Driven Development Progress Ledger
+Plan: docs/superpowers/plans/2026-10-02-l3kvg-vs-relational-performance-plan.md
+Base Commit: f772cae
 
-Task 1: complete (commits abf36ee..ff43c07, review clean)
-Task 2: complete (commits 6e63b1bcc..e02454c9d in irods, review clean)
-Task 3: complete (commits ff43c07..c14766b, review clean)
-Task 4: complete (commits c14766b..f695131, review clean)
-Task 5: complete (commits f278816..9879873, review clean)
-Task 6: complete (commits a6ed440..f8469cf, all 14 test suites passing 100%)
+| Task | Status | Commits | Notes |
+|---|---|---|---|
+| Task 1: Environment Staging & PostgreSQL Cluster Stand-up | complete | f772cae..3f5f4b2 | Both L3KVG and PostgreSQL 16 clusters live and responding to ils |
+| Task 2: Implement Statistical Aggregator & Test Harness Framework | complete | 3f5f4b2..a2f9dc3 | 14/14 tests passing, percentile ranking & precision hardened |
+| Task 3: Implement Macro Workloads in bench_catalog_comparison.py | complete | a2f9dc3..e81659b | All 6 macro workloads implemented, 22/22 unit tests passing, dry-run on live L3KVG and PG containers validated |
+
