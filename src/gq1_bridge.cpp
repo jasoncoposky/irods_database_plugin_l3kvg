@@ -511,17 +511,57 @@ namespace irods::catalog::bridge {
                             best_start_priority = 2;
                         }
                     }
-                } else if (inx == COL_USER_NAME || inx == COL_USER_GROUP_NAME) {
+                } else if (inx == COL_USER_NAME) {
                     if (_catalog != nullptr && (likely_root == "User" || likely_root == "Group" || best_start_priority < 1)) {
-                        snowflake_id_t sid = _catalog->resolve_id_from_index(EntityType::User, "n", literal);
+                        std::string clean_name = literal;
+                        std::string clean_zone;
+                        for (int j = 0; j < _inp->sqlCondInp.len; ++j) {
+                            if (get_pure_inx(_inp->sqlCondInp.inx[j]) == COL_USER_ZONE) {
+                                std::smatch z_match;
+                                std::string z_cond(_inp->sqlCondInp.value[j]);
+                                if (std::regex_match(z_cond, z_match, eq_regex)) {
+                                    clean_zone = extract_literal(z_match);
+                                }
+                                break;
+                            }
+                        }
+                        snowflake_id_t sid = 0;
+                        if (!clean_zone.empty()) {
+                            sid = _catalog->resolve_id_from_index(EntityType::User, "nz", clean_name + "#" + clean_zone);
+                        }
+                        if (!sid) {
+                            sid = _catalog->resolve_user(clean_name, clean_zone);
+                        }
                         if (sid) {
                             _starting_nodes.clear();
                             _starting_nodes.push_back(sid);
                             resolved_start = true;
-                            best_start_priority = (likely_root == "User" || likely_root == "Group" ? 4 : 1);
+                            if (likely_root == "User" || likely_root == "Group") {
+                                likely_root = "User";
+                                ast.from_entity = "User";
+                                best_start_priority = 4;
+                            } else {
+                                best_start_priority = 1;
+                            }
                         }
                     }
-                } else if (inx == COL_USER_ID || inx == COL_USER_GROUP_ID) {
+                } else if (inx == COL_USER_GROUP_NAME) {
+                    if (_catalog != nullptr && (likely_root == "User" || likely_root == "Group" || best_start_priority < 1)) {
+                        snowflake_id_t sid = _catalog->resolve_user(literal);
+                        if (sid) {
+                            _starting_nodes.clear();
+                            _starting_nodes.push_back(sid);
+                            resolved_start = true;
+                            if (likely_root == "User" || likely_root == "Group") {
+                                likely_root = "Group";
+                                ast.from_entity = "Group";
+                                best_start_priority = 4;
+                            } else {
+                                best_start_priority = 1;
+                            }
+                        }
+                    }
+                } else if (inx == COL_USER_ID) {
                     if (_catalog != nullptr && (likely_root == "User" || likely_root == "Group" || best_start_priority < 1)) {
                         try {
                             snowflake_id_t sid = _catalog->make_id(EntityType::User, std::stoull(literal));
@@ -529,7 +569,31 @@ namespace irods::catalog::bridge {
                                 _starting_nodes.clear();
                                 _starting_nodes.push_back(sid);
                                 resolved_start = true;
-                                best_start_priority = (likely_root == "User" || likely_root == "Group" ? 4 : 1);
+                                if (likely_root == "User" || likely_root == "Group") {
+                                    likely_root = "User";
+                                    ast.from_entity = "User";
+                                    best_start_priority = 4;
+                                } else {
+                                    best_start_priority = 1;
+                                }
+                            }
+                        } catch (...) {}
+                    }
+                } else if (inx == COL_USER_GROUP_ID) {
+                    if (_catalog != nullptr && (likely_root == "User" || likely_root == "Group" || best_start_priority < 1)) {
+                        try {
+                            snowflake_id_t sid = _catalog->make_id(EntityType::User, std::stoull(literal));
+                            if (sid) {
+                                _starting_nodes.clear();
+                                _starting_nodes.push_back(sid);
+                                resolved_start = true;
+                                if (likely_root == "User" || likely_root == "Group") {
+                                    likely_root = "Group";
+                                    ast.from_entity = "Group";
+                                    best_start_priority = 4;
+                                } else {
+                                    best_start_priority = 1;
+                                }
                             }
                         } catch (...) {}
                     }
@@ -713,8 +777,14 @@ namespace irods::catalog::bridge {
         if (!resolved_start && likely_root == "Zone" && _starting_nodes.empty() && _catalog != nullptr) {
             snowflake_id_t zid = _catalog->get_zone_id();
             _starting_nodes.push_back(zid);
+            auto zone_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), zid, "HAS_ZONE", 0.0).get();
+            for (auto remote_zid : zone_nodes) {
+                if (remote_zid != zid) {
+                    _starting_nodes.push_back(remote_zid);
+                }
+            }
             resolved_start = true;
-            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved Zone starting node 0x%016llx", (unsigned long long)zid);
+            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu Zone starting nodes (local + HAS_ZONE)", _starting_nodes.size());
         } else if (!resolved_start && likely_root == "Resource" && _starting_nodes.empty() && _catalog != nullptr) {
             snowflake_id_t zid = _catalog->get_zone_id();
             auto resc_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), zid, "HAS_RESC", 0.0).get();
@@ -723,8 +793,22 @@ namespace irods::catalog::bridge {
             rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu Resource starting nodes from Zone HAS_RESC", _starting_nodes.size());
         } else if (!resolved_start && (likely_root == "User" || likely_root == "Group") && _starting_nodes.empty() && _catalog != nullptr) {
             snowflake_id_t zid = _catalog->get_zone_id();
-            auto user_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), zid, "HAS_USER", 0.0).get();
-            _starting_nodes = std::move(user_nodes);
+            std::vector<snowflake_id_t> all_user_nodes;
+            std::unordered_set<snowflake_id_t> seen_users;
+            auto add_users_from_zone = [&](snowflake_id_t z_id) {
+                auto users = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), z_id, "HAS_USER", 0.0).get();
+                for (auto u : users) {
+                    if (seen_users.insert(u).second) {
+                        all_user_nodes.push_back(u);
+                    }
+                }
+            };
+            add_users_from_zone(zid);
+            auto zone_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), zid, "HAS_ZONE", 0.0).get();
+            for (auto remote_zid : zone_nodes) {
+                add_users_from_zone(remote_zid);
+            }
+            _starting_nodes = std::move(all_user_nodes);
             resolved_start = true;
             rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu %s starting nodes from Zone HAS_USER", _starting_nodes.size(), likely_root.c_str());
         } else if (!resolved_start && likely_root == "Rule" && _starting_nodes.empty() && _catalog != nullptr) {

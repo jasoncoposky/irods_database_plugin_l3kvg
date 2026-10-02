@@ -2,6 +2,7 @@
 #include "irods/catalog/catalog_facade.hpp"
 #include "irods/irods_server_properties.hpp"
 #include "irods/rodsGenQuery.h"
+#include "irods/private/genquery2_sql.hpp"
 #include <cstring>
 #include <iostream>
 
@@ -35,14 +36,10 @@ TEST_F(DataAccessQueryTest, QueryDataAccessReturnsResults) {
     // Bootstrap (creates user 'rods')
     ASSERT_TRUE(catalog.bootstrap_catalog("tempZone", "rods").ok());
 
-    // Register Collection
-    coll_id_t coll_id;
-    collection coll;
-    coll.id = 1000;
-    coll.name = "/tempZone/home/rods";
-    coll.owner_name = "rods";
-    coll.owner_zone = "tempZone";
-    ASSERT_TRUE(catalog.register_collection(coll, coll_id).ok());
+    // Resolve existing collection /tempZone/home/rods
+    snowflake_id_t coll_id = 0;
+    EntityType et;
+    ASSERT_TRUE(catalog.resolve_path("/tempZone/home/rods", coll_id, et).ok());
 
     // Register Data Object
     data_id_t data_id;
@@ -96,6 +93,94 @@ TEST_F(DataAccessQueryTest, QueryDataAccessReturnsResults) {
     free(inp.sqlCondInp.inx);
     free(inp.sqlCondInp.value[0]);
     free(inp.sqlCondInp.value[1]);
+    free(inp.sqlCondInp.value);
+}
+
+TEST_F(DataAccessQueryTest, QueryCollectionPublicCheck) {
+    CatalogFacade catalog;
+    Config cfg;
+    cfg.node_id = 1;
+    cfg.zmq_endpoint = endpoint();
+    ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
+    ASSERT_TRUE(catalog.bootstrap_catalog("tempZone", "rods").ok());
+
+    genQueryInp_t inp{};
+    memset(&inp, 0, sizeof(genQueryInp_t));
+    inp.selectInp.len = 2;
+    inp.selectInp.inx = (int*)malloc(2 * sizeof(int));
+    inp.selectInp.inx[0] = COL_COLL_NAME;
+    inp.selectInp.inx[1] = COL_COLL_ID;
+    inp.selectInp.value = (int*)malloc(2 * sizeof(int));
+    inp.selectInp.value[0] = 1;
+    inp.selectInp.value[1] = 1;
+
+    inp.sqlCondInp.len = 1;
+    inp.sqlCondInp.inx = (int*)malloc(sizeof(int));
+    inp.sqlCondInp.inx[0] = COL_COLL_NAME;
+    inp.sqlCondInp.value = (char**)malloc(sizeof(char*));
+    inp.sqlCondInp.value[0] = strdup("= '/tempZone/home/public'");
+
+    std::vector<snowflake_id_t> starting_nodes;
+    auto ast = bridge::synthesize_gq2_ast(&inp, &catalog, starting_nodes);
+
+    ResultSet results;
+    ASSERT_TRUE(catalog.execute_query(ast, results).ok());
+    std::cerr << "Public Query found " << results.row_count() << " rows." << std::endl;
+    for (size_t i = 0; i < results.row_count(); ++i) {
+        std::cerr << "  Row " << i << ": COLL_NAME=" << results.get_field(i, 0) << ", COLL_ID=" << results.get_field(i, 1) << std::endl;
+    }
+    EXPECT_EQ(results.row_count(), 1);
+
+    free(inp.selectInp.inx);
+    free(inp.selectInp.value);
+    free(inp.sqlCondInp.inx);
+    free(inp.sqlCondInp.value[0]);
+    free(inp.sqlCondInp.value);
+}
+
+TEST_F(DataAccessQueryTest, QueryCollectionPublicCheckAsUnprivilegedUser) {
+    CatalogFacade catalog;
+    Config cfg;
+    cfg.node_id = 1;
+    cfg.zmq_endpoint = endpoint();
+    ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
+    ASSERT_TRUE(catalog.bootstrap_catalog("tempZone", "rods").ok());
+
+    genQueryInp_t inp{};
+    memset(&inp, 0, sizeof(genQueryInp_t));
+    inp.selectInp.len = 2;
+    inp.selectInp.inx = (int*)malloc(2 * sizeof(int));
+    inp.selectInp.inx[0] = COL_COLL_NAME;
+    inp.selectInp.inx[1] = COL_COLL_ID;
+    inp.selectInp.value = (int*)malloc(2 * sizeof(int));
+    inp.selectInp.value[0] = 1;
+    inp.selectInp.value[1] = 1;
+
+    inp.sqlCondInp.len = 1;
+    inp.sqlCondInp.inx = (int*)malloc(sizeof(int));
+    inp.sqlCondInp.inx[0] = COL_COLL_NAME;
+    inp.sqlCondInp.value = (char**)malloc(sizeof(char*));
+    inp.sqlCondInp.value[0] = strdup("= '/tempZone/home/public'");
+
+    std::vector<snowflake_id_t> starting_nodes;
+    auto ast = bridge::synthesize_gq2_ast(&inp, &catalog, starting_nodes);
+
+    irods::experimental::genquery2::options opts;
+    opts.user_name = "otherrods";
+    opts.admin_mode = false;
+
+    ResultSet results;
+    ASSERT_TRUE(catalog.execute_query(ast, results, starting_nodes, "Collection", &opts).ok());
+    std::cerr << "Unprivileged Public Query found " << results.row_count() << " rows." << std::endl;
+    for (size_t i = 0; i < results.row_count(); ++i) {
+        std::cerr << "  Row " << i << ": COLL_NAME=" << results.get_field(i, 0) << ", COLL_ID=" << results.get_field(i, 1) << std::endl;
+    }
+    EXPECT_EQ(results.row_count(), 1);
+
+    free(inp.selectInp.inx);
+    free(inp.selectInp.value);
+    free(inp.sqlCondInp.inx);
+    free(inp.sqlCondInp.value[0]);
     free(inp.sqlCondInp.value);
 }
 

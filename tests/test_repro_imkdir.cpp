@@ -31,20 +31,16 @@ TEST_F(GenQueryCompatibilityTest, ParentCollectionQueryReturnsResults) {
     cfg.zmq_endpoint = endpoint();
     ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
 
-    // 2. Register Parent Collection
-    coll_id_t parent_id;
-    collection parent;
-    parent.id = 100;
-    parent.name = "/tempZone/home/rods";
-    parent.owner_name = "rods";
-    parent.owner_zone = "tempZone";
-    ASSERT_TRUE(catalog.register_collection(parent, parent_id).ok());
+    // 2. Resolve Parent Collection (already registered during init)
+    snowflake_id_t parent_id = 0;
+    EntityType parent_et;
+    ASSERT_TRUE(catalog.resolve_path("/tempZone/home/rods", parent_id, parent_et).ok());
 
     // 3. Register Child Collection with parent_name set
     coll_id_t child_id;
     collection child;
     child.id = 101;
-    child.parent_id = 100;
+    child.parent_id = parent_id;
     child.name = "/tempZone/home/rods/sub";
     child.parent_name = "/tempZone/home/rods";
     child.owner_name = "rods";
@@ -103,20 +99,16 @@ TEST_F(GenQueryCompatibilityTest, ImkdirFailsWhenFileAlreadyExists) {
     cfg.zmq_endpoint = endpoint();
     ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
 
-    // 1. Register Parent Collection
-    coll_id_t parent_id;
-    collection parent;
-    parent.id = 200;
-    parent.name = "/tempZone/home/rods";
-    parent.owner_name = "rods";
-    parent.owner_zone = "tempZone";
-    ASSERT_TRUE(catalog.register_collection(parent, parent_id).ok());
+    // 1. Resolve Parent Collection (already registered during init)
+    snowflake_id_t parent_id = 0;
+    EntityType parent_et;
+    ASSERT_TRUE(catalog.resolve_path("/tempZone/home/rods", parent_id, parent_et).ok());
 
     // 2. Register Data Object under parent
     data_id_t data_id;
     data_object obj;
     obj.id = 2001;
-    obj.coll_id = 200;
+    obj.coll_id = parent_id;
     obj.name = "testfile";
     obj.full_path = "/tempZone/home/rods/testfile";
     obj.owner_name = "rods";
@@ -127,7 +119,7 @@ TEST_F(GenQueryCompatibilityTest, ImkdirFailsWhenFileAlreadyExists) {
     coll_id_t coll_id;
     collection coll_conflict;
     coll_conflict.id = 201;
-    coll_conflict.parent_id = 200;
+    coll_conflict.parent_id = parent_id;
     coll_conflict.name = "/tempZone/home/rods/testfile";
     coll_conflict.parent_name = "/tempZone/home/rods";
     coll_conflict.owner_name = "rods";
@@ -149,7 +141,7 @@ TEST_F(GenQueryCompatibilityTest, ImkdirFailsWhenFileAlreadyExists) {
     // 5. Attempt to register data object with same path as existing collection -> MUST FAIL with CAT_NAME_EXISTS_AS_COLLECTION (-835000)
     data_object obj_conflict;
     obj_conflict.id = 2002;
-    obj_conflict.coll_id = 200;
+    obj_conflict.coll_id = parent_id;
     obj_conflict.name = "rods";
     obj_conflict.full_path = "/tempZone/home/rods";
     obj_conflict.owner_name = "rods";

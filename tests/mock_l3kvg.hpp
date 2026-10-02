@@ -250,33 +250,52 @@ namespace irods::catalog::test {
                              for (const auto& [id, node] : nodes_) {
                                  if (!sn_set.empty() && !sn_set.count(id)) continue;
                                  bool match = true;
-                                 if (q.contains("filters")) {
-                                     for (const auto& f : q["filters"]) {
-                                         if (f["alias"] == root_alias) {
-                                             std::string key = f["key"];
-                                             std::string val = f["value"];
-                                             int op = f.value("op", 0);
-                                             std::string attr = node.get_attribute<std::string>(key);
-                                             if (op == 0) {
-                                                 if (attr != val) { match = false; break; }
-                                             } else if (op == 1) {
-                                                 if (attr == val) { match = false; break; }
-                                             } else if (op == 6) {
-                                                 std::string regex_str = "^";
-                                                 for (char c : val) {
-                                                     if (c == '%') regex_str += ".*";
-                                                     else if (c == '_') regex_str += ".";
-                                                     else if (c == '.' || c == '*' || c == '+' || c == '?' || c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' || c == '|') { regex_str += "\\"; regex_str += c; }
-                                                     else regex_str += c;
-                                                 }
-                                                 regex_str += "$";
-                                                 try {
-                                                     std::regex re(regex_str, std::regex_constants::icase);
-                                                     if (!std::regex_match(attr, re)) { match = false; break; }
-                                                 } catch (...) { match = false; break; }
+                                 std::function<bool(const nlohmann::json&)> eval_filters = [&](const nlohmann::json& filter_list) -> bool {
+                                     for (const auto& f : filter_list) {
+                                         if (f.contains("filters") && f["filters"].is_array()) {
+                                             if (!eval_filters(f["filters"])) return false;
+                                             continue;
+                                         }
+                                         if (!f.contains("alias") || f["alias"] != root_alias) continue;
+                                         std::string key = f.value("key", "");
+                                         std::string val = f.value("value", "");
+                                         if (key == "_access_user") {
+                                             std::string owner = node.get_attribute<std::string>("o");
+                                             std::string n = node.get_attribute<std::string>("n");
+                                             if (owner != val) {
+                                                 bool is_public = (n == "/" || n.find('/', 1) == std::string::npos ||
+                                                                   n.ends_with("/home") || n.ends_with("/trash") ||
+                                                                   n.ends_with("/public"));
+                                                 if (!is_public) return false;
                                              }
+                                             continue;
+                                         }
+                                         int op = f.value("op", 0);
+                                         std::string attr = node.get_attribute<std::string>(key);
+                                         if (op == 0) {
+                                             if (attr != val) return false;
+                                         } else if (op == 1) {
+                                             if (attr == val) return false;
+                                         } else if (op == 6) {
+                                             std::string regex_str = "^";
+                                             for (char c : val) {
+                                                 if (c == '%') regex_str += ".*";
+                                                 else if (c == '_') regex_str += ".";
+                                                 else if (c == '.' || c == '*' || c == '+' || c == '?' || c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' || c == '|') { regex_str += "\\"; regex_str += c; }
+                                                 else regex_str += c;
+                                             }
+                                             regex_str += "$";
+                                             try {
+                                                 std::regex re(regex_str, std::regex_constants::icase);
+                                                 if (!std::regex_match(attr, re)) return false;
+                                             } catch (...) { return false; }
                                          }
                                      }
+                                     return true;
+                                 };
+
+                                 if (q.contains("filters")) {
+                                     match = eval_filters(q["filters"]);
                                  }
                                  
                                  if (match) {

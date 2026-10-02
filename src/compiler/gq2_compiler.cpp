@@ -55,6 +55,8 @@ namespace irods::catalog::compiler {
         {COL_USER_TYPE,        {"User", "t"}},
         {COL_USER_ZONE,        {"User", "z"}},
         {COL_USER_DN,          {"User", "d"}},
+        {COL_USER_INFO,        {"User", "i"}},
+        {COL_USER_COMMENT,     {"User", "c"}},
         {COL_USER_CREATE_TIME, {"User", "ct"}},
         {COL_USER_MODIFY_TIME, {"User", "mt"}},
         {COL_USER_GROUP_ID,    {"Group", "id"}},

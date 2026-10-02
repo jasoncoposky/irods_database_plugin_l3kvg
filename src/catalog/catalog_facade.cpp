@@ -74,10 +74,16 @@ namespace irods::catalog {
                 add_index(EntityType::Zone, "n", zone_name, zid);
                 add_index(EntityType::Zone, "t", "local", zid);
                 add_index(EntityType::Zone, "id", "1", zid);
+                add_edge(zid, "HAS_ZONE", 1.0, zid);
 
                 if (zid) {
+                    char time_buf[32];
+                    snprintf(time_buf, sizeof(time_buf), "%011lld", (long long)time(nullptr));
                     std::string adm_user = cfg.admin_user.empty() ? "rods" : cfg.admin_user;
-                    snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", adm_user);
+                    snowflake_id_t uid = resolve_id_from_index(EntityType::User, "nz", adm_user + "#" + std::string(zone_name));
+                    if (!uid) {
+                        uid = resolve_id_from_index(EntityType::User, "n", adm_user);
+                    }
                     if (!uid) {
                         uid = make_id(EntityType::User, 1);
                     }
@@ -89,15 +95,34 @@ namespace irods::catalog {
                         ubuf.set_str(0, "z", std::string(zone_name));
                         ubuf.set_i64(0, "p", 5); 
                         ubuf.set_str(0, "pw", adm_user);
+                        ubuf.set_str(0, "c", "");
+                        ubuf.set_str(0, "i", "");
+                        ubuf.set_str(0, "ct", time_buf);
+                        ubuf.set_str(0, "mt", time_buf);
                         ubuf.set_i64(0, "id", 1);
                         client_->put_node_async(local_cluster_id_, uid, ubuf.move_to_string()).get();
+                    } else {
+                        try {
+                            lite3cpp::Buffer ubuf(std::vector<uint8_t>(upayload.begin(), upayload.end()));
+                            if (safe_get_str(ubuf, 0, "ct").empty()) {
+                                ubuf.set_str(0, "ct", time_buf);
+                                ubuf.set_str(0, "mt", time_buf);
+                                ubuf.set_str(0, "c", "");
+                                ubuf.set_str(0, "i", "");
+                                client_->put_node_async(local_cluster_id_, uid, ubuf.move_to_string()).get();
+                            }
+                        } catch (...) {}
                     }
+                    add_index(EntityType::User, "nz", adm_user + "#" + std::string(zone_name), uid);
                     add_index(EntityType::User, "n", adm_user, uid);
                     add_index(EntityType::User, "id", "1", uid);
                     add_edge(zid, "HAS_USER", 1.0, uid);
                     add_edge(uid, "MEMBER_OF", 1.0, uid);
 
-                    snowflake_id_t gid_pub = resolve_id_from_index(EntityType::User, "n", "public");
+                    snowflake_id_t gid_pub = resolve_id_from_index(EntityType::User, "nz", "public#" + std::string(zone_name));
+                    if (!gid_pub) {
+                        gid_pub = resolve_id_from_index(EntityType::User, "n", "public");
+                    }
                     if (!gid_pub) {
                         gid_pub = make_id(EntityType::User, 2);
                     }
@@ -107,16 +132,24 @@ namespace irods::catalog {
                         gbuf_public.set_str(0, "n", "public"); 
                         gbuf_public.set_str(0, "t", "rodsgroup"); 
                         gbuf_public.set_str(0, "z", std::string(zone_name));
+                        gbuf_public.set_str(0, "c", "");
+                        gbuf_public.set_str(0, "i", "");
+                        gbuf_public.set_str(0, "ct", time_buf);
+                        gbuf_public.set_str(0, "mt", time_buf);
                         gbuf_public.set_i64(0, "id", 2);
                         client_->put_node_async(local_cluster_id_, gid_pub, gbuf_public.move_to_string()).get();
                     }
+                    add_index(EntityType::User, "nz", "public#" + std::string(zone_name), gid_pub);
                     add_index(EntityType::User, "n", "public", gid_pub);
                     add_index(EntityType::User, "id", "2", gid_pub);
                     add_edge(zid, "HAS_USER", 1.0, gid_pub);
                     add_edge(gid_pub, "MEMBER_OF", 1.0, gid_pub);
                     add_edge(uid, "MEMBER_OF", 1.0, gid_pub);
 
-                    snowflake_id_t gid_adm = resolve_id_from_index(EntityType::User, "n", "rodsadmin");
+                    snowflake_id_t gid_adm = resolve_id_from_index(EntityType::User, "nz", "rodsadmin#" + std::string(zone_name));
+                    if (!gid_adm) {
+                        gid_adm = resolve_id_from_index(EntityType::User, "n", "rodsadmin");
+                    }
                     if (!gid_adm) {
                         gid_adm = make_id(EntityType::User, 3);
                     }
@@ -126,9 +159,14 @@ namespace irods::catalog {
                         gbuf_admin.set_str(0, "n", "rodsadmin"); 
                         gbuf_admin.set_str(0, "t", "rodsgroup"); 
                         gbuf_admin.set_str(0, "z", std::string(zone_name));
+                        gbuf_admin.set_str(0, "c", "");
+                        gbuf_admin.set_str(0, "i", "");
+                        gbuf_admin.set_str(0, "ct", time_buf);
+                        gbuf_admin.set_str(0, "mt", time_buf);
                         gbuf_admin.set_i64(0, "id", 3);
                         client_->put_node_async(local_cluster_id_, gid_adm, gbuf_admin.move_to_string()).get();
                     }
+                    add_index(EntityType::User, "nz", "rodsadmin#" + std::string(zone_name), gid_adm);
                     add_index(EntityType::User, "n", "rodsadmin", gid_adm);
                     add_index(EntityType::User, "id", "3", gid_adm);
                     add_edge(zid, "HAS_USER", 1.0, gid_adm);
@@ -178,9 +216,12 @@ namespace irods::catalog {
                             cid = make_id(EntityType::Collection, coll_id);
                         }
                         std::string cpayload = client_->get_node_payload_async(local_cluster_id_, cid).get();
+                        bool needs_update = false;
+                        lite3cpp::Buffer cbuf;
                         if (cpayload.empty()) {
-                            lite3cpp::Buffer cbuf;
                             cbuf.init_object();
+                            cbuf.set_str(0, "entity_type", "collection");
+                            cbuf.set_str(0, "t", "");
                             cbuf.set_str(0, "n", std::string(coll_name));
                             cbuf.set_str(0, "pn", std::string(parent_name));
                             cbuf.set_str(0, "o", adm_user);
@@ -188,6 +229,34 @@ namespace irods::catalog {
                             cbuf.set_i64(0, "id", static_cast<int64_t>(coll_id));
                             cbuf.set_str(0, "ct", coll_time_buf);
                             cbuf.set_str(0, "mt", coll_time_buf);
+                            needs_update = true;
+                        } else {
+                            try {
+                                lite3cpp::Buffer exist_buf(std::vector<uint8_t>(cpayload.begin(), cpayload.end()));
+                                std::string et = safe_get_str(exist_buf, 0, "entity_type");
+                                std::string t = safe_get_str(exist_buf, 0, "t");
+                                std::string ct = safe_get_str(exist_buf, 0, "ct");
+                                bool dirty = false;
+                                if (et != "collection") {
+                                    exist_buf.set_str(0, "entity_type", "collection");
+                                    dirty = true;
+                                }
+                                if (t == "collection") {
+                                    exist_buf.set_str(0, "t", "");
+                                    dirty = true;
+                                }
+                                if (ct.empty()) {
+                                    exist_buf.set_str(0, "ct", coll_time_buf);
+                                    exist_buf.set_str(0, "mt", coll_time_buf);
+                                    dirty = true;
+                                }
+                                if (dirty) {
+                                    cbuf = std::move(exist_buf);
+                                    needs_update = true;
+                                }
+                            } catch (...) {}
+                        }
+                        if (needs_update) {
                             client_->put_node_async(local_cluster_id_, cid, cbuf.move_to_string()).get();
                         }
                         add_index(EntityType::Collection, "n", coll_name, cid);
@@ -209,19 +278,27 @@ namespace irods::catalog {
                     add_edge(zid, "HAS_ROOT_COLL", 1.0, rcid);
 
                     std::string home_coll_name = root_coll_name + "/home";
-                    snowflake_id_t hcid = ensure_coll(home_coll_name, root_coll_name, 2, rcid, false);
+                    snowflake_id_t hcid = ensure_coll(home_coll_name, root_coll_name, 2, rcid, true);
 
                     std::string public_coll_name = home_coll_name + "/public";
                     ensure_coll(public_coll_name, home_coll_name, 3, hcid, false);
+                    set_access("public", zone_name, public_coll_name, "own", false);
+                    set_access(adm_user, zone_name, public_coll_name, "own", false);
 
                     std::string adm_coll_name = home_coll_name + "/" + adm_user;
                     ensure_coll(adm_coll_name, home_coll_name, 6, hcid, true);
 
                     std::string trash_coll_name = root_coll_name + "/trash";
-                    snowflake_id_t tcid = ensure_coll(trash_coll_name, root_coll_name, 4, rcid, false);
+                    snowflake_id_t tcid = ensure_coll(trash_coll_name, root_coll_name, 4, rcid, true);
 
                     std::string trash_home_coll_name = trash_coll_name + "/home";
-                    ensure_coll(trash_home_coll_name, trash_coll_name, 5, tcid, false);
+                    snowflake_id_t thcid = ensure_coll(trash_home_coll_name, trash_coll_name, 5, tcid, true);
+
+                    std::string trash_public_coll_name = trash_home_coll_name + "/public";
+                    ensure_coll(trash_public_coll_name, trash_home_coll_name, 7, thcid, false);
+                    set_access("public", zone_name, trash_public_coll_name, "own", false);
+                    set_access(adm_user, zone_name, trash_public_coll_name, "own", false);
+
                 }
 
                 snowflake_id_t marker_id = SnowflakeID::create(local_cluster_id_, "init:default_specific_queries");
@@ -342,6 +419,32 @@ namespace irods::catalog {
             return local_zone_name_;
         }
 
+        snowflake_id_t resolve_user(std::string_view user_name, std::string_view zone = "") {
+            std::string clean_name(user_name);
+            std::string clean_zone(zone);
+            auto hpos = clean_name.find('#');
+            if (hpos != std::string::npos) {
+                clean_zone = clean_name.substr(hpos + 1);
+                clean_name = clean_name.substr(0, hpos);
+            }
+            if (clean_zone.empty()) {
+                clean_zone = local_zone_name_;
+            }
+
+            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "nz", clean_name + "#" + clean_zone);
+            if (uid) return uid;
+
+            if (clean_zone == local_zone_name_ || clean_zone.empty()) {
+                uid = resolve_id_from_index(EntityType::User, "n", clean_name);
+                if (uid) return uid;
+            }
+
+            if (clean_zone.empty()) {
+                uid = resolve_id_from_index(EntityType::User, "n", user_name);
+            }
+            return uid;
+        }
+
         void add_edge(snowflake_id_t src, std::string_view label, double weight, snowflake_id_t dst) {
             std::string out_key = std::string(l3kvg::KeyBuilder::edge_out_key(src, label, weight, dst));
             client_->put_edge_async(local_cluster_id_, out_key, "{}").get();
@@ -385,6 +488,7 @@ namespace irods::catalog {
             add_index(EntityType::Zone, "n", zone_name, zid);
             add_index(EntityType::Zone, "t", "local", zid);
             add_index(EntityType::Zone, "id", "1", zid);
+            add_edge(zid, "HAS_ZONE", 1.0, zid);
             
             snowflake_id_t uid = make_id(EntityType::User, 1);
             lite3cpp::Buffer ubuf; ubuf.init_object(); 
@@ -393,8 +497,13 @@ namespace irods::catalog {
             ubuf.set_str(0, "z", std::string(zone_name));
             ubuf.set_i64(0, "p", 5); 
             ubuf.set_str(0, "pw", std::string(admin_name));
+            ubuf.set_str(0, "c", "");
+            ubuf.set_str(0, "i", "");
+            ubuf.set_str(0, "ct", time_buf);
+            ubuf.set_str(0, "mt", time_buf);
             ubuf.set_i64(0, "id", 1);
             client_->put_node_async(local_cluster_id_, uid, ubuf.move_to_string()).get();
+            add_index(EntityType::User, "nz", std::string(admin_name) + "#" + std::string(zone_name), uid);
             add_index(EntityType::User, "n", admin_name, uid);
             add_index(EntityType::User, "id", "1", uid);
             add_edge(zid, "HAS_USER", 1.0, uid);
@@ -406,8 +515,13 @@ namespace irods::catalog {
             gbuf_public.set_str(0, "n", "public"); 
             gbuf_public.set_str(0, "t", "rodsgroup"); 
             gbuf_public.set_str(0, "z", std::string(zone_name));
+            gbuf_public.set_str(0, "c", "");
+            gbuf_public.set_str(0, "i", "");
+            gbuf_public.set_str(0, "ct", time_buf);
+            gbuf_public.set_str(0, "mt", time_buf);
             gbuf_public.set_i64(0, "id", 2);
             client_->put_node_async(local_cluster_id_, gid_public, gbuf_public.move_to_string()).get();
+            add_index(EntityType::User, "nz", "public#" + std::string(zone_name), gid_public);
             add_index(EntityType::User, "n", "public", gid_public);
             add_index(EntityType::User, "id", "2", gid_public);
             add_edge(zid, "HAS_USER", 1.0, gid_public);
@@ -418,8 +532,13 @@ namespace irods::catalog {
             gbuf_admin.set_str(0, "n", "rodsadmin"); 
             gbuf_admin.set_str(0, "t", "rodsgroup"); 
             gbuf_admin.set_str(0, "z", std::string(zone_name));
+            gbuf_admin.set_str(0, "c", "");
+            gbuf_admin.set_str(0, "i", "");
+            gbuf_admin.set_str(0, "ct", time_buf);
+            gbuf_admin.set_str(0, "mt", time_buf);
             gbuf_admin.set_i64(0, "id", 3);
             client_->put_node_async(local_cluster_id_, gid_admin, gbuf_admin.move_to_string()).get();
+            add_index(EntityType::User, "nz", "rodsadmin#" + std::string(zone_name), gid_admin);
             add_index(EntityType::User, "n", "rodsadmin", gid_admin);
             add_index(EntityType::User, "id", "3", gid_admin);
             add_edge(zid, "HAS_USER", 1.0, gid_admin);
@@ -440,7 +559,10 @@ namespace irods::catalog {
             std::string sys_root_coll = "/";
             snowflake_id_t sys_root_cid = make_id(EntityType::Collection, 9999);
             lite3cpp::Buffer cbuf;
-            cbuf.init_object(); cbuf.set_str(0, "n", sys_root_coll); cbuf.set_str(0, "pn", "/");
+            cbuf.init_object();
+            cbuf.set_str(0, "entity_type", "collection");
+            cbuf.set_str(0, "t", "");
+            cbuf.set_str(0, "n", sys_root_coll); cbuf.set_str(0, "pn", "/");
             cbuf.set_str(0, "o", std::string(admin_name)); cbuf.set_str(0, "z", std::string(zone_name));
             cbuf.set_i64(0, "id", 9999);
             cbuf.set_str(0, "ct", time_buf); cbuf.set_str(0, "mt", time_buf);
@@ -459,7 +581,10 @@ namespace irods::catalog {
             snowflake_id_t pcid = make_id(EntityType::Collection, 3);
             
             // Zone Root /<zone_name>
-            cbuf.init_object(); cbuf.set_str(0, "n", root_coll_name); cbuf.set_str(0, "pn", "/");
+            cbuf.init_object();
+            cbuf.set_str(0, "entity_type", "collection");
+            cbuf.set_str(0, "t", "");
+            cbuf.set_str(0, "n", root_coll_name); cbuf.set_str(0, "pn", "/");
             cbuf.set_str(0, "o", std::string(admin_name)); cbuf.set_str(0, "z", std::string(zone_name));
             cbuf.set_i64(0, "id", 1);
             cbuf.set_str(0, "ct", time_buf); cbuf.set_str(0, "mt", time_buf);
@@ -471,27 +596,41 @@ namespace irods::catalog {
             set_access(admin_name, zone_name, root_coll_name, "own", false);
             
             // home
-            cbuf.init_object(); cbuf.set_str(0, "n", home_coll_name); cbuf.set_str(0, "pn", root_coll_name);
+            cbuf.init_object();
+            cbuf.set_str(0, "entity_type", "collection");
+            cbuf.set_str(0, "t", "");
+            cbuf.set_str(0, "n", home_coll_name); cbuf.set_str(0, "pn", root_coll_name);
             cbuf.set_str(0, "o", std::string(admin_name)); cbuf.set_str(0, "z", std::string(zone_name));
             cbuf.set_i64(0, "id", 2);
+            cbuf.set_str(0, "ct", time_buf); cbuf.set_str(0, "mt", time_buf);
             client_->put_node_async(local_cluster_id_, hcid, cbuf.move_to_string()).get();
             add_index(EntityType::Collection, "n", home_coll_name, hcid);
             add_index(EntityType::Collection, "id", "2", hcid);
             add_edge(rcid, "CONTAINS", 1.0, hcid);
+            set_access(admin_name, zone_name, home_coll_name, "own", false);
             
             // public
-            cbuf.init_object(); cbuf.set_str(0, "n", public_coll_name); cbuf.set_str(0, "pn", home_coll_name);
+            cbuf.init_object();
+            cbuf.set_str(0, "entity_type", "collection");
+            cbuf.set_str(0, "t", "");
+            cbuf.set_str(0, "n", public_coll_name); cbuf.set_str(0, "pn", home_coll_name);
             cbuf.set_str(0, "o", std::string(admin_name)); cbuf.set_str(0, "z", std::string(zone_name));
             cbuf.set_i64(0, "id", 3);
+            cbuf.set_str(0, "ct", time_buf); cbuf.set_str(0, "mt", time_buf);
             client_->put_node_async(local_cluster_id_, pcid, cbuf.move_to_string()).get();
             add_index(EntityType::Collection, "n", public_coll_name, pcid);
             add_index(EntityType::Collection, "id", "3", pcid);
             add_edge(hcid, "CONTAINS", 1.0, pcid);
+            set_access("public", zone_name, public_coll_name, "own", false);
+            set_access(admin_name, zone_name, public_coll_name, "own", false);
 
             // home/<admin_name> (admin home)
             std::string rods_coll_name = home_coll_name + "/" + std::string(admin_name);
             snowflake_id_t rodscid = make_id(EntityType::Collection, 6);
-            cbuf.init_object(); cbuf.set_str(0, "n", rods_coll_name); cbuf.set_str(0, "pn", home_coll_name);
+            cbuf.init_object();
+            cbuf.set_str(0, "entity_type", "collection");
+            cbuf.set_str(0, "t", "");
+            cbuf.set_str(0, "n", rods_coll_name); cbuf.set_str(0, "pn", home_coll_name);
             cbuf.set_str(0, "o", std::string(admin_name)); cbuf.set_str(0, "z", std::string(zone_name));
             cbuf.set_i64(0, "id", 6);
             cbuf.set_str(0, "ct", time_buf); cbuf.set_str(0, "mt", time_buf);
@@ -504,24 +643,51 @@ namespace irods::catalog {
             // trash
             std::string trash_coll_name = root_coll_name + "/trash";
             snowflake_id_t tcid = make_id(EntityType::Collection, 4);
-            cbuf.init_object(); cbuf.set_str(0, "n", trash_coll_name); cbuf.set_str(0, "pn", root_coll_name);
+            cbuf.init_object();
+            cbuf.set_str(0, "entity_type", "collection");
+            cbuf.set_str(0, "t", "");
+            cbuf.set_str(0, "n", trash_coll_name); cbuf.set_str(0, "pn", root_coll_name);
             cbuf.set_str(0, "o", std::string(admin_name)); cbuf.set_str(0, "z", std::string(zone_name));
             cbuf.set_i64(0, "id", 4);
+            cbuf.set_str(0, "ct", time_buf); cbuf.set_str(0, "mt", time_buf);
             client_->put_node_async(local_cluster_id_, tcid, cbuf.move_to_string()).get();
             add_index(EntityType::Collection, "n", trash_coll_name, tcid);
             add_index(EntityType::Collection, "id", "4", tcid);
             add_edge(rcid, "CONTAINS", 1.0, tcid);
+            set_access(admin_name, zone_name, trash_coll_name, "own", false);
 
             // trash/home
             std::string trash_home_coll_name = trash_coll_name + "/home";
             snowflake_id_t thcid = make_id(EntityType::Collection, 5);
-            cbuf.init_object(); cbuf.set_str(0, "n", trash_home_coll_name); cbuf.set_str(0, "pn", trash_coll_name);
+            cbuf.init_object();
+            cbuf.set_str(0, "entity_type", "collection");
+            cbuf.set_str(0, "t", "");
+            cbuf.set_str(0, "n", trash_home_coll_name); cbuf.set_str(0, "pn", trash_coll_name);
             cbuf.set_str(0, "o", std::string(admin_name)); cbuf.set_str(0, "z", std::string(zone_name));
             cbuf.set_i64(0, "id", 5);
+            cbuf.set_str(0, "ct", time_buf); cbuf.set_str(0, "mt", time_buf);
             client_->put_node_async(local_cluster_id_, thcid, cbuf.move_to_string()).get();
             add_index(EntityType::Collection, "n", trash_home_coll_name, thcid);
             add_index(EntityType::Collection, "id", "5", thcid);
             add_edge(tcid, "CONTAINS", 1.0, thcid);
+            set_access(admin_name, zone_name, trash_home_coll_name, "own", false);
+
+            // trash/home/public
+            std::string trash_public_coll_name = trash_home_coll_name + "/public";
+            snowflake_id_t tpcid = make_id(EntityType::Collection, 7);
+            cbuf.init_object();
+            cbuf.set_str(0, "entity_type", "collection");
+            cbuf.set_str(0, "t", "");
+            cbuf.set_str(0, "n", trash_public_coll_name); cbuf.set_str(0, "pn", trash_home_coll_name);
+            cbuf.set_str(0, "o", std::string(admin_name)); cbuf.set_str(0, "z", std::string(zone_name));
+            cbuf.set_i64(0, "id", 7);
+            cbuf.set_str(0, "ct", time_buf); cbuf.set_str(0, "mt", time_buf);
+            client_->put_node_async(local_cluster_id_, tpcid, cbuf.move_to_string()).get();
+            add_index(EntityType::Collection, "n", trash_public_coll_name, tpcid);
+            add_index(EntityType::Collection, "id", "7", tpcid);
+            add_edge(thcid, "CONTAINS", 1.0, tpcid);
+            set_access("public", zone_name, trash_public_coll_name, "own", false);
+            set_access(admin_name, zone_name, trash_public_coll_name, "own", false);
 
             // Register default specific queries
             register_specific_query("ls", "select alias, sqlStr from R_SPECIFIC_QUERY");
@@ -594,7 +760,7 @@ namespace irods::catalog {
             #endif
             add_edge(cid, "CONTAINS", 1.0, sid);
 
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", obj.owner_name);
+            snowflake_id_t uid = resolve_user(obj.owner_name, obj.owner_zone);
             if (uid) {
                 #ifdef IRODS_SERVER
                 rodsLog(LOG_NOTICE, "L3_CATALOG: Creating OWNS edge: %016llx -- OWNS --> %016llx", (unsigned long long)uid, (unsigned long long)sid);
@@ -1173,8 +1339,7 @@ namespace irods::catalog {
                 lite3cpp::Buffer ch_buf(std::vector<uint8_t>(ch_payload.begin(), ch_payload.end()));
                 std::string ch_type = safe_get_str(ch_buf, 0, "t");
                 std::string ch_entity_type = safe_get_str(ch_buf, 0, "entity_type");
-                std::string ch_pn = safe_get_str(ch_buf, 0, "pn");
-                bool is_coll = (ch_entity_type == "collection" || ch_type == "collection" || !ch_pn.empty());
+                bool is_coll = (ch_entity_type == "collection" || (ch_entity_type.empty() && ch_type == "collection"));
                 if (is_coll) {
                     std::string old_ch_name = safe_get_str(ch_buf, 0, "n");
                     std::string sub = (old_ch_name.size() >= old_prefix.size()) ? old_ch_name.substr(old_prefix.size()) : "";
@@ -1207,8 +1372,7 @@ namespace irods::catalog {
                 lite3cpp::Buffer ch_buf(std::vector<uint8_t>(ch_payload.begin(), ch_payload.end()));
                 std::string ch_type = safe_get_str(ch_buf, 0, "t");
                 std::string ch_entity_type = safe_get_str(ch_buf, 0, "entity_type");
-                std::string ch_pn = safe_get_str(ch_buf, 0, "pn");
-                bool is_coll = (ch_entity_type == "collection" || ch_type == "collection" || !ch_pn.empty());
+                bool is_coll = (ch_entity_type == "collection" || (ch_entity_type.empty() && ch_type == "collection"));
                 if (is_coll) {
                     get_collection_subtree_ids(child_sid, out_ids, visited);
                 }
@@ -1582,7 +1746,7 @@ namespace irods::catalog {
             return SUCCESS(); 
         }
         irods::error resolve_user_name(std::string_view name, snowflake_id_t& out_id) { 
-            snowflake_id_t sid = resolve_id_from_index(EntityType::User, "n", name);
+            snowflake_id_t sid = resolve_user(name);
             if (!sid) return ERROR(-1, "User not found");
             out_id = sid;
             return SUCCESS(); 
@@ -1702,95 +1866,132 @@ namespace irods::catalog {
 
         // --- Identity ---
         irods::error register_user(const user& usr, user_id_t& out_id) {
-            snowflake_id_t existing_sid = resolve_id_from_index(EntityType::User, "n", usr.name);
+            std::string clean_name = usr.name;
+            std::string clean_zone = usr.zone;
+            auto hpos = clean_name.find('#');
+            if (hpos != std::string::npos) {
+                clean_zone = clean_name.substr(hpos + 1);
+                clean_name = clean_name.substr(0, hpos);
+            }
+            if (clean_zone.empty()) {
+                clean_zone = local_zone_name_;
+            }
+
             snowflake_id_t sid = make_id(EntityType::User, usr.id);
+            snowflake_id_t existing_sid = resolve_id_from_index(EntityType::User, "nz", clean_name + "#" + clean_zone);
+            if (!existing_sid && (clean_zone == local_zone_name_)) {
+                existing_sid = resolve_id_from_index(EntityType::User, "n", clean_name);
+            }
             if (existing_sid && existing_sid != sid) {
-                snowflake_id_t zid = get_zone_id(usr.zone);
-                del_edge(zid, "HAS_USER", 1.0, existing_sid);
-                del_edge(existing_sid, "MEMBER_OF", 1.0, existing_sid);
-                client_->del_node_async(local_cluster_id_, existing_sid).get();
+                return ERROR(CATALOG_ALREADY_HAS_ITEM_BY_THAT_NAME, "User already exists");
             }
             int priv = (usr.type == "rodsadmin" ? 5 : 1);
             #ifdef IRODS_SERVER
-            rodsLog(LOG_NOTICE, "L3_CATALOG: Registering User [%s] type [%s] id [%llu] priv [%d]", usr.name.c_str(), usr.type.c_str(), (unsigned long long)usr.id, priv);
+            rodsLog(LOG_NOTICE, "L3_CATALOG: Registering User [%s#%s] type [%s] id [%llu] priv [%d]", clean_name.c_str(), clean_zone.c_str(), usr.type.c_str(), (unsigned long long)usr.id, priv);
             #endif
+            char time_buf[64];
+            snprintf(time_buf, sizeof(time_buf), "%011ld", time(nullptr));
+
             lite3cpp::Buffer buf; buf.init_object(); 
-            buf.set_str(0, "n", usr.name);
+            buf.set_str(0, "n", clean_name);
             buf.set_str(0, "t", usr.type);
-            buf.set_str(0, "z", usr.zone);
+            buf.set_str(0, "z", clean_zone);
             buf.set_i64(0, "p", priv);
             buf.set_i64(0, "id", static_cast<int64_t>(usr.id));
+            buf.set_str(0, "c", "");
+            buf.set_str(0, "i", "");
+            buf.set_str(0, "ct", time_buf);
+            buf.set_str(0, "mt", time_buf);
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
-            add_index(EntityType::User, "n", usr.name, sid);
+            add_index(EntityType::User, "nz", clean_name + "#" + clean_zone, sid);
+            if (clean_zone == local_zone_name_) {
+                add_index(EntityType::User, "n", clean_name, sid);
+            }
             add_index(EntityType::User, "id", std::to_string(usr.id), sid);
-            snowflake_id_t zid = get_zone_id(usr.zone);
-            add_edge(zid, "HAS_USER", 1.0, sid);
+            snowflake_id_t zid = get_zone_id(clean_zone);
+            if (!zid) zid = get_zone_id(local_zone_name_);
+            if (zid) {
+                add_edge(zid, "HAS_USER", 1.0, sid);
+            }
             add_edge(sid, "MEMBER_OF", 1.0, sid);
             if (usr.type != "rodsgroup") {
-                snowflake_id_t gid_pub = resolve_id_from_index(EntityType::User, "n", "public");
+                snowflake_id_t gid_pub = resolve_id_from_index(EntityType::User, "nz", "public#" + clean_zone);
+                if (!gid_pub) gid_pub = resolve_id_from_index(EntityType::User, "nz", "public#" + local_zone_name_);
+                if (!gid_pub) gid_pub = resolve_id_from_index(EntityType::User, "n", "public");
                 if (!gid_pub) gid_pub = make_id(EntityType::User, 2);
                 add_edge(sid, "MEMBER_OF", 1.0, gid_pub);
             }
             out_id = usr.id; return SUCCESS();
         }
-        irods::error delete_user(std::string_view user_name) { 
+        irods::error delete_user(std::string_view user_name, std::string_view zone = "") { 
             std::string clean_name(user_name);
+            std::string clean_zone(zone);
             auto hpos = clean_name.find('#');
-            if (hpos != std::string::npos) clean_name = clean_name.substr(0, hpos);
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", clean_name);
-            if (!uid) {
-                uid = resolve_id_from_index(EntityType::User, "n", user_name);
+            if (hpos != std::string::npos) {
+                clean_zone = clean_name.substr(hpos + 1);
+                clean_name = clean_name.substr(0, hpos);
             }
-            if (uid) {
-                snowflake_id_t zid = get_zone_id();
+            if (clean_zone.empty()) {
+                clean_zone = local_zone_name_;
+            }
+
+            snowflake_id_t uid = resolve_user(clean_name, clean_zone);
+            if (!uid) {
+                return ERROR(CAT_INVALID_USER, "User not found");
+            }
+            snowflake_id_t zid = get_zone_id(clean_zone);
+            if (zid) {
                 del_edge(zid, "HAS_USER", 1.0, uid);
-                del_edge(uid, "MEMBER_OF", 1.0, uid);
+            }
+            del_edge(uid, "MEMBER_OF", 1.0, uid);
+            del_index(EntityType::User, "nz", clean_name + "#" + clean_zone);
+            if (clean_zone == local_zone_name_) {
                 del_index(EntityType::User, "n", clean_name);
                 del_index(EntityType::User, "n", user_name);
-                std::string payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
-                if (!payload.empty()) {
+            }
+            std::string payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
+            if (!payload.empty()) {
+                try {
+                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    std::string id_str = safe_get_str(buf, 0, "id");
+                    if (!id_str.empty()) del_index(EntityType::User, "id", id_str);
+                } catch (...) {}
+            }
+            auto groups = client_->get_neighbors_async(local_cluster_id_, uid, "MEMBER_OF", 0.0).get();
+            for (auto g : groups) {
+                del_edge(uid, "MEMBER_OF", 1.0, g);
+            }
+            auto members = client_->get_in_neighbors_async(local_cluster_id_, uid, "MEMBER_OF").get();
+            for (auto m : members) {
+                del_edge(m, "MEMBER_OF", 1.0, uid);
+            }
+            auto aids = client_->get_neighbors_async(local_cluster_id_, uid, "HAS_ACCESS", 0.0).get();
+            for (auto aid : aids) {
+                del_edge(uid, "HAS_ACCESS", 1.0, aid);
+                std::string aid_payload = client_->get_node_payload_async(local_cluster_id_, aid).get();
+                if (!aid_payload.empty()) {
                     try {
-                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
-                        std::string id_str = safe_get_str(buf, 0, "id");
-                        if (!id_str.empty()) del_index(EntityType::User, "id", id_str);
+                        lite3cpp::Buffer abuf(std::vector<uint8_t>(aid_payload.begin(), aid_payload.end()));
+                        int64_t owner_uid = abuf.get_i64(0, "uid");
+                        if (static_cast<uint64_t>(owner_uid) == uid) {
+                            for (auto m : members) {
+                                del_edge(m, "HAS_ACCESS", 1.0, aid);
+                            }
+                            auto targets = client_->get_neighbors_async(local_cluster_id_, aid, "FOR_OBJECT", 0.0).get();
+                            for (auto tid : targets) {
+                                del_edge(aid, "FOR_OBJECT", 1.0, tid);
+                            }
+                            client_->del_node_async(local_cluster_id_, aid).get();
+                        }
                     } catch (...) {}
                 }
-                auto groups = client_->get_neighbors_async(local_cluster_id_, uid, "MEMBER_OF", 0.0).get();
-                for (auto g : groups) {
-                    del_edge(uid, "MEMBER_OF", 1.0, g);
-                }
-                auto members = client_->get_in_neighbors_async(local_cluster_id_, uid, "MEMBER_OF").get();
-                for (auto m : members) {
-                    del_edge(m, "MEMBER_OF", 1.0, uid);
-                }
-                auto aids = client_->get_neighbors_async(local_cluster_id_, uid, "HAS_ACCESS", 0.0).get();
-                for (auto aid : aids) {
-                    del_edge(uid, "HAS_ACCESS", 1.0, aid);
-                    std::string aid_payload = client_->get_node_payload_async(local_cluster_id_, aid).get();
-                    if (!aid_payload.empty()) {
-                        try {
-                            lite3cpp::Buffer abuf(std::vector<uint8_t>(aid_payload.begin(), aid_payload.end()));
-                            int64_t owner_uid = abuf.get_i64(0, "uid");
-                            if (static_cast<uint64_t>(owner_uid) == uid) {
-                                for (auto m : members) {
-                                    del_edge(m, "HAS_ACCESS", 1.0, aid);
-                                }
-                                auto targets = client_->get_neighbors_async(local_cluster_id_, aid, "FOR_OBJECT", 0.0).get();
-                                for (auto tid : targets) {
-                                    del_edge(aid, "FOR_OBJECT", 1.0, tid);
-                                }
-                                client_->del_node_async(local_cluster_id_, aid).get();
-                            }
-                        } catch (...) {}
-                    }
-                }
-                client_->del_node_async(local_cluster_id_, uid).get();
             }
+            client_->del_node_async(local_cluster_id_, uid).get();
             return SUCCESS(); 
         }
-        irods::error modify_user(std::string_view user_name, std::string_view prop, std::string_view value) { 
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", user_name);
-            if (!uid) return ERROR(-1, "User not found");
+        irods::error modify_user(std::string_view user_name, std::string_view prop, std::string_view value, std::string_view zone = "") { 
+            snowflake_id_t uid = resolve_user(user_name, zone);
+            if (!uid) return ERROR(CAT_INVALID_USER, "User not found");
             
             std::string payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
             if (!payload.empty()) {
@@ -1803,14 +2004,18 @@ namespace irods::catalog {
                  } else if (prop == "comment") {
                      buf.set_str(0, "c", std::string(value));
                  } else if (prop == "info") {
+                     buf.set_str(0, "i", std::string(value));
                      buf.set_str(0, "info", std::string(value));
                  }
+                 char time_buf[64];
+                 snprintf(time_buf, sizeof(time_buf), "%011ld", time(nullptr));
+                 buf.set_str(0, "mt", time_buf);
                  client_->put_node_async(local_cluster_id_, uid, buf.move_to_string()).get();
             }
             return SUCCESS(); 
         }
         irods::error check_auth(std::string_view user_name, std::string_view zone, int& user_priv) {
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", user_name);
+            snowflake_id_t uid = resolve_user(user_name, zone);
             if (!uid) return ERROR(-1, "User not found");
             auto fut = client_->get_node_payload_async(local_cluster_id_, uid);
             std::string payload = fut.get();
@@ -1825,7 +2030,7 @@ namespace irods::catalog {
             } catch (...) { return ERROR(-1, "Failed to parse priv level"); }
         }
         irods::error get_user_password_and_priv(std::string_view user_name, std::string_view zone, std::string& out_pw, int& out_priv) {
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", user_name);
+            snowflake_id_t uid = resolve_user(user_name, zone);
             if (!uid) return ERROR(-1, "User not found");
             auto fut = client_->get_node_payload_async(local_cluster_id_, uid);
             std::string payload = fut.get();
@@ -1845,7 +2050,7 @@ namespace irods::catalog {
         }
         irods::error check_auth_credentials(std::string_view username, std::string_view zone, std::string_view password, bool& correct) {
             correct = false;
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", username);
+            snowflake_id_t uid = resolve_user(username, zone);
             if (!uid) return SUCCESS();
 
             std::string payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
@@ -1863,8 +2068,11 @@ namespace irods::catalog {
             return SUCCESS();
         }
         irods::error add_user_to_group(std::string_view user_name, std::string_view zone, std::string_view group_name) { 
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", user_name);
-            snowflake_id_t gid = resolve_id_from_index(EntityType::User, "n", group_name);
+            snowflake_id_t uid = resolve_user(user_name, zone);
+            snowflake_id_t gid = resolve_user(group_name, zone);
+            if (!gid) {
+                gid = resolve_user(group_name, local_zone_name_);
+            }
             if (!uid || !gid) return ERROR(-1, "User or group not found");
             add_edge(uid, "MEMBER_OF", 1.0, gid);
             auto aids = client_->get_neighbors_async(local_cluster_id_, gid, "HAS_ACCESS", 0.0).get();
@@ -1874,8 +2082,11 @@ namespace irods::catalog {
             return SUCCESS(); 
         }
         irods::error remove_user_from_group(std::string_view user_name, std::string_view zone, std::string_view group_name) { 
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", user_name);
-            snowflake_id_t gid = resolve_id_from_index(EntityType::User, "n", group_name);
+            snowflake_id_t uid = resolve_user(user_name, zone);
+            snowflake_id_t gid = resolve_user(group_name, zone);
+            if (!gid) {
+                gid = resolve_user(group_name, local_zone_name_);
+            }
             if (!uid || !gid) return ERROR(-1, "User or group not found");
             
             del_edge(uid, "MEMBER_OF", 1.0, gid);
@@ -1888,7 +2099,7 @@ namespace irods::catalog {
 
         // --- ACLs ---
         irods::error set_access(std::string_view user_name, std::string_view zone, std::string_view target_path, std::string_view level, bool recursive) { 
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", user_name);
+            snowflake_id_t uid = resolve_user(user_name, zone);
             if (!uid) return ERROR(-1, "User not found");
             
             // Resolve target path (could be data or collection)
@@ -1947,8 +2158,7 @@ namespace irods::catalog {
                                 lite3cpp::Buffer ch_buf(std::vector<uint8_t>(ch_payload.begin(), ch_payload.end()));
                                 std::string ch_type = safe_get_str(ch_buf, 0, "t");
                                 std::string ch_entity_type = safe_get_str(ch_buf, 0, "entity_type");
-                                std::string ch_pn = safe_get_str(ch_buf, 0, "pn");
-                                bool is_coll = (ch_entity_type == "collection" || ch_type == "collection" || !ch_pn.empty());
+                                bool is_coll = (ch_entity_type == "collection" || (ch_entity_type.empty() && ch_type == "collection"));
                                 if (is_coll) {
                                     queue.push_back(child_sid);
                                 }
@@ -2178,12 +2388,7 @@ namespace irods::catalog {
             } else if (et == EntityType::Resource) {
                 return resolve_id_from_index(EntityType::Resource, "n", target_id_or_name);
             } else if (et == EntityType::User) {
-                std::string_view u_name = target_id_or_name;
-                auto hash_pos = u_name.find('#');
-                if (hash_pos != std::string_view::npos) {
-                    u_name = u_name.substr(0, hash_pos);
-                }
-                return resolve_id_from_index(EntityType::User, "n", u_name);
+                return resolve_user(target_id_or_name);
             }
 
             return 0;
@@ -2303,6 +2508,10 @@ namespace irods::catalog {
         }
 
         irods::error register_zone(const zone& z) {
+            snowflake_id_t existing_zid = resolve_id_from_index(EntityType::Zone, "n", z.name);
+            if (existing_zid) {
+                return ERROR(CATALOG_ALREADY_HAS_ITEM_BY_THAT_NAME, "Zone already exists: " + z.name);
+            }
             uint64_t zid_num = 0;
             get_next_sequence_value("R_ZONE_MAIN", zid_num);
             if (zid_num == 0) zid_num = 1;
@@ -2317,6 +2526,11 @@ namespace irods::catalog {
             add_index(EntityType::Zone, "n", z.name, zid);
             add_index(EntityType::Zone, "id", std::to_string(zid_num), zid);
             add_index(EntityType::Zone, "t", z.type, zid);
+
+            snowflake_id_t local_zid = get_zone_id(local_zone_name_);
+            if (local_zid) {
+                add_edge(local_zid, "HAS_ZONE", 1.0, zid);
+            }
             return SUCCESS();
         }
         irods::error modify_zone(std::string_view name, std::string_view prop, std::string_view value) { 
@@ -2336,7 +2550,21 @@ namespace irods::catalog {
         irods::error delete_zone(std::string_view name) { 
             snowflake_id_t zid = resolve_id_from_index(EntityType::Zone, "n", name);
             if (zid) {
+                snowflake_id_t local_zid = get_zone_id(local_zone_name_);
+                if (local_zid) {
+                    del_edge(local_zid, "HAS_ZONE", 1.0, zid);
+                }
                 del_index(EntityType::Zone, "n", name);
+                std::string payload = client_->get_node_payload_async(local_cluster_id_, zid).get();
+                if (!payload.empty()) {
+                    try {
+                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        std::string id_str = safe_get_str(buf, 0, "id");
+                        if (!id_str.empty()) del_index(EntityType::Zone, "id", id_str);
+                        std::string type_str = safe_get_str(buf, 0, "t");
+                        if (!type_str.empty()) del_index(EntityType::Zone, "t", type_str);
+                    } catch (...) {}
+                }
                 client_->del_node_async(local_cluster_id_, zid).get();
             }
             return SUCCESS(); 
@@ -2719,7 +2947,7 @@ namespace irods::catalog {
             if (!allowed_groups.empty()) {
                 auto groups = split_csv(allowed_groups);
                 if (!groups.empty()) {
-                    snowflake_id_t usid = resolve_id_from_index(EntityType::User, "n", clean_user);
+                    snowflake_id_t usid = resolve_user(client_user);
                     bool group_match = false;
                     if (usid) {
                         auto mem_edges = client_->get_neighbors_async(local_cluster_id_, usid, "MEMBER_OF", 0.0).get();
@@ -2934,7 +3162,7 @@ namespace irods::catalog {
             return SUCCESS(); 
         }
         irods::error set_quota(std::string_view user_name, std::string_view resc_name, int64_t limit) { 
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", user_name);
+            snowflake_id_t uid = resolve_user(user_name);
             if (!uid) return ERROR(-1, "User not found");
 
             std::string q_uuid = "quota:" + std::string(user_name) + ":" + std::string(resc_name);
@@ -2948,7 +3176,7 @@ namespace irods::catalog {
         }
         irods::error check_quota(std::string_view user_name, std::string_view resc_name, int64_t& usage, int64_t& limit) { 
             usage = 0; limit = -1;
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", user_name);
+            snowflake_id_t uid = resolve_user(user_name);
             if (!uid) return SUCCESS();
 
             std::string q_uuid = "quota:" + std::string(user_name) + ":" + std::string(resc_name);
@@ -2965,7 +3193,7 @@ namespace irods::catalog {
         }
         irods::error calculate_usage(std::string_view user_name, std::string_view resc_name, int64_t& usage) {
             usage = 0;
-            snowflake_id_t uid = resolve_id_from_index(EntityType::User, "n", user_name);
+            snowflake_id_t uid = resolve_user(user_name);
             snowflake_id_t rid = resolve_id_from_index(EntityType::Resource, "n", resc_name);
             if (!uid || !rid) return SUCCESS();
 
@@ -3750,17 +3978,19 @@ namespace irods::catalog {
                     }
 
                     if (!owner_name.empty()) {
-                        snowflake_id_t user_sid = resolve_id_from_index(EntityType::User, "n", owner_name);
-                        if (user_sid) {
-                            add_edge(user_sid, "OWNS", 1.0, sid);
-                        }
+                        std::string owner_zone;
                         if (et == EntityType::DataObject || et == EntityType::Collection) {
-                            std::string owner_zone;
                             auto z_it = plan.properties.find("z");
                             if (z_it == plan.properties.end()) z_it = plan.properties.find("data_owner_zone");
                             if (z_it == plan.properties.end()) z_it = plan.properties.find("coll_owner_zone");
                             if (z_it == plan.properties.end()) z_it = plan.properties.find("zone_name");
                             if (z_it != plan.properties.end()) owner_zone = z_it->second;
+                        }
+                        snowflake_id_t user_sid = resolve_user(owner_name, owner_zone);
+                        if (user_sid) {
+                            add_edge(user_sid, "OWNS", 1.0, sid);
+                        }
+                        if (et == EntityType::DataObject || et == EntityType::Collection) {
                             set_access(owner_name, owner_zone, (full_path.empty() ? name : full_path), "own", false);
                         }
                     }
@@ -3971,8 +4201,9 @@ namespace irods::catalog {
     irods::error CatalogFacade::add_child_resource(std::string_view parent_name, std::string_view child_name, std::string_view context) { return pImpl_->add_child_resource(parent_name, child_name, context); }
     irods::error CatalogFacade::remove_child_resource(std::string_view parent_name, std::string_view child_name) { return pImpl_->remove_child_resource(parent_name, child_name); }
     irods::error CatalogFacade::register_user(const user& usr, user_id_t& out_id) { return pImpl_->register_user(usr, out_id); }
-    irods::error CatalogFacade::delete_user(std::string_view user_name) { return pImpl_->delete_user(user_name); }
-    irods::error CatalogFacade::modify_user(std::string_view user_name, std::string_view prop, std::string_view value) { return pImpl_->modify_user(user_name, prop, value); }
+    irods::error CatalogFacade::delete_user(std::string_view user_name, std::string_view zone) { return pImpl_->delete_user(user_name, zone); }
+    irods::error CatalogFacade::modify_user(std::string_view user_name, std::string_view prop, std::string_view value, std::string_view zone) { return pImpl_->modify_user(user_name, prop, value, zone); }
+    snowflake_id_t CatalogFacade::resolve_user(std::string_view user_name, std::string_view zone) { return pImpl_->resolve_user(user_name, zone); }
     irods::error CatalogFacade::check_auth(std::string_view user_name, std::string_view zone, int& user_priv) { return pImpl_->check_auth(user_name, zone, user_priv); }
     irods::error CatalogFacade::get_user_password_and_priv(std::string_view user_name, std::string_view zone, std::string& out_pw, int& out_priv) { return pImpl_->get_user_password_and_priv(user_name, zone, out_pw, out_priv); }
     irods::error CatalogFacade::check_auth_credentials(std::string_view username, std::string_view zone, std::string_view password, bool& correct) { return pImpl_->check_auth_credentials(username, zone, password, correct); }

@@ -862,6 +862,35 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
     }
 }
 
+irods::error db_reg_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _info) {
+    try {
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_coll_by_admin_op");
+        if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null collInfo_t");
+
+        std::string coll_name = safe_string(_info->collName);
+        if (coll_name.size() > 1 && coll_name.back() == '/') {
+            coll_name.pop_back();
+        }
+        irods::catalog::snowflake_id_t sid = 0;
+        irods::catalog::EntityType type;
+        if (g_catalog->resolve_path(coll_name, sid, type).ok() && type == irods::catalog::EntityType::Collection) {
+            auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
+            if (!payload.empty()) {
+                try {
+                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    _info->collId = buf.get_i64(0, "id");
+                    rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_coll_by_admin_op: collection [%s] already exists (id %d), returning SUCCESS", coll_name.c_str(), _info->collId);
+                    return SUCCESS();
+                } catch (...) {}
+            }
+        }
+        return db_reg_coll_op(_ctx, _info);
+    } catch (const std::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_coll_by_admin_op EXCEPTION: %s", e.what());
+        return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
+}
+
 irods::error db_mod_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_coll_op");
@@ -1418,13 +1447,30 @@ irods::error db_reg_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_user_re_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null userInfo_t");
         
-        irods::catalog::user user;
-        user.name = safe_string(_info->userName);
-        user.type = safe_string(_info->userType);
-        user.zone = safe_string(_info->rodsZone);
-        if (user.zone.empty()) {
-            user.zone = irods::server_properties::instance().map().get_json().at(KW_CFG_ZONE_NAME).get<std::string>();
+        char userName2[NAME_LEN]{};
+        char zoneName[NAME_LEN]{};
+        int status = parseUserName(_info->userName, userName2, zoneName);
+        if (status < 0) {
+            return ERROR(status, "Invalid username format");
         }
+
+        std::string zoneToUse;
+        if (zoneName[0] != '\0') {
+            zoneToUse = zoneName;
+        } else if (_info->rodsZone[0] != '\0') {
+            zoneToUse = _info->rodsZone;
+        } else {
+            try {
+                zoneToUse = irods::server_properties::instance().map().get_json().at(KW_CFG_ZONE_NAME).get<std::string>();
+            } catch (...) {
+                zoneToUse = g_zone_name;
+            }
+        }
+
+        irods::catalog::user user;
+        user.name = userName2;
+        user.type = safe_string(_info->userType);
+        user.zone = zoneToUse;
 
         if (_info->sysUid > 0) {
             user.id = (uint64_t)_info->sysUid;
@@ -1438,9 +1484,18 @@ irods::error db_reg_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
         auto ret = g_catalog->register_user(user, out_id);
         if (ret.ok()) {
             _info->sysUid = (int)out_id;
+            // NOTE: Do not overwrite _info->userName with userName2.
+            // When user is remote (e.g. rods#remoteZone), iRODS rules expect _info->userName to retain
+            // the full name ("rods#remoteZone") so that $otherUserName in core.re expands to "rods#remoteZone"
+            // and creates /tempZone/home/rods#remoteZone instead of colliding with /tempZone/home/rods!
+            // Postgres plugin does not overwrite _user_info->userName.
+            if (_info->rodsZone[0] == '\0') {
+                rstrcpy(_info->rodsZone, zoneToUse.c_str(), NAME_LEN);
+            }
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_user_re_op SUCCESS");
+        } else {
+            rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_user_re_op ERROR: %ld - %s", ret.code(), ret.result().c_str());
         }
-        
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_user_re_op SUCCESS");
         return ret;
     } catch (const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_user_re_op EXCEPTION: %s", e.what());
@@ -1536,7 +1591,11 @@ irods::error db_mod_user_op(irods::plugin_context& _ctx, const char* _user, cons
 irods::error db_del_user_op(irods::plugin_context& _ctx, const char* _username) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_user_op");
-        auto ret = g_catalog->delete_user(safe_string(_username));
+        if (!_username) return ERROR(SYS_INVALID_INPUT_PARAM, "null username");
+        char userName2[NAME_LEN]{};
+        char zoneName[NAME_LEN]{};
+        parseUserName(_username, userName2, zoneName);
+        auto ret = g_catalog->delete_user(userName2, zoneName);
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_user_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -1549,11 +1608,43 @@ irods::error db_del_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_user_re_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null userInfo_t");
+
+        if (_ctx.comm()->clientUser.authInfo.authFlag < LOCAL_PRIV_USER_AUTH) {
+            return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "insufficient privilege");
+        }
+        if (_ctx.comm()->proxyUser.authInfo.authFlag < LOCAL_PRIV_USER_AUTH) {
+            return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "insufficient privilege level");
+        }
+
+        std::string zoneToUse;
+        try {
+            zoneToUse = irods::server_properties::instance().map().get_json().at(KW_CFG_ZONE_NAME).get<std::string>();
+        } catch (...) {
+            zoneToUse = g_zone_name;
+        }
+        if (_info->rodsZone[0] != '\0') {
+            zoneToUse = _info->rodsZone;
+        }
+
+        char userName2[NAME_LEN]{};
+        char zoneName[NAME_LEN]{};
+        int status = parseUserName(_info->userName, userName2, zoneName);
+        if (status < 0) {
+            return ERROR(status, "Invalid username format");
+        }
+        if (zoneName[0] != '\0') {
+            zoneToUse = zoneName;
+        }
+
+        if (strncmp(_ctx.comm()->clientUser.userName, userName2, sizeof(userName2)) == 0 &&
+            strncmp(_ctx.comm()->clientUser.rodsZone, zoneToUse.c_str(), zoneToUse.size()) == 0) {
+            addRErrorMsg(&_ctx.comm()->rError, 0, "Cannot remove your own admin account, probably unintended");
+            return ERROR(CAT_INVALID_USER, "invalid user");
+        }
+
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_user_re_op: deleting user [%s#%s]", userName2, zoneToUse.c_str());
         
-        std::string username = safe_string(_info->userName);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_user_re_op: deleting user [%s]", username.c_str());
-        
-        auto ret = g_catalog->delete_user(username);
+        auto ret = g_catalog->delete_user(userName2, zoneToUse);
         
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_user_re_op SUCCESS");
         return ret;
@@ -3080,7 +3171,7 @@ public:
         add_operation<const std::string*, int>(irods::DATABASE_OP_UPDATE_RESC_OBJ_COUNT, std::function<irods::error(irods::plugin_context&, const std::string*, int)>(db_update_resc_obj_count));
 
         add_operation<collInfo_t*>(irods::DATABASE_OP_REG_COLL, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_reg_coll_op));
-        add_operation<collInfo_t*>(irods::DATABASE_OP_REG_COLL_BY_ADMIN, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_reg_coll_op));
+        add_operation<collInfo_t*>(irods::DATABASE_OP_REG_COLL_BY_ADMIN, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_reg_coll_by_admin_op));
         add_operation<collInfo_t*>(irods::DATABASE_OP_MOD_COLL, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_mod_coll_op));
         add_operation<collInfo_t*>(irods::DATABASE_OP_DEL_COLL, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_del_coll_op));
         add_operation<collInfo_t*>(irods::DATABASE_OP_DEL_COLL_BY_ADMIN, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_del_coll_by_admin_op));

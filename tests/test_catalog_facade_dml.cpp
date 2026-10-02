@@ -149,23 +149,11 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
 }
 
 TEST_F(CatalogFacadeDmlTest, ExecuteDmlInsertWithParentCollAndPath) {
-    // Bootstrap root collection first
-    coll_id_t root_id;
-    collection c;
-    c.id = 100;
-    c.name = "/tempZone/home/rods";
-    c.owner_name = "rods";
-    c.owner_zone = "tempZone";
-    ASSERT_TRUE(facade_.register_collection(c, root_id).ok());
-
-    // Bootstrap user rods
-    user u;
-    u.id = 1;
-    u.name = "rods";
-    u.zone = "tempZone";
-    u.type = "rodsadmin";
-    user_id_t u_id;
-    ASSERT_TRUE(facade_.register_user(u, u_id).ok());
+    // Verify root collection and user exist from init()
+    snowflake_id_t root_id = 0;
+    EntityType et;
+    ASSERT_TRUE(facade_.resolve_path("/tempZone/home/rods", root_id, et).ok());
+    ASSERT_NE(facade_.resolve_user("rods", "tempZone"), 0);
 
     // Insert DataObject with parent_coll and owner
     DmlPlan insert_plan;

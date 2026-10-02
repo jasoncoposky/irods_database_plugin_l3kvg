@@ -106,8 +106,9 @@ namespace irods::catalog {
 
         // Identity Operations
         irods::error register_user(const user& usr, user_id_t& out_id);
-        irods::error delete_user(std::string_view user_name);
-        irods::error modify_user(std::string_view user_name, std::string_view prop, std::string_view value);
+        irods::error delete_user(std::string_view user_name, std::string_view zone = "");
+        irods::error modify_user(std::string_view user_name, std::string_view prop, std::string_view value, std::string_view zone = "");
+        snowflake_id_t resolve_user(std::string_view user_name, std::string_view zone = "");
         irods::error check_auth(std::string_view user_name, std::string_view zone, int& user_priv);
         irods::error get_user_password_and_priv(std::string_view user_name, std::string_view zone, std::string& out_pw, int& out_priv);
         irods::error check_auth_credentials(std::string_view username, std::string_view zone, std::string_view password, bool& correct);
