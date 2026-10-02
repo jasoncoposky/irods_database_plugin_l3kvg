@@ -33,6 +33,13 @@ namespace irods::catalog {
         }
     };
 
+    struct AclEntry {
+        std::string user_name;
+        std::string zone_name;
+        std::string access_name;
+        std::string user_type;
+    };
+
     struct FederatedZone {
         std::string name;
         uint16_t id;
@@ -45,6 +52,9 @@ namespace irods::catalog {
         uint16_t cluster_id;
         uint32_t shard_count;
         std::string zmq_endpoint;
+        std::string default_resc;
+        std::string default_resc_vault;
+        std::string admin_user;
         std::vector<FederatedZone> federation;
     };
 
@@ -72,7 +82,7 @@ namespace irods::catalog {
         irods::error register_replica(const replica& repl);
         irods::error unregister_replica(data_id_t data_id, uint32_t repl_num);
         irods::error update_replica_access_time(data_id_t data_id, uint32_t repl_num, std::string_view time);
-        irods::error modify_replicas_for_data_object(data_id_t obj_id, uint32_t repl_num, const std::vector<std::pair<std::string, std::string>>& updates, bool all_repl_status);
+        irods::error modify_replicas_for_data_object(data_id_t obj_id, uint32_t repl_num, std::string_view resc_hier, const std::vector<std::pair<std::string, std::string>>& updates, bool all_repl_status, bool all_replicas = false);
         uint32_t get_next_replica_number(data_id_t data_id);
 
         // Collection Operations
@@ -105,24 +115,36 @@ namespace irods::catalog {
 
         // ACL Operations
         irods::error set_access(std::string_view user_name, std::string_view zone, std::string_view target_path, std::string_view level, bool recursive);
-        irods::error check_permission(snowflake_id_t user_id, snowflake_id_t target_id, std::string_view level, bool& allowed);
+        irods::error check_permission(snowflake_id_t user_id, snowflake_id_t target_id, std::string_view level, bool& allowed, bool check_parents = true);
         irods::error check_permission_to_modify_data_object(snowflake_id_t user_id, snowflake_id_t target_id, bool& allowed);
 
         // Metadata (AVU) Operations
         irods::error add_avu_metadata(std::string_view type, std::string_view target_id, const avu& metadata);
-        irods::error delete_avu_metadata(std::string_view type, std::string_view target_id, const avu& metadata);
+        irods::error delete_avu_metadata(std::string_view type, std::string_view target_id, const avu& metadata, int option = 0);
         irods::error modify_avu_metadata(std::string_view type, std::string_view target_id, const avu& old_avu, const avu& new_avu);
         irods::error copy_avu_metadata(std::string_view src_type, std::string_view src_id, std::string_view dst_type, std::string_view dst_id);
         irods::error set_avu_metadata(std::string_view type, std::string_view target_id, const avu& metadata);
 
         // Path Resolution
         irods::error resolve_path(std::string_view path, snowflake_id_t& out_id, EntityType& out_type);
+        snowflake_id_t resolve_target_entity_sid(std::string_view type, std::string_view target_id_or_name);
 
         // --- Grid Configuration ---
 
         irods::error register_zone(const zone& z);
         irods::error modify_zone(std::string_view name, std::string_view prop, std::string_view value);
         irods::error delete_zone(std::string_view name);
+
+        // Ticket Operations
+        irods::error create_ticket(uint64_t ticket_id, std::string_view ticket_string, std::string_view ticket_type, snowflake_id_t target_sid, EntityType target_type, snowflake_id_t user_sid, std::string_view user_name, std::string_view target_path = "");
+        irods::error delete_ticket(std::string_view ticket_string, std::string_view calling_user = "", bool is_admin = false);
+        irods::error modify_ticket(std::string_view ticket_string, std::string_view op, std::string_view arg1, std::string_view arg2 = "", std::string_view calling_user = "", bool is_admin = false);
+        irods::error get_ticket_restrictions(std::string_view ticket_id_or_str, std::string_view restriction_type, std::vector<std::pair<std::string, std::string>>& out_restrictions);
+        irods::error validate_ticket(std::string_view ticket_str, std::string_view client_user, std::string_view client_host, std::string* out_target_path = nullptr, std::string* out_target_type = nullptr);
+        irods::error check_ticket_access(std::string_view ticket_str, snowflake_id_t obj_sid, std::string_view access_type, std::string_view client_user, std::string_view client_host);
+        irods::error update_ticket_write_bytes(std::string_view ticket_str, snowflake_id_t obj_sid, int64_t bytes);
+        irods::error increment_ticket_uses(std::string_view ticket_str, uint64_t data_id);
+        void reset_ticket_session_state();
 
         // Token & Quota Operations
         irods::error register_token(std::string_view name, std::string_view value, std::string_view namespace_str);
@@ -152,14 +174,18 @@ namespace irods::catalog {
         // Specific Query Operations
         irods::error register_specific_query(std::string_view alias, std::string_view sql);
         irods::error delete_specific_query(std::string_view alias);
+        irods::error has_specific_query(std::string_view alias_or_sql, bool& out_has);
+        irods::error get_collection_acls(std::string_view coll_name, std::vector<AclEntry>& out_acls);
 
         // Query Operations
-        irods::error execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes = {}, std::string_view root_type = "");
+        irods::error execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes = {}, std::string_view root_type = "", const irods::experimental::genquery2::options* opts = nullptr);
         irods::error execute_dml(const compiler::DmlPlan& plan, nlohmann::json& result);
         irods::error apply_atomic_operations(const std::vector<irods::experimental::dml::operation_type>& ops);
         irods::error get_next_sequence_value(std::string_view seq_name, uint64_t& out_val);
         snowflake_id_t make_id(EntityType type, uint64_t irods_id);
         snowflake_id_t resolve_id_from_index(EntityType type, std::string_view attr, std::string_view value);
+        snowflake_id_t get_zone_id(std::string_view zname = "") const;
+        const std::string& get_local_zone_name() const;
 
         l3kvg::RemoteL3KVClient* get_client() const;
         uint16_t get_cluster_id() const;

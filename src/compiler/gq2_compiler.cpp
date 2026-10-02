@@ -1,5 +1,6 @@
 #include "irods/catalog/gq2_compiler.hpp"
 #include "irods/rodsLog.h"
+#include "irods/private/genquery2_sql.hpp"
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -7,8 +8,10 @@
 #include <cctype>
 #include <stdexcept>
 #include <type_traits>
+#include <algorithm>
 #include <nlohmann/json.hpp>
 #include <boost/variant.hpp>
+#include <boost/algorithm/string.hpp>
 #include "irods/rodsGenQuery.h"
 
 namespace irods::catalog::compiler {
@@ -16,6 +19,9 @@ namespace irods::catalog::compiler {
     using json = nlohmann::json;
     namespace gq2 = irods::experimental::genquery2;
     using Direction = Gq2ToL3kvgCompiler::PathStep::Direction;
+
+    template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+    template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
     const std::unordered_map<int, GraphMap> COLUMN_MAP = {
         {COL_D_DATA_ID,        {"DataObject", "id"}},
@@ -209,6 +215,15 @@ namespace irods::catalog::compiler {
         {"META_USER_CREATE_TIME", {"Metadata", "ct"}},
         {"META_USER_MODIFY_TIME", {"Metadata", "mt"}},
 
+        {"META_DATA_ATTACHED_CREATE_TIME", {"Metadata", "ct"}},
+        {"META_DATA_ATTACHED_MODIFY_TIME", {"Metadata", "mt"}},
+        {"META_COLL_ATTACHED_CREATE_TIME", {"Metadata", "ct"}},
+        {"META_COLL_ATTACHED_MODIFY_TIME", {"Metadata", "mt"}},
+        {"META_RESC_ATTACHED_CREATE_TIME", {"Metadata", "ct"}},
+        {"META_RESC_ATTACHED_MODIFY_TIME", {"Metadata", "mt"}},
+        {"META_USER_ATTACHED_CREATE_TIME", {"Metadata", "ct"}},
+        {"META_USER_ATTACHED_MODIFY_TIME", {"Metadata", "mt"}},
+
         {"USER_GROUP_ID",        {"Group", "id"}},
         {"USER_GROUP_NAME",      {"Group", "n"}},
 
@@ -222,17 +237,27 @@ namespace irods::catalog::compiler {
 
         {"DATA_ACCESS_NAME",      {"Access", "l"}},
         {"DATA_ACCESS_TYPE",      {"Access", "l"}},
-        {"COLL_ACCESS_NAME",      {"Access", "l"}},
-        {"COLL_ACCESS_TYPE",      {"Access", "l"}},
+        {"DATA_ACCESS_PERM_NAME", {"Access", "l"}},
+        {"DATA_ACCESS_PERM_ID",   {"Access", "l"}},
+        {"COLL_ACCESS_NAME",      {"CollAccess", "l"}},
+        {"COLL_ACCESS_TYPE",      {"CollAccess", "l"}},
+        {"COLL_ACCESS_PERM_NAME", {"CollAccess", "l"}},
+        {"COLL_ACCESS_PERM_ID",   {"CollAccess", "l"}},
         {"DATA_TOKEN_NAMESPACE",  {"Access", "t"}},
-        {"COLL_TOKEN_NAMESPACE",  {"Access", "t"}},
+        {"COLL_TOKEN_NAMESPACE",  {"CollAccess", "t"}},
         {"DATA_ACCESS_DATA_ID",   {"DataObject", "id"}},
         {"COLL_ACCESS_COLL_ID",   {"Collection", "id"}},
         {"COLL_COLL_ACCESS_COLL_ID", {"Collection", "id"}},
         {"DATA_ACCESS_USER_ID",   {"User", "id"}},
-        {"COLL_ACCESS_USER_ID",   {"User", "id"}},
-        {"COLL_USER_NAME",        {"User", "n"}},
-        {"COLL_USER_ZONE",        {"User", "z"}},
+        {"DATA_ACCESS_USER_NAME", {"User", "n"}},
+        {"DATA_ACCESS_USER_ZONE", {"User", "z"}},
+        {"DATA_ACCESS_USER_TYPE", {"User", "t"}},
+        {"COLL_ACCESS_USER_ID",   {"CollUser", "id"}},
+        {"COLL_ACCESS_USER_NAME", {"CollUser", "n"}},
+        {"COLL_ACCESS_USER_ZONE", {"CollUser", "z"}},
+        {"COLL_ACCESS_USER_TYPE", {"CollUser", "t"}},
+        {"COLL_USER_NAME",        {"CollUser", "n"}},
+        {"COLL_USER_ZONE",        {"CollUser", "z"}},
         {"DATA_USER_NAME",        {"User", "n"}},
         {"DATA_USER_ZONE",        {"User", "z"}},
 
@@ -257,6 +282,11 @@ namespace irods::catalog::compiler {
         {"TICKET_ALLOWED_USER_NAME",      {"User", "n"}},
         {"TICKET_ALLOWED_GROUP_TICKET_ID",{"Ticket", "id"}},
         {"TICKET_ALLOWED_GROUP_NAME",     {"User", "n"}},
+        {"TICKET_USER_ID",                {"Ticket", "uid"}},
+        {"TICKET_OBJECT_ID",              {"Ticket", "oid"}},
+        {"TICKET_OBJECT_TYPE",            {"Ticket", "ot"}},
+        {"TICKET_DATA_COLL_NAME",         {"DataObject", "pn"}},
+        {"TICKET_OWNER_ZONE",             {"User", "z"}},
 
         {"MSRVC_ID",          {"MSRVC", "id"}},
         {"MSRVC_NAME",        {"MSRVC", "n"}},
@@ -366,10 +396,17 @@ namespace irods::catalog::compiler {
         {{"Collection", "DataObject"}, {{Direction::Out, "CONTAINS", "DataObject"}}},
         {{"Collection", "Resource"},   {{Direction::Out, "CONTAINS", "DataObject"}, {Direction::Out, "HAS_REPLICA", "Replica"}, {Direction::Out, "STAYING_AT", "Resource"}}},
         {{"Collection", "Metadata"},   {{Direction::Out, "ANNOTATED_WITH", "Metadata"}}},
-        {{"Collection", "Collection"}, {{Direction::Out, "CONTAINS", "Collection"}}},
-        {{"Collection", "Access"},     {{Direction::In, "FOR_OBJECT", "Access"}}},
-        {{"Collection", "User"},       {{Direction::In, "FOR_OBJECT", "Access"}, {Direction::In, "HAS_ACCESS", "User"}}},
-        {{"Collection", "Group"},      {{Direction::In, "FOR_OBJECT", "Access"}, {Direction::In, "HAS_ACCESS", "User"}, {Direction::Out, "MEMBER_OF", "Group"}}},
+        {{"Collection", "CollAccess"}, {{Direction::In, "FOR_OBJECT", "CollAccess"}}},
+        {{"Collection", "CollUser"},   {{Direction::In, "FOR_OBJECT", "CollAccess"}, {Direction::In, "HAS_ACCESS", "CollUser"}}},
+        {{"Collection", "Access"},     {{Direction::Out, "CONTAINS", "DataObject"}, {Direction::In, "FOR_OBJECT", "Access"}}},
+        {{"Collection", "User"},       {{Direction::Out, "CONTAINS", "DataObject"}, {Direction::In, "FOR_OBJECT", "Access"}, {Direction::In, "HAS_ACCESS", "User"}}},
+        {{"Collection", "Group"},      {{Direction::In, "FOR_OBJECT", "CollAccess"}, {Direction::In, "HAS_ACCESS", "CollUser"}, {Direction::Out, "MEMBER_OF", "Group"}}},
+        {{"DataObject", "CollAccess"}, {{Direction::In, "CONTAINS", "Collection"}, {Direction::In, "FOR_OBJECT", "CollAccess"}}},
+        {{"DataObject", "CollUser"},   {{Direction::In, "CONTAINS", "Collection"}, {Direction::In, "FOR_OBJECT", "CollAccess"}, {Direction::In, "HAS_ACCESS", "CollUser"}}},
+        {{"CollAccess", "CollUser"},   {{Direction::In, "HAS_ACCESS", "CollUser"}}},
+        {{"CollUser", "CollAccess"},   {{Direction::Out, "HAS_ACCESS", "CollAccess"}}},
+        {{"CollAccess", "Collection"}, {{Direction::Out, "FOR_OBJECT", "Collection"}}},
+        {{"CollUser", "Collection"},   {{Direction::Out, "HAS_ACCESS", "CollAccess"}, {Direction::Out, "FOR_OBJECT", "Collection"}}},
         {{"Collection", "Zone"},       {{Direction::In, "HAS_ROOT_COLL", "Zone"}}},
         {{"Collection", "Replica"},    {{Direction::Out, "CONTAINS", "DataObject"}, {Direction::Out, "HAS_REPLICA", "Replica"}}},
         {{"User", "Replica"},          {{Direction::Out, "HAS_ACCESS", "Access"}, {Direction::Out, "FOR_OBJECT", "DataObject"}, {Direction::Out, "HAS_REPLICA", "Replica"}}},
@@ -387,16 +424,20 @@ namespace irods::catalog::compiler {
         {{"Access", "User"},           {{Direction::In, "HAS_ACCESS", "User"}}},
         {{"Access", "DataObject"},     {{Direction::Out, "FOR_OBJECT", "DataObject"}}},
         {{"Access", "Collection"},     {{Direction::Out, "FOR_OBJECT", "Collection"}}},
+        {{"User", "Metadata"},         {{Direction::Out, "ANNOTATED_WITH", "Metadata"}}},
         {{"Metadata", "DataObject"},   {{Direction::In, "ANNOTATED_WITH", "DataObject"}}},
         {{"Metadata", "Collection"},   {{Direction::In, "ANNOTATED_WITH", "Collection"}}},
         {{"Metadata", "User"},         {{Direction::In, "ANNOTATED_WITH", "User"}}},
         {{"Metadata", "Resource"},     {{Direction::In, "ANNOTATED_WITH", "Resource"}}},
+        {{"Metadata", "Zone"},         {{Direction::In, "ANNOTATED_WITH", "Zone"}}},
         {{"Resource", "DataObject"},   {{Direction::In, "STAYING_AT", "Replica"}, {Direction::In, "HAS_REPLICA", "DataObject"}}},
         {{"Resource", "Replica"},      {{Direction::In, "STAYING_AT", "Replica"}}},
+        {{"Resource", "Metadata"},     {{Direction::Out, "ANNOTATED_WITH", "Metadata"}}},
         {{"Resource", "Zone"},         {{Direction::In, "HAS_RESC", "Zone"}}},
         {{"Zone", "Collection"},       {{Direction::Out, "HAS_ROOT_COLL", "Collection"}}},
         {{"Zone", "User"},             {{Direction::Out, "HAS_USER", "User"}}},
         {{"Zone", "Resource"},         {{Direction::Out, "HAS_RESC", "Resource"}}},
+        {{"Zone", "Metadata"},         {{Direction::Out, "ANNOTATED_WITH", "Metadata"}}},
         {{"Zone", "Rule"},             {{Direction::Out, "HAS_RULE", "Rule"}}},
         {{"Rule", "Zone"},             {{Direction::In, "HAS_RULE", "Zone"}}},
         {{"DataObject", "Ticket"},     {{Direction::In, "FOR_OBJECT", "Ticket"}}},
@@ -426,6 +467,18 @@ namespace irods::catalog::compiler {
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_less_than& c) const { return {4, c.string_literal}; }
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_less_than_or_equal_to& c) const { return {5, c.string_literal}; }
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_like& c) const { return {6, c.string_literal}; }
+        std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_operator_not& c) const {
+            if (const auto* lk = boost::get<irods::experimental::genquery2::condition_like>(&c.expression)) {
+                return {7, lk->string_literal};
+            }
+            if (const auto* eq = boost::get<irods::experimental::genquery2::condition_equal>(&c.expression)) {
+                return {1, eq->string_literal};
+            }
+            if (const auto* neq = boost::get<irods::experimental::genquery2::condition_not_equal>(&c.expression)) {
+                return {0, neq->string_literal};
+            }
+            return {0, ""};
+        }
         template<typename T> std::pair<int, std::string> operator()(const T&) const { return {0, ""}; }
     };
 
@@ -439,27 +492,82 @@ namespace irods::catalog::compiler {
             if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) col_name = col->name;
             else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) col_name = func->name;
             auto it = COLUMN_NAME_MAP.find(col_name);
-            if (it == COLUMN_NAME_MAP.end()) return;
-            compiler->add_target_type(it->second.node_type);
+            if (it == COLUMN_NAME_MAP.end()) {
+                throw std::invalid_argument("Unknown column: " + col_name);
+            }
+            std::string node_type = std::string(it->second.node_type);
+            std::string bson_key = std::string(it->second.bson_key);
+
+            if (col_name == "USER_TYPE") {
+                if (compiler->get_entry_type() == "Group") {
+                    node_type = "Group";
+                } else {
+                    bool has_group = false;
+                    for (const auto& t : compiler->get_target_types()) {
+                        if (t == "Group") has_group = true;
+                    }
+                    if (has_group && compiler->get_entry_type() != "User") {
+                        node_type = "Group";
+                    }
+                }
+            }
+            compiler->add_target_type(node_type);
+
+            if (auto* in_expr = boost::get<irods::experimental::genquery2::condition_in>(&c.expression)) {
+                if (in_expr->list_of_string_literals.empty()) {
+                    return;
+                }
+                if (in_expr->list_of_string_literals.size() == 1) {
+                    j_filters.push_back({{"alias", node_type}, {"key", bson_key}, {"op", 0}, {"value", in_expr->list_of_string_literals[0]}});
+                } else {
+                    json in_or = json::array();
+                    for (size_t idx = 0; idx < in_expr->list_of_string_literals.size(); ++idx) {
+                        json f = {{"alias", node_type}, {"key", bson_key}, {"op", 0}, {"value", in_expr->list_of_string_literals[idx]}};
+                        if (idx > 0) {
+                            f["prepended_op"] = "or";
+                        }
+                        in_or.push_back(f);
+                    }
+                    j_filters.push_back({{"group", "or"}, {"filters", in_or}, {"prepended_op", "and"}});
+                }
+                return;
+            }
+
+            if (auto* bet_expr = boost::get<irods::experimental::genquery2::condition_between>(&c.expression)) {
+                json bet_and = json::array();
+                bet_and.push_back({{"alias", node_type}, {"key", bson_key}, {"op", 3 /* >= */}, {"value", bet_expr->low}});
+                bet_and.push_back({{"alias", node_type}, {"key", bson_key}, {"op", 5 /* <= */}, {"value", bet_expr->high}, {"prepended_op", "and"}});
+                j_filters.push_back({{"group", "and"}, {"filters", bet_and}, {"prepended_op", "and"}});
+                return;
+            }
+
             pc_visitor pcv;
             auto pc = boost::apply_visitor(pcv, c.expression);
-            j_filters.push_back({{"alias", it->second.node_type}, {"key", it->second.bson_key}, {"op", pc.first}, {"value", pc.second}});
+            if (node_type == "Access" && bson_key == "t" && pc.second == "access_type" && pc.first == 0) {
+                json or_filters = json::array();
+                or_filters.push_back({{"alias", node_type}, {"key", bson_key}, {"op", pc.first}, {"value", "access_type"}});
+                or_filters.push_back({{"alias", node_type}, {"key", bson_key}, {"op", pc.first}, {"value", "access"}, {"prepended_op", "or"}});
+                j_filters.push_back({{"group", "or"}, {"filters", or_filters}, {"prepended_op", "and"}});
+                return;
+            }
+            j_filters.push_back({{"alias", node_type}, {"key", bson_key}, {"op", pc.first}, {"value", pc.second}});
         }
 
         void operator()(const irods::experimental::genquery2::logical_and& l) const { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
         void operator()(const irods::experimental::genquery2::logical_or& l) const {
-            json or_filters = json::array();
-            for(const auto& c : l.condition) {
-                condition_visitor sub_vis(compiler, or_filters);
+            json branch_filters = json::array();
+            for (const auto& c : l.condition) {
+                condition_visitor sub_vis(compiler, branch_filters);
                 boost::apply_visitor(sub_vis, c);
             }
-            if (!or_filters.empty()) {
-                for (size_t idx = 0; idx < or_filters.size(); ++idx) {
-                    if (idx > 0 && or_filters[idx].is_object()) {
-                        or_filters[idx]["prepended_op"] = "or";
-                    }
+            if (branch_filters.empty()) return;
+            if (branch_filters.size() == 1) {
+                j_filters.push_back(branch_filters[0]);
+            } else {
+                for (size_t idx = 1; idx < branch_filters.size(); ++idx) {
+                    branch_filters[idx]["prepended_op"] = "or";
                 }
-                j_filters.push_back({{"group", "or"}, {"filters", or_filters}, {"prepended_op", "and"}});
+                j_filters.push_back({{"group", "or"}, {"filters", branch_filters}, {"prepended_op", "and"}});
             }
         }
         void operator()(const irods::experimental::genquery2::logical_grouping& l) const {
@@ -482,44 +590,65 @@ namespace irods::catalog::compiler {
         projection_visitor(Gq2ToL3kvgCompiler* c, json& jp) : compiler(c), j_projs(jp) {}
 
         void operator()(const irods::experimental::genquery2::column& col) const {
+            if (col.name.rfind("DATA_ACCESS_", 0) == 0 && col.name != "DATA_ACCESS_TIME" && col.name != "DATA_ACCESS_DATA_ID") {
+                compiler->add_target_type("DataObject");
+                compiler->add_target_type("Access");
+            } else if (col.name.rfind("COLL_ACCESS_", 0) == 0 && col.name != "COLL_ACCESS_COLL_ID" && col.name != "COLL_COLL_ACCESS_COLL_ID") {
+                compiler->add_target_type("Collection");
+                compiler->add_target_type("CollAccess");
+            }
             auto it = COLUMN_NAME_MAP.find(col.name);
             if (it != COLUMN_NAME_MAP.end()) {
                 compiler->add_target_type(it->second.node_type);
                 j_projs.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"agg", 0}, {"as", "idx_" + std::to_string(col_idx++)}});
             } else {
-                // Return a constant dummy value to maintain column ordering
-                j_projs.push_back({{"alias", compiler->get_entry_type()}, {"property", "null_prop"}, {"agg", 0}, {"as", "idx_" + std::to_string(col_idx++)}});
+                throw std::invalid_argument("Unknown column: " + col.name);
             }
         }
 
         void operator()(const irods::experimental::genquery2::function& func) const {
+            std::string upper_name = boost::algorithm::to_upper_copy(func.name);
             int agg = 0;
-            if (func.name == "COUNT") agg = 1;
-            else if (func.name == "SUM") agg = 2;
-            else if (func.name == "AVG") agg = 3;
-            else if (func.name == "MIN") agg = 4;
-            else if (func.name == "MAX") agg = 5;
+            if (upper_name == "COUNT") agg = 1;
+            else if (upper_name == "SUM") agg = 2;
+            else if (upper_name == "AVG") agg = 3;
+            else if (upper_name == "MIN") agg = 4;
+            else if (upper_name == "MAX") agg = 5;
 
             for (const auto& arg : func.arguments) {
                 if (auto* col = std::get_if<irods::experimental::genquery2::column>(&arg)) {
+                    if (col->name.rfind("DATA_ACCESS_", 0) == 0 && col->name != "DATA_ACCESS_TIME" && col->name != "DATA_ACCESS_DATA_ID") {
+                        compiler->add_target_type("DataObject");
+                        compiler->add_target_type("Access");
+                    } else if (col->name.rfind("COLL_ACCESS_", 0) == 0 && col->name != "COLL_ACCESS_COLL_ID" && col->name != "COLL_COLL_ACCESS_COLL_ID") {
+                        compiler->add_target_type("Collection");
+                        compiler->add_target_type("CollAccess");
+                    }
                     auto it = COLUMN_NAME_MAP.find(col->name);
                     if (it != COLUMN_NAME_MAP.end()) {
                         compiler->add_target_type(it->second.node_type);
-                        j_projs.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"agg", agg}, {"as", "idx_" + std::to_string(col_idx++)}});
+                        j_projs.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"agg", agg}, {"distinct", func.distinct}, {"as", "idx_" + std::to_string(col_idx++)}});
                     } else {
-                        j_projs.push_back({{"alias", compiler->get_entry_type()}, {"property", "null_prop"}, {"agg", agg}, {"as", "idx_" + std::to_string(col_idx++)}});
+                        throw std::invalid_argument("Unknown column: " + col->name);
                     }
                 }
             }
         }
     };
+ 
+    namespace {
+        std::string normalize_entity_type(std::string_view raw);
+    }
 
-    std::string Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias) {
+    std::string Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias, const irods::experimental::genquery2::options* opts) {
         rodsLog(LOG_NOTICE, "L3_COMPILER: Entering compile()");
 
         if (!override_root_alias.empty()) {
             entry_node_type_ = override_root_alias;
             rodsLog(LOG_NOTICE, "L3_COMPILER: Using override root alias: %s", entry_node_type_.c_str());
+        } else if (!ast.from_entity.empty()) {
+            entry_node_type_ = normalize_entity_type(ast.from_entity);
+            rodsLog(LOG_NOTICE, "L3_COMPILER: Using ast.from_entity root alias: %s", entry_node_type_.c_str());
         } else {
             struct anchor_visitor : public boost::static_visitor<void> {
                  Gq2ToL3kvgCompiler* compiler;
@@ -527,19 +656,27 @@ namespace irods::catalog::compiler {
                  void operator()(const irods::experimental::genquery2::condition& c) {
                      std::string col_name;
                      if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) col_name = col->name;
+                     else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) col_name = func->name;
                      auto it = COLUMN_NAME_MAP.find(col_name);
                      if (it != COLUMN_NAME_MAP.end()) {
                          std::string t = std::string(it->second.node_type);
+                         if (col_name.rfind("DATA_ACCESS_", 0) == 0 || col_name.rfind("DATA_", 0) == 0) t = "DataObject";
+                         else if (col_name.rfind("COLL_ACCESS_", 0) == 0 || col_name.rfind("COLL_", 0) == 0) t = "Collection";
+                         else if (t == "CollUser" || t == "CollAccess") t = "Collection";
+                         else if (t == "Access" || t == "Replica") t = "DataObject";
+
                          int current_priority = 0;
                          std::string cur = std::string(compiler->get_entry_type());
-                         if (cur == "DataObject") current_priority = 4;
-                         else if (cur == "Collection") current_priority = 3;
+                         if (cur == "DataObject") current_priority = 5;
+                         else if (cur == "Collection") current_priority = 4;
+                         else if (cur == "Group") current_priority = 3;
                          else if (cur == "User" || cur == "Resource") current_priority = 2;
                          else if (cur == "Zone") current_priority = 1;
                          
                          int new_priority = 0;
-                         if (t == "DataObject") new_priority = 4;
-                         else if (t == "Collection") new_priority = 3;
+                         if (t == "DataObject") new_priority = 5;
+                         else if (t == "Collection") new_priority = 4;
+                         else if (t == "Group") new_priority = 3;
                          else if (t == "User" || t == "Resource") new_priority = 2;
                          else if (t == "Zone") new_priority = 1;
 
@@ -558,16 +695,31 @@ namespace irods::catalog::compiler {
 
             if (entry_node_type_.empty()) {
                 for (const auto& p : ast.projections) {
-                    struct peek_visitor : public boost::static_visitor<std::string_view> {
-                        std::string_view operator()(const irods::experimental::genquery2::column& col) const {
+                    struct peek_visitor : public boost::static_visitor<std::string> {
+                        std::string operator()(const irods::experimental::genquery2::column& col) const {
+                            if (col.name.rfind("DATA_ACCESS_", 0) == 0 || col.name.rfind("DATA_", 0) == 0) return "DataObject";
+                            if (col.name.rfind("COLL_ACCESS_", 0) == 0 || col.name.rfind("COLL_", 0) == 0) return "Collection";
                             auto it = COLUMN_NAME_MAP.find(col.name);
-                            return it != COLUMN_NAME_MAP.end() ? it->second.node_type : "";
+                            if (it != COLUMN_NAME_MAP.end()) {
+                                std::string t(it->second.node_type);
+                                if (t == "CollUser" || t == "CollAccess") return "Collection";
+                                if (t == "Access" || t == "Replica") return "DataObject";
+                                return t;
+                            }
+                            return "";
                         }
-                        std::string_view operator()(const irods::experimental::genquery2::function& func) const {
+                        std::string operator()(const irods::experimental::genquery2::function& func) const {
                              for (const auto& arg : func.arguments) {
                                  if (auto* col = std::get_if<irods::experimental::genquery2::column>(&arg)) {
+                                     if (col->name.rfind("DATA_ACCESS_", 0) == 0 || col->name.rfind("DATA_", 0) == 0) return "DataObject";
+                                     if (col->name.rfind("COLL_ACCESS_", 0) == 0 || col->name.rfind("COLL_", 0) == 0) return "Collection";
                                      auto it = COLUMN_NAME_MAP.find(col->name);
-                                     if (it != COLUMN_NAME_MAP.end()) return it->second.node_type;
+                                     if (it != COLUMN_NAME_MAP.end()) {
+                                         std::string t(it->second.node_type);
+                                         if (t == "CollUser" || t == "CollAccess") return "Collection";
+                                         if (t == "Access" || t == "Replica") return "DataObject";
+                                         return t;
+                                     }
                                  }
                              }
                              return "";
@@ -601,11 +753,116 @@ namespace irods::catalog::compiler {
             boost::apply_visitor(cv, w);
         }
 
+        // 2. Collect targets from group_by
+        if (!ast.group_by.expressions.empty()) {
+            json j_groups = json::array();
+            for (const auto& expr : ast.group_by.expressions) {
+                if (const auto* col = std::get_if<irods::experimental::genquery2::column>(&expr)) {
+                    auto it = COLUMN_NAME_MAP.find(col->name);
+                    if (it == COLUMN_NAME_MAP.end()) {
+                        throw std::invalid_argument("Unknown column: " + col->name);
+                    }
+                    add_target_type(it->second.node_type);
+                    j_groups.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}});
+                } else if (const auto* func = std::get_if<irods::experimental::genquery2::function>(&expr)) {
+                    std::string fn_name = boost::algorithm::to_upper_copy(func->name);
+                    std::string col_alias;
+                    std::string col_prop;
+                    std::vector<std::string> fn_args;
+                    for (const auto& arg : func->arguments) {
+                        if (const auto* c = std::get_if<irods::experimental::genquery2::column>(&arg)) {
+                            auto it = COLUMN_NAME_MAP.find(c->name);
+                            if (it == COLUMN_NAME_MAP.end()) {
+                                throw std::invalid_argument("Unknown column: " + c->name);
+                            }
+                            add_target_type(it->second.node_type);
+                            col_alias = it->second.node_type;
+                            col_prop = it->second.bson_key;
+                        } else if (const auto* s = std::get_if<std::string>(&arg)) {
+                            fn_args.push_back(*s);
+                        }
+                    }
+                    j_groups.push_back({{"alias", col_alias}, {"property", col_prop}, {"func_name", fn_name}, {"func_args", fn_args}});
+                }
+            }
+            j["groups"] = j_groups;
+        }
+
+        // 3. Collect targets from order_by
+        if (!ast.order_by.sort_expressions.empty()) {
+            json j_sorts = json::array();
+            for (const auto& se : ast.order_by.sort_expressions) {
+                if (const auto* col = std::get_if<irods::experimental::genquery2::column>(&se.expr)) {
+                    auto it = COLUMN_NAME_MAP.find(col->name);
+                    if (it == COLUMN_NAME_MAP.end()) {
+                        throw std::invalid_argument("Unknown column: " + col->name);
+                    }
+                    add_target_type(it->second.node_type);
+                    j_sorts.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"ascending", se.ascending_order}});
+                } else if (const auto* func = std::get_if<irods::experimental::genquery2::function>(&se.expr)) {
+                    for (const auto& arg : func->arguments) {
+                        if (const auto* c = std::get_if<irods::experimental::genquery2::column>(&arg)) {
+                            auto it = COLUMN_NAME_MAP.find(c->name);
+                            if (it == COLUMN_NAME_MAP.end()) {
+                                throw std::invalid_argument("Unknown column: " + c->name);
+                            }
+                            add_target_type(it->second.node_type);
+                            j_sorts.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"ascending", se.ascending_order}});
+                            break;
+                        }
+                    }
+                }
+            }
+            j["sorts"] = j_sorts;
+        }
+
+        // 4. If DataObject is root or targeted, ensure Replica layer semantics
+        bool has_data_object = (entry_node_type_ == "DataObject");
+        bool has_collection = (entry_node_type_ == "Collection");
+        for (const auto& t : target_node_types_) {
+            if (t == "DataObject") {
+                has_data_object = true;
+            } else if (t == "Collection") {
+                has_collection = true;
+            }
+        }
+        if (has_data_object) {
+            add_target_type("Replica");
+        }
+
+        // 5. Security & Permission filtering for unprivileged users
+        if (opts && !opts->admin_mode && !opts->user_name.empty()) {
+            auto add_access_filter = [&](const std::string& alias) {
+                json access_filter = {
+                    {"alias", alias},
+                    {"key", "_access_user"},
+                    {"op", 0},
+                    {"value", std::string(opts->user_name)},
+                    {"prepended_op", "and"}
+                };
+                if (j_filters.empty()) {
+                    j_filters.push_back(access_filter);
+                } else {
+                    json wrapped = json::array();
+                    wrapped.push_back(access_filter);
+                    wrapped.push_back({{"group", "and"}, {"filters", j_filters}, {"prepended_op", "and"}});
+                    j_filters = wrapped;
+                }
+            };
+
+            if (has_data_object) {
+                add_access_filter("DataObject");
+            }
+            if (has_collection) {
+                add_access_filter("Collection");
+            }
+        }
+
         j["projections"] = j_projs;
         j["filters"] = j_filters;
         j["root_alias"] = entry_node_type_;
 
-        // 2. Generate steps to all required target node types
+        // 6. Generate steps to all required target node types
         json j_steps = json::array();
         std::unordered_set<std::string> visited = { std::string(entry_node_type_) };
         for (const auto& target_view : target_node_types_) {
@@ -677,7 +934,7 @@ namespace irods::catalog::compiler {
             if (s == "REPLICA" || s == "REPL" || s == "REPLICAS") {
                 return "Replica";
             }
-            if (s == "GROUP" || s == "GROUPS") {
+            if (s == "GROUP" || s == "GROUPS" || s == "USER_GROUP" || s == "USER_GROUPS" || s == "R_USER_GROUP") {
                 return "Group";
             }
             if (s == "ACCESS") {
@@ -712,8 +969,9 @@ namespace irods::catalog::compiler {
         }
 
         int entity_priority(std::string_view et) {
-            if (et == "DataObject") return 4;
-            if (et == "Collection") return 3;
+            if (et == "DataObject") return 5;
+            if (et == "Collection") return 4;
+            if (et == "Group") return 3;
             if (et == "User" || et == "Resource") return 2;
             if (et == "Zone") return 1;
             return 0;
@@ -741,6 +999,10 @@ namespace irods::catalog::compiler {
 
             if (entity_type == "DataObject" && (col_upper == "COLL_NAME" || col_upper == "PARENT_COLL" || col == "parent_coll")) {
                 properties["parent_coll"] = val;
+                return;
+            }
+            if (entity_type == "DataObject" && (col_upper == "COLL_ID" || col_upper == "DATA_COLL_ID" || col == "coll_id")) {
+                properties["coll_id"] = val;
                 return;
             }
 

@@ -13,6 +13,7 @@
 #include "irods/rodsErrorTable.h"
 #include "irods/irods_exception.hpp"
 #include "irods/objInfo.h"
+#include "irods/specificQuery.h"
 #include "irods/rsGenQuery.hpp"
 #include "irods/rcMisc.h"
 #include "irods/obf.h"
@@ -20,6 +21,9 @@
 #include "irods/authenticate.h"
 #include "irods/irods_random.hpp"
 #include "irods/checksum.h"
+#include "irods/irods_children_parser.hpp"
+#include "irods/irods_resource_constants.hpp"
+#include "irods/irods_rs_comm_query.hpp"
 
 #include <memory>
 #include <string>
@@ -117,6 +121,12 @@ static std::string get_timestamp(const std::string& ts) {
 static std::unique_ptr<irods::catalog::CatalogFacade> g_catalog;
 static pid_t g_catalog_pid = 0;
 static std::once_flag g_atfork_once;
+static std::string g_zone_name = "tempZone";
+static std::string g_zone_user = "rods";
+static char g_session_ticket[NAME_LEN]{};
+static char g_session_client_addr[NAME_LEN]{};
+static char g_session_client_user[NAME_LEN]{};
+static char g_session_client_zone[NAME_LEN]{};
 
 irods::error init_l3kvg_catalog();
 
@@ -125,7 +135,14 @@ static void atfork_child() {
     g_catalog.release();
     g_catalog = nullptr;
     g_catalog_pid = 0;
+    g_session_ticket[0] = '\0';
+    g_session_client_addr[0] = '\0';
+    g_session_client_user[0] = '\0';
+    g_session_client_zone[0] = '\0';
     init_l3kvg_catalog();
+    if (g_catalog) {
+        g_catalog->reset_ticket_session_state();
+    }
 }
 
 irods::error init_l3kvg_catalog() {
@@ -171,6 +188,11 @@ irods::error init_l3kvg_catalog() {
         }
 
         const std::string& zone_name = config_json.value(KW_CFG_ZONE_NAME, "tempZone");
+        g_zone_name = zone_name;
+        g_zone_user = config_json.value(KW_CFG_ZONE_USER, "rods");
+        cfg.default_resc = config_json.value("default_resource_name", "demoResc");
+        cfg.default_resc_vault = config_json.value("default_resource_directory", "/var/lib/irods/Vault");
+        cfg.admin_user = g_zone_user;
         cfg.cluster_id = irods::catalog::SnowflakeID::calculate_cluster_id(zone_name);
 
         l3kvg::Settings settings;
@@ -223,18 +245,78 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
         obj.name = p.object_name().string();
         std::string parent_path = p.parent_path().string();
 
+        irods::catalog::EntityType parent_type = irods::catalog::EntityType::Collection;
+        irods::catalog::snowflake_id_t parent_sid = 0;
+        if (!g_catalog->resolve_path(parent_path, parent_sid, parent_type).ok() || !parent_sid) {
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_data_obj_op parent collection unknown: %s", parent_path.c_str());
+            if (_ctx.comm()) {
+                addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + parent_path + "' is unknown").c_str());
+            }
+            return ERROR(CAT_UNKNOWN_COLLECTION, "parent collection unknown");
+        }
+
         if (obj.coll_id == 0) {
-            irods::catalog::EntityType type;
-            irods::catalog::snowflake_id_t sid;
-            if (g_catalog->resolve_path(parent_path, sid, type).ok()) {
-                // Fetch the node to get the sequential ID
-                auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
-                if (!payload.empty()) {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
-                    obj.coll_id = buf.get_i64(0, "id");
+            auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), parent_sid).get();
+            if (!payload.empty()) {
+                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                obj.coll_id = buf.get_i64(0, "id");
+            }
+        }
+        _info->collId = obj.coll_id;
+
+        bool is_admin = false;
+        std::string user_name;
+        if (_ctx.comm()) {
+            user_name = _ctx.comm()->clientUser.userName;
+            if (irods::is_privileged_client(*_ctx.comm())) {
+                is_admin = true;
+            }
+        } else {
+            const auto& config = irods::server_properties::instance().map().get_json();
+            if (config.contains(KW_CFG_ZONE_USER)) {
+                user_name = config.at(KW_CFG_ZONE_USER).get<std::string>();
+            }
+            is_admin = true;
+        }
+
+        if (!is_admin) {
+            bool allowed = false;
+            irods::catalog::snowflake_id_t usid = 0;
+            if (g_session_ticket[0] != '\0') {
+                std::string cuser = user_name.empty() ? g_session_client_user : user_name;
+                auto terr = g_catalog->check_ticket_access(g_session_ticket, parent_sid, "write", cuser, g_session_client_addr);
+                if (terr.ok()) {
+                    allowed = true;
+                } else {
+                    std::string tpath, ttype;
+                    auto vret = g_catalog->validate_ticket(g_session_ticket, cuser, g_session_client_addr, &tpath, &ttype);
+                    if (!vret.ok()) {
+                        return vret;
+                    }
+                    if (ttype != "write") {
+                        return ERROR(CAT_NO_ACCESS_PERMISSION, "Ticket is read-only");
+                    }
+                    if (tpath == full_path || tpath == parent_path || full_path.starts_with(tpath == "/" ? "/" : tpath + "/")) {
+                        allowed = true;
+                    } else {
+                        return ERROR(CAT_TICKET_INVALID, "Ticket does not apply to this path");
+                    }
+                }
+            } else {
+                if (g_catalog->resolve_user_name(user_name, usid).ok()) {
+                    g_catalog->check_permission(usid, parent_sid, "write", allowed);
                 }
             }
-        } 
+            if (!allowed) {
+                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_data_obj_op: Access Denied for user [%s] on parent [%s]",
+                        user_name.c_str(), parent_path.c_str());
+                if (_ctx.comm()) {
+                    addRErrorMsg(&_ctx.comm()->rError, 0,
+                                 ("no permission to update collection '" + parent_path + "'").c_str());
+                }
+                return ERROR(CAT_NO_ACCESS_PERMISSION, "User does not have permission to register data object in collection");
+            }
+        }
 
         obj.size = (uint64_t)_info->dataSize;
         obj.owner_name = safe_string(_info->dataOwnerName); 
@@ -298,7 +380,11 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
             repl.modify_ts = get_timestamp(safe_string(_info->dataModify));
             repl.size = (int64_t)_info->dataSize;
 
-            if (repl.resource_id == 0 && _info->rescName[0] != '\0') {
+            if (repl.resc_hier.empty() && _info->rescName && _info->rescName[0] != '\0') {
+                repl.resc_hier = _info->rescName;
+            }
+
+            if (repl.resource_id == 0 && _info->rescName && _info->rescName[0] != '\0') {
                 irods::catalog::snowflake_id_t rsid;
                 if (g_catalog->resolve_resource_name(_info->rescName, rsid).ok()) {
                     auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
@@ -375,8 +461,17 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
             bool allowed = false;
             irods::catalog::snowflake_id_t usid = 0;
             irods::catalog::snowflake_id_t dsid = sid ? sid : g_catalog->make_id(irods::catalog::EntityType::DataObject, data_id);
-            if (g_catalog->resolve_user_name(user_name, usid).ok()) {
-                g_catalog->check_permission(usid, dsid, req_level, allowed);
+            if (g_session_ticket[0] != '\0') {
+                std::string cuser = user_name.empty() ? g_session_client_user : user_name;
+                auto terr = g_catalog->check_ticket_access(g_session_ticket, dsid, req_level, cuser, g_session_client_addr);
+                if (!terr.ok()) {
+                    return terr;
+                }
+                allowed = true;
+            } else {
+                if (g_catalog->resolve_user_name(user_name, usid).ok()) {
+                    g_catalog->check_permission(usid, dsid, req_level, allowed);
+                }
             }
             rodsLog(LOG_NOTICE, "L3_PLUGIN: db_mod_data_obj_meta_op: user=%s usid=%llx dsid=%llx level=%s allowed=%d",
                     user_name.c_str(), (unsigned long long)usid, (unsigned long long)dsid, req_level.c_str(), allowed ? 1 : 0);
@@ -418,7 +513,34 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
         }
 
         if (data_id > 0) {
-            g_catalog->modify_replicas_for_data_object(data_id, (uint32_t)_info->replNum, updates, all_repl_status);
+            uint32_t target_repl_num = (uint32_t)_info->replNum;
+            if (_reg_param) {
+                if (const char* rn_val = getValByKey(_reg_param, REPL_NUM_KW)) {
+                    try { target_repl_num = static_cast<uint32_t>(std::stoul(rn_val)); } catch (...) {}
+                }
+            }
+
+            std::string target_resc_hier = safe_string(_info->rescHier);
+            if (target_resc_hier.empty() && _reg_param) {
+                if (const char* rh_val = getValByKey(_reg_param, RESC_HIER_STR_KW)) {
+                    target_resc_hier = rh_val;
+                }
+            }
+            if (target_resc_hier.empty() && _info->rescName && _info->rescName[0] != '\0') {
+                target_resc_hier = _info->rescName;
+            }
+            if (target_resc_hier.empty() && _reg_param) {
+                if (const char* rn_val = getValByKey(_reg_param, RESC_NAME_KW)) {
+                    target_resc_hier = rn_val;
+                }
+            }
+
+            bool all_replicas = (_reg_param && getValByKey(_reg_param, ALL_KW) != nullptr);
+
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_mod_data_obj_meta_op calling modify_replicas_for_data_object data_id=%llu target_repl_num=%u target_resc_hier='%s' all_replicas=%d updates_len=%zu",
+                    (unsigned long long)data_id, target_repl_num, target_resc_hier.c_str(), all_replicas ? 1 : 0, updates.size());
+
+            g_catalog->modify_replicas_for_data_object(data_id, target_repl_num, target_resc_hier, updates, all_repl_status, all_replicas);
         }
 
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_data_obj_meta_op SUCCESS");
@@ -529,6 +651,67 @@ irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _in
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_unreg_replica_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null dataObjInfo_t");
+
+        int adminMode = 0;
+        int trashMode = 0;
+        if (_cond != nullptr) {
+            char* theVal = getValByKey(_cond, ADMIN_KW);
+            if (theVal != nullptr) {
+                adminMode = 1;
+            }
+            theVal = getValByKey(_cond, ADMIN_RMTRASH_KW);
+            if (theVal != nullptr) {
+                adminMode = 1;
+                trashMode = 1;
+            }
+        }
+
+        if (adminMode == 0) {
+            std::string user_name = _ctx.comm() ? safe_string(_ctx.comm()->clientUser.userName) : "";
+            irods::catalog::snowflake_id_t usid = 0;
+            if (!user_name.empty()) {
+                g_catalog->resolve_user_name(user_name, usid);
+            }
+
+            irods::catalog::snowflake_id_t dsid = 0;
+            if (_info->dataId > 0) {
+                dsid = g_catalog->make_id(irods::catalog::EntityType::DataObject, (uint64_t)_info->dataId);
+            } else if (_info->objPath[0] != '\0') {
+                irods::catalog::EntityType out_type;
+                g_catalog->resolve_path(_info->objPath, dsid, out_type);
+            }
+
+            if (dsid == 0) {
+                return ERROR(CAT_UNKNOWN_FILE, "data object unknown");
+            }
+
+            bool allowed = false;
+            auto perm_ret = g_catalog->check_permission(usid, dsid, "delete_object", allowed, /*check_parents=*/true);
+            if (perm_ret.code() == CAT_UNKNOWN_FILE) {
+                return ERROR(CAT_UNKNOWN_FILE, "data object unknown");
+            }
+            if (!perm_ret.ok() || !allowed) {
+                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_unreg_replica_op: permission denied for user [%s] on data_id [%lld]",
+                        user_name.c_str(), (long long)_info->dataId);
+                return ERROR(CAT_NO_ACCESS_PERMISSION, "check_data_object_only failed");
+            }
+        } else {
+            if (_ctx.comm() && _ctx.comm()->clientUser.authInfo.authFlag != LOCAL_PRIV_USER_AUTH) {
+                return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "insufficient privilege");
+            }
+            if (trashMode) {
+                std::string zone = _ctx.comm() ? safe_string(_ctx.comm()->clientUser.rodsZone) : "";
+                std::string checkPath = "/" + zone + "/trash";
+                std::string path = safe_string(_info->objPath);
+                if (path.compare(0, checkPath.length(), checkPath) != 0) {
+                    if (_ctx.comm()) {
+                        addRErrorMsg(&_ctx.comm()->rError, 0, "TRASH_KW but not zone/trash path");
+                    }
+                    return ERROR(CAT_INVALID_ARGUMENT, "TRASH_KW but not zone/trash path");
+                }
+            }
+        }
+
         auto ret = g_catalog->unregister_replica((uint64_t)_info->dataId, (uint32_t)_info->replNum);
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_unreg_replica_op SUCCESS");
         return ret;
@@ -862,10 +1045,27 @@ irods::error db_del_resc_op(irods::plugin_context& _ctx, const char* _resc, int 
     }
 }
 
-irods::error db_add_child_resc_op(irods::plugin_context& _ctx, const char* _parent, const char* _child, const char* _context) {
+irods::error db_add_child_resc_op(irods::plugin_context& _ctx, std::map<std::string, std::string>* _resc_input) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_add_child_resc_op");
-        auto ret = g_catalog->add_child_resource(safe_string(_parent), safe_string(_child), safe_string(_context));
+        if (!_resc_input) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "NULL resc_input");
+        std::map<std::string, std::string>& resc_input = *_resc_input;
+
+        std::string parent_name = resc_input[irods::RESOURCE_NAME];
+        std::string new_child_string = resc_input[irods::RESOURCE_CHILDREN];
+
+        irods::children_parser child_parser;
+        child_parser.set_string(new_child_string);
+        irods::children_parser::children_map_t c_map;
+        child_parser.list(c_map);
+        if (c_map.empty()) {
+            return ERROR(SYS_INVALID_INPUT_PARAM, "child map is empty");
+        }
+
+        std::string child_name = c_map.begin()->first;
+        std::string child_context = c_map.begin()->second;
+
+        auto ret = g_catalog->add_child_resource(parent_name, child_name, child_context);
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_add_child_resc_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -874,14 +1074,124 @@ irods::error db_add_child_resc_op(irods::plugin_context& _ctx, const char* _pare
     }
 }
 
-irods::error db_del_child_resc_op(irods::plugin_context& _ctx, const char* _parent, const char* _child) {
+irods::error db_del_child_resc_op(irods::plugin_context& _ctx, std::map<std::string, std::string>* _resc_input) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_child_resc_op");
-        auto ret = g_catalog->remove_child_resource(safe_string(_parent), safe_string(_child));
+        if (!_resc_input) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "NULL resc_input");
+        std::map<std::string, std::string>& resc_input = *_resc_input;
+
+        std::string parent_name = resc_input[irods::RESOURCE_NAME];
+        std::string child_string = resc_input[irods::RESOURCE_CHILDREN];
+
+        irods::children_parser parser;
+        parser.set_string(child_string);
+        std::string child_name;
+        parser.first_child(child_name);
+
+        auto ret = g_catalog->remove_child_resource(parent_name, child_name);
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_child_resc_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_child_resc_op EXCEPTION: %s", e.what());
+        return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
+}
+
+irods::error db_gen_query_ticket_setup_op(
+    irods::plugin_context& _ctx,
+    const char*            _ticket,
+    const char*            _client_addr)
+{
+    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_gen_query_ticket_setup_op ticket=%s, addr=%s",
+            safe_string(_ticket).c_str(), safe_string(_client_addr).c_str());
+    if (!_ticket || !_client_addr) {
+        return ERROR(CAT_INVALID_ARGUMENT, "null parameter");
+    }
+    snprintf(g_session_ticket, sizeof(g_session_ticket), "%s", _ticket);
+    snprintf(g_session_client_addr, sizeof(g_session_client_addr), "%s", _client_addr);
+    if (_ctx.comm()) {
+        snprintf(g_session_client_user, sizeof(g_session_client_user), "%s", _ctx.comm()->clientUser.userName);
+        snprintf(g_session_client_zone, sizeof(g_session_client_zone), "%s", _ctx.comm()->clientUser.rodsZone);
+    }
+    return SUCCESS();
+}
+
+irods::error db_mod_ticket_op(
+    irods::plugin_context& _ctx,
+    const char*            _op_name,
+    const char*            _ticket_string,
+    const char*            _arg3,
+    const char*            _arg4,
+    const char*            _arg5,
+    const KeyValPair*      _cond_input)
+{
+    try {
+        using namespace irods::catalog;
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_ticket_op op=%s, ticket=%s", safe_string(_op_name).c_str(), safe_string(_ticket_string).c_str());
+        if (!_op_name) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "NULL op_name");
+
+        if (strcmp(_op_name, "session") == 0) {
+            const char* addr = (_arg3 && strlen(_arg3) > 0) ? _arg3 : (_ctx.comm() ? _ctx.comm()->clientAddr : "");
+            return db_gen_query_ticket_setup_op(_ctx, _ticket_string ? _ticket_string : "", addr ? addr : "");
+        }
+
+        bool is_admin = false;
+        if (_cond_input && getValByKey(_cond_input, ADMIN_KW)) {
+            if (_ctx.comm() && !irods::is_privileged_client(*_ctx.comm())) {
+                return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "User is not a rodsadmin");
+            }
+            is_admin = true;
+        }
+
+        std::string client_user = (_ctx.comm() ? _ctx.comm()->clientUser.userName : "");
+        if (client_user.empty()) client_user = g_zone_user;
+
+        if (strcmp(_op_name, "create") == 0) {
+            if (_ticket_string && isInteger(const_cast<char*>(_ticket_string))) {
+                return ERROR(CAT_TICKET_INVALID, "ticket string cannot be a number");
+            }
+            std::string target_path = safe_string(_arg4);
+            snowflake_id_t target_sid = 0;
+            EntityType target_type = EntityType::DataObject;
+            auto ret = g_catalog->resolve_path(target_path, target_sid, target_type);
+            if (!ret.ok() || !target_sid) {
+                if (!target_path.empty() && target_path.front() != '/') {
+                    std::string full = "/" + std::string(_ctx.comm()->clientUser.rodsZone) + "/home/" +
+                                       std::string(_ctx.comm()->clientUser.userName) + "/" + target_path;
+                    if (g_catalog->resolve_path(full, target_sid, target_type).ok()) {
+                        target_path = full;
+                    }
+                }
+            }
+            if (!target_sid) {
+                target_sid = g_catalog->resolve_id_from_index(EntityType::DataObject, "n", target_path);
+                if (target_sid) target_type = EntityType::DataObject;
+            }
+            if (!target_sid) {
+                target_sid = g_catalog->resolve_id_from_index(EntityType::Collection, "n", target_path);
+                if (target_sid) target_type = EntityType::Collection;
+            }
+
+            snowflake_id_t user_sid = g_catalog->resolve_id_from_index(EntityType::User, "n", client_user);
+            if (!user_sid) user_sid = g_catalog->make_id(EntityType::User, 1);
+
+            uint64_t ticket_id = 0;
+            g_catalog->get_next_sequence_value("R_ObjectID", ticket_id);
+
+            return g_catalog->create_ticket(ticket_id, safe_string(_ticket_string), safe_string(_arg3), target_sid, target_type, user_sid, client_user, target_path);
+        }
+
+        if (strcmp(_op_name, "delete") == 0) {
+            return g_catalog->delete_ticket(safe_string(_ticket_string), client_user, is_admin);
+        }
+
+        if (strcmp(_op_name, "mod") == 0) {
+            return g_catalog->modify_ticket(safe_string(_ticket_string), safe_string(_arg3), safe_string(_arg4), safe_string(_arg5), client_user, is_admin);
+        }
+
+        return SUCCESS();
+    } catch(const std::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_ticket_op EXCEPTION: %s", e.what());
         return ERROR(SYS_INTERNAL_ERR, e.what());
     }
 }
@@ -983,13 +1293,13 @@ static int decodePw(rsComm_t* rsComm, const char* in, char* out) {
     char upassword[MAX_PASSWORD_LEN + 10]{};
     char rand_pad[] = "1gCBizHWbwIYyWLo";  /* must match clients */
 
-    std::string client_user = (rsComm && rsComm->clientUser.userName[0] != '\0') ? safe_string(rsComm->clientUser.userName) : "rods";
+    std::string client_user = (rsComm && rsComm->clientUser.userName[0] != '\0') ? safe_string(rsComm->clientUser.userName) : g_zone_user;
     std::string client_zone = (rsComm && rsComm->clientUser.rodsZone[0] != '\0') ? safe_string(rsComm->clientUser.rodsZone) : "";
     if (client_zone.empty()) {
         try {
             client_zone = irods::server_properties::instance().map().get_json().at(KW_CFG_ZONE_NAME).get<std::string>();
         } catch (...) {
-            client_zone = "tempZone";
+            client_zone = g_zone_name;
         }
     }
     std::string stored_caller_pw;
@@ -1255,7 +1565,7 @@ irods::error db_make_temp_pw_op(irods::plugin_context& _ctx,
         }
         std::string target_user = safe_string(_other_user);
         if (target_user.empty()) {
-            target_user = _ctx.comm() ? safe_string(_ctx.comm()->clientUser.userName) : "rods";
+            target_user = _ctx.comm() ? safe_string(_ctx.comm()->clientUser.userName) : g_zone_user;
         }
         std::string zone = _ctx.comm() ? safe_string(_ctx.comm()->clientUser.rodsZone) : "";
         if (zone.empty()) {
@@ -1298,7 +1608,7 @@ irods::error db_make_limited_pw_op(irods::plugin_context& _ctx,
         if (!_pw_value_to_hash) {
             return ERROR(CAT_INVALID_ARGUMENT, "null parameter in db_make_limited_pw_op");
         }
-        std::string target_user = _ctx.comm() ? safe_string(_ctx.comm()->clientUser.userName) : "rods";
+        std::string target_user = _ctx.comm() ? safe_string(_ctx.comm()->clientUser.userName) : g_zone_user;
         std::string zone = _ctx.comm() ? safe_string(_ctx.comm()->clientUser.rodsZone) : "";
         if (zone.empty()) {
             zone = irods::server_properties::instance().map().get_json().at(KW_CFG_ZONE_NAME).get<std::string>();
@@ -1358,9 +1668,108 @@ irods::error db_mod_group_op(irods::plugin_context& _ctx, const char* _group, co
 }
 
 // Metadata
-irods::error db_add_avu_metadata_op(irods::plugin_context& _ctx, const char* _type, const char* _target_id, const char* _attr, const char* _val, const char* _units, const KeyValPair* _unused) {
+static irods::error check_avu_access(
+    irods::plugin_context& _ctx,
+    const char* _type,
+    const char* _name,
+    const char* _req_level,
+    const KeyValPair* _cond_input,
+    irods::catalog::snowflake_id_t& out_target_sid)
+{
+    out_target_sid = 0;
+    if (!_type || *_type == '\0') {
+        return ERROR(CAT_INVALID_ARGUMENT, "type null or empty");
+    }
+    if (!_name || *_name == '\0') {
+        return ERROR(CAT_INVALID_ARGUMENT, "name null or empty");
+    }
+
+    if (!_ctx.comm()) {
+        return SUCCESS();
+    }
+
+    const bool admin_mode = _cond_input && getValByKey(_cond_input, ADMIN_KW);
+    const bool is_privileged = irods::is_privileged_client(*_ctx.comm());
+
+    if (admin_mode && !is_privileged) {
+        return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "Insufficient privileges");
+    }
+
+    std::string type_str = safe_string(_type);
+
+    // Resources
+    if (type_str == "-r" || type_str == "-R" || type_str == "Resource" || type_str == "resc") {
+        if (!is_privileged) {
+            return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "Insufficient privileges");
+        }
+        out_target_sid = g_catalog->resolve_target_entity_sid(type_str, _name);
+        if (!out_target_sid) {
+            return ERROR(CAT_INVALID_RESOURCE, "invalid resource");
+        }
+        return SUCCESS();
+    }
+
+    // Users
+    if (type_str == "-u" || type_str == "-U" || type_str == "User" || type_str == "user") {
+        if (!is_privileged) {
+            return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "Insufficient privileges");
+        }
+        out_target_sid = g_catalog->resolve_target_entity_sid(type_str, _name);
+        if (!out_target_sid) {
+            return ERROR(CAT_INVALID_USER, "invalid user");
+        }
+        return SUCCESS();
+    }
+
+    // Data Objects & Collections
+    bool is_data_obj = (type_str == "-d" || type_str == "-D" || type_str == "DataObject" || type_str == "data");
+    bool is_coll = (type_str == "-c" || type_str == "-C" || type_str == "Collection" || type_str == "coll");
+    if (!is_data_obj && !is_coll) {
+        return ERROR(CAT_INVALID_ARGUMENT, "invalid type argument");
+    }
+
+    out_target_sid = g_catalog->resolve_target_entity_sid(type_str, _name);
+    if (!out_target_sid) {
+        if (is_data_obj) {
+            return ERROR(CAT_UNKNOWN_FILE, "data object not found");
+        } else {
+            return ERROR(CAT_UNKNOWN_COLLECTION, "collection not found");
+        }
+    }
+
+    if (admin_mode && is_privileged) {
+        return SUCCESS();
+    }
+
+    std::string user_name = safe_string(_ctx.comm()->clientUser.userName);
+    if (user_name.empty()) {
+        return ERROR(CAT_NO_ACCESS_PERMISSION, "User does not have permission");
+    }
+
+    irods::catalog::snowflake_id_t usid = 0;
+    if (!g_catalog->resolve_user_name(user_name, usid).ok() || !usid) {
+        return ERROR(CAT_INVALID_USER, "invalid user");
+    }
+
+    bool allowed = false;
+    g_catalog->check_permission(usid, out_target_sid, safe_string(_req_level), allowed);
+    if (!allowed) {
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: check_avu_access: Access Denied for user [%s] on object [%s] with level [%s]",
+                user_name.c_str(), safe_string(_name).c_str(), safe_string(_req_level).c_str());
+        return ERROR(CAT_NO_ACCESS_PERMISSION, "User does not have permission");
+    }
+
+    return SUCCESS();
+}
+
+irods::error db_add_avu_metadata_op(irods::plugin_context& _ctx, const char* _type, const char* _target_id, const char* _attr, const char* _val, const char* _units, const KeyValPair* _cond_input) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_add_avu_metadata_op");
+        irods::catalog::snowflake_id_t target_sid = 0;
+        auto access_ret = check_avu_access(_ctx, _type, _target_id, "write", _cond_input, target_sid);
+        if (!access_ret.ok()) {
+            return access_ret;
+        }
         auto ret = g_catalog->add_avu_metadata(safe_string(_type), safe_string(_target_id), {safe_string(_attr), safe_string(_val), safe_string(_units)});
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_add_avu_metadata_op SUCCESS");
         return ret;
@@ -1370,10 +1779,30 @@ irods::error db_add_avu_metadata_op(irods::plugin_context& _ctx, const char* _ty
     }
 }
 
-irods::error db_del_avu_metadata_op(irods::plugin_context& _ctx, const char* _type, const char* _target_id, const char* _attr, const char* _val, const char* _units, const KeyValPair* _unused) {
+static int check_mod_arg_type(const char* arg) {
+    if (arg == nullptr || *arg == '\0') {
+        return CAT_INVALID_ARGUMENT;
+    }
+    if (arg[1] != ':') {
+        return 0;
+    }
+    switch (arg[0]) {
+        case 'n': return 1;
+        case 'v': return 2;
+        case 'u': return 3;
+        default: return 0;
+    }
+}
+
+irods::error db_del_avu_metadata_op(irods::plugin_context& _ctx, int _option, const char* _type, const char* _target_id, const char* _attr, const char* _val, const char* _units, int _nocommit, const KeyValPair* _cond_input) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_avu_metadata_op");
-        auto ret = g_catalog->delete_avu_metadata(safe_string(_type), safe_string(_target_id), {safe_string(_attr), safe_string(_val), safe_string(_units)});
+        irods::catalog::snowflake_id_t target_sid = 0;
+        auto access_ret = check_avu_access(_ctx, _type, _target_id, "write", _cond_input, target_sid);
+        if (!access_ret.ok()) {
+            return access_ret;
+        }
+        auto ret = g_catalog->delete_avu_metadata(safe_string(_type), safe_string(_target_id), {safe_string(_attr), safe_string(_val), safe_string(_units)}, _option);
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_avu_metadata_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -1382,10 +1811,98 @@ irods::error db_del_avu_metadata_op(irods::plugin_context& _ctx, const char* _ty
     }
 }
 
-irods::error db_mod_avu_metadata_op(irods::plugin_context& _ctx, const char* _type, const char* _target_id, const char* _old_attr, const char* _old_val, const char* _old_units, const char* _new_attr, const char* _new_val, const char* _new_units, const KeyValPair* _unused) {
+irods::error db_mod_avu_metadata_op(
+    irods::plugin_context& _ctx,
+    const char* _type,
+    const char* _name,
+    const char* _attribute,
+    const char* _value,
+    const char* _unitsOrArg0,
+    const char* _arg1,
+    const char* _arg2,
+    const char* _arg3,
+    const KeyValPair* _cond_input)
+{
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_avu_metadata_op");
-        auto ret = g_catalog->modify_avu_metadata(safe_string(_type), safe_string(_target_id), {safe_string(_old_attr), safe_string(_old_val), safe_string(_old_units)}, {safe_string(_new_attr), safe_string(_new_val), safe_string(_new_units)});
+
+        if (!_type || !_name || !_attribute || !_value) {
+            return ERROR(CAT_INVALID_ARGUMENT, "Null parameter in db_mod_avu_metadata_op");
+        }
+
+        irods::catalog::snowflake_id_t target_sid = 0;
+        auto access_ret = check_avu_access(_ctx, _type, _name, "write", _cond_input, target_sid);
+        if (!access_ret.ok()) {
+            return access_ret;
+        }
+
+        if (_unitsOrArg0 == nullptr) {
+            return ERROR(CAT_INVALID_ARGUMENT, "unitsOrArg0 empty or null");
+        }
+
+        const char* dummy = nullptr;
+        const char* myUnits = "";
+        const char* addAttr = "";
+        const char* addValue = "";
+        const char* addUnits = nullptr;
+
+        int atype = check_mod_arg_type(_unitsOrArg0);
+        if (atype == 0) {
+            myUnits = _unitsOrArg0;
+        } else {
+            dummy = _unitsOrArg0;
+        }
+
+        bool new_attr_set = false;
+        bool new_val_set = false;
+        bool new_unit_set = false;
+
+        for (auto arg : { dummy, _arg1, _arg2, _arg3 }) {
+            if (arg == nullptr || *arg == '\0') {
+                continue;
+            }
+            atype = check_mod_arg_type(arg);
+            if (atype == 1) { // n:
+                if (new_attr_set) {
+                    return ERROR(CAT_INVALID_ARGUMENT, "new attribute specified more than once");
+                }
+                new_attr_set = true;
+                addAttr = arg + 2;
+            } else if (atype == 2) { // v:
+                if (new_val_set) {
+                    return ERROR(CAT_INVALID_ARGUMENT, "new value specified more than once");
+                }
+                new_val_set = true;
+                addValue = arg + 2;
+            } else if (atype == 3) { // u:
+                if (new_unit_set) {
+                    return ERROR(CAT_INVALID_ARGUMENT, "new unit specified more than once");
+                }
+                new_unit_set = true;
+                addUnits = arg + 2;
+            }
+        }
+
+        if (*addAttr == '\0' && *addValue == '\0' && addUnits == nullptr) {
+            return ERROR(CAT_INVALID_ARGUMENT, "arg check failed");
+        }
+
+        if (*addAttr == '\0') {
+            addAttr = _attribute;
+        }
+        if (*addValue == '\0') {
+            addValue = _value;
+        }
+        if (addUnits == nullptr) {
+            addUnits = myUnits;
+        }
+
+        auto ret = g_catalog->modify_avu_metadata(
+            safe_string(_type),
+            safe_string(_name),
+            {safe_string(_attribute), safe_string(_value), safe_string(myUnits)},
+            {safe_string(addAttr), safe_string(addValue), safe_string(addUnits)});
+
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_avu_metadata_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -1394,10 +1911,30 @@ irods::error db_mod_avu_metadata_op(irods::plugin_context& _ctx, const char* _ty
     }
 }
 
-irods::error db_copy_avu_metadata_op(irods::plugin_context& _ctx, const char* _src_type, const char* _src_id, const char* _dst_type, const char* _dst_id) {
+irods::error db_copy_avu_metadata_op(
+    irods::plugin_context& _ctx,
+    const char* _type1,
+    const char* _type2,
+    const char* _name1,
+    const char* _name2,
+    const KeyValPair* _cond_input)
+{
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_copy_avu_metadata_op");
-        auto ret = g_catalog->copy_avu_metadata(safe_string(_src_type), safe_string(_src_id), safe_string(_dst_type), safe_string(_dst_id));
+        if (!_type1 || !_type2 || !_name1 || !_name2) {
+            return ERROR(CAT_INVALID_ARGUMENT, "null parameter in db_copy_avu_metadata_op");
+        }
+        irods::catalog::snowflake_id_t src_sid = 0;
+        auto ret1 = check_avu_access(_ctx, _type1, _name1, "read", _cond_input, src_sid);
+        if (!ret1.ok()) {
+            return ret1;
+        }
+        irods::catalog::snowflake_id_t dst_sid = 0;
+        auto ret2 = check_avu_access(_ctx, _type2, _name2, "write", _cond_input, dst_sid);
+        if (!ret2.ok()) {
+            return ret2;
+        }
+        auto ret = g_catalog->copy_avu_metadata(safe_string(_type1), safe_string(_name1), safe_string(_type2), safe_string(_name2));
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_copy_avu_metadata_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -1406,9 +1943,14 @@ irods::error db_copy_avu_metadata_op(irods::plugin_context& _ctx, const char* _s
     }
 }
 
-irods::error db_set_avu_metadata_op(irods::plugin_context& _ctx, const char* _type, const char* _target_id, const char* _attr, const char* _val, const char* _units, const KeyValPair* _unused) {
+irods::error db_set_avu_metadata_op(irods::plugin_context& _ctx, const char* _type, const char* _target_id, const char* _attr, const char* _val, const char* _units, const KeyValPair* _cond_input) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_set_avu_metadata_op");
+        irods::catalog::snowflake_id_t target_sid = 0;
+        auto access_ret = check_avu_access(_ctx, _type, _target_id, "write", _cond_input, target_sid);
+        if (!access_ret.ok()) {
+            return access_ret;
+        }
         auto ret = g_catalog->set_avu_metadata(safe_string(_type), safe_string(_target_id), {safe_string(_attr), safe_string(_val), safe_string(_units)});
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_set_avu_metadata_op SUCCESS");
         return ret;
@@ -1445,9 +1987,18 @@ irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context&
             }
         }
         irods::catalog::snowflake_id_t usid = 0;
-        if (g_catalog->resolve_user_name(user_name, usid).ok()) {
-            irods::catalog::snowflake_id_t dsid = g_catalog->make_id(irods::catalog::EntityType::DataObject, (uint64_t)_data_id);
-            g_catalog->check_permission_to_modify_data_object(usid, dsid, allowed);
+        irods::catalog::snowflake_id_t dsid = g_catalog->make_id(irods::catalog::EntityType::DataObject, (uint64_t)_data_id);
+        if (g_session_ticket[0] != '\0') {
+            std::string cuser = user_name.empty() ? g_session_client_user : user_name;
+            auto terr = g_catalog->check_ticket_access(g_session_ticket, dsid, "write", cuser, g_session_client_addr);
+            if (!terr.ok()) {
+                return terr;
+            }
+            allowed = true;
+        } else {
+            if (g_catalog->resolve_user_name(user_name, usid).ok()) {
+                g_catalog->check_permission_to_modify_data_object(usid, dsid, allowed);
+            }
         }
 
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_check_permission_to_modify_data_object_op id [%ld] allowed [%d]", _data_id, allowed);
@@ -1462,6 +2013,10 @@ irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context&
 
 irods::error db_update_ticket_write_byte_count_op(irods::plugin_context& _ctx, rodsLong_t _data_id, rodsLong_t _bytes) {
     rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_update_ticket_write_byte_count_op id [%ld] bytes [%ld]", _data_id, _bytes);
+    if (g_session_ticket[0] != '\0') {
+        irods::catalog::snowflake_id_t dsid = g_catalog->make_id(irods::catalog::EntityType::DataObject, (uint64_t)_data_id);
+        g_catalog->update_ticket_write_bytes(g_session_ticket, dsid, _bytes);
+    }
     rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_update_ticket_write_byte_count_op SUCCESS");
     return SUCCESS();
 }
@@ -1491,6 +2046,23 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
                     repl.resource_id = resc_id;
                     repl.physical_path = after.value("data_path", "");
                     repl.resc_hier = after.value("resc_hier", "");
+                    if (repl.resc_hier.empty()) {
+                        repl.resc_hier = after.value("data_resc_hier", "");
+                    }
+                    if (repl.resc_hier.empty() && r.contains("file_modified")) {
+                        repl.resc_hier = r["file_modified"].value("resc_hier", "");
+                        if (repl.resc_hier.empty()) {
+                            repl.resc_hier = r["file_modified"].value("dest_resc_hier", "");
+                        }
+                    }
+                    if (repl.resc_hier.empty() && resc_id > 0) {
+                        irods::catalog::snowflake_id_t rsid = g_catalog->make_id(irods::catalog::EntityType::Resource, resc_id);
+                        auto rpayload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
+                        if (!rpayload.empty()) {
+                            lite3cpp::Buffer rbuf(std::vector<uint8_t>(rpayload.begin(), rpayload.end()));
+                            try { repl.resc_hier = rbuf.get_str(0, "n"); } catch (...) {}
+                        }
+                    }
                     repl.status = after.value("data_is_dirty", "1");
                     repl.checksum = checksum;
                     repl.modify_ts = get_timestamp(modify_ts);
@@ -1780,6 +2352,93 @@ irods::error db_del_specific_query_op(irods::plugin_context& _ctx, const char* _
     }
 }
 
+irods::error db_specific_query_op(
+    irods::plugin_context& _ctx,
+    specificQueryInp_t*    _spec_query_inp,
+    genQueryOut_t*         _result)
+{
+    try {
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_specific_query_op");
+        if (!_spec_query_inp || !_result) {
+            return ERROR(CAT_INVALID_ARGUMENT, "null parameter in db_specific_query_op");
+        }
+
+        std::string sql_str = safe_string(_spec_query_inp->sql);
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: db_specific_query_op: query [%s]", sql_str.c_str());
+
+        bool is_show_coll_acls = (sql_str == "ShowCollAcls" ||
+                                  sql_str.find("ShowCollAcls") != std::string::npos ||
+                                  (sql_str.find("R_COLL_MAIN") != std::string::npos && sql_str.find("R_OBJT_ACCESS") != std::string::npos));
+
+        if (is_show_coll_acls) {
+            bool has_query = false;
+            g_catalog->has_specific_query("ShowCollAcls", has_query);
+            if (!has_query) {
+                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_specific_query_op: ShowCollAcls not found in catalog");
+                return ERROR(CAT_UNKNOWN_SPECIFIC_QUERY, "unknown query: ShowCollAcls");
+            }
+
+            std::string coll_name = safe_string(_spec_query_inp->args[0]);
+            if (coll_name.empty()) {
+                return ERROR(CAT_INVALID_ARGUMENT, "missing collection argument for ShowCollAcls");
+            }
+
+            std::vector<irods::catalog::AclEntry> acls;
+            auto ret = g_catalog->get_collection_acls(coll_name, acls);
+            if (!ret.ok()) {
+                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_specific_query_op: get_collection_acls failed: %s", ret.result().c_str());
+                return ret;
+            }
+
+            _result->rowCnt = static_cast<int>(acls.size());
+            _result->attriCnt = 4;
+            _result->continueInx = 0;
+            _result->totalRowCount = static_cast<int>(acls.size());
+
+            int col_len = 2700;
+            for (int i = 0; i < 4; ++i) {
+                _result->sqlResult[i].attriInx = i;
+                _result->sqlResult[i].len = col_len;
+                _result->sqlResult[i].value = static_cast<char*>(malloc(_result->rowCnt * col_len));
+                if (!_result->sqlResult[i].value) {
+                    return ERROR(SYS_MALLOC_ERR, "failed to allocate memory for specific query results");
+                }
+                std::memset(_result->sqlResult[i].value, 0, _result->rowCnt * col_len);
+            }
+
+            for (int r = 0; r < _result->rowCnt; ++r) {
+                const auto& entry = acls[r];
+                std::strncpy(&_result->sqlResult[0].value[r * col_len], entry.user_name.c_str(), col_len - 1);
+                std::strncpy(&_result->sqlResult[1].value[r * col_len], entry.zone_name.c_str(), col_len - 1);
+                std::strncpy(&_result->sqlResult[2].value[r * col_len], entry.access_name.c_str(), col_len - 1);
+                std::strncpy(&_result->sqlResult[3].value[r * col_len], entry.user_type.c_str(), col_len - 1);
+            }
+
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_specific_query_op SUCCESS (%d rows)", _result->rowCnt);
+            return SUCCESS();
+        }
+
+        // Check if query exists in catalog
+        bool has_query = false;
+        g_catalog->has_specific_query(sql_str, has_query);
+        if (!has_query) {
+            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_specific_query_op: unknown query [%s]", sql_str.c_str());
+            return ERROR(CAT_UNKNOWN_SPECIFIC_QUERY, "unknown query: " + sql_str);
+        }
+
+        // Default fallback for other registered specific queries: 0 rows
+        _result->rowCnt = 0;
+        _result->attriCnt = 0;
+        _result->continueInx = 0;
+        _result->totalRowCount = 0;
+        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_specific_query_op (0 rows)");
+        return ERROR(CAT_NO_ROWS_FOUND, "CAT_NO_ROWS_FOUND");
+    } catch(const std::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_specific_query_op EXCEPTION: %s", e.what());
+        return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
+}
+
 // Logical Quota
 irods::error db_set_logical_quota_op(irods::plugin_context& _ctx, const char* _coll_name, rodsLong_t _limit) {
     try {
@@ -1861,6 +2520,7 @@ irods::error db_get_grid_configuration_value_op(irods::plugin_context& _ctx, con
 namespace irods::catalog::bridge {
     irods::experimental::genquery2::select synthesize_gq2_ast(genQueryInp_t* _inp, irods::catalog::CatalogFacade* _catalog, std::vector<uint64_t>& _starting_nodes);
     void pack_gq1_results(const irods::catalog::ResultSet& _results, genQueryInp_t* _inp, genQueryOut_t* _out);
+    int get_pure_inx(int inx);
 }
 
 // GenQuery
@@ -1892,20 +2552,256 @@ irods::error db_initialize_catalog_op(irods::plugin_context& _ctx) {
     }
 }
 
+thread_local std::string g_access_control_user_name;
+thread_local std::string g_access_control_zone;
+thread_local int g_access_control_priv = 0;
+thread_local int g_access_control_flag = 0;
+
+irods::error db_gen_query_access_control_setup_op(
+    irods::plugin_context& _ctx,
+    const char* _user,
+    const char* _zone,
+    const char* _host,
+    int _priv,
+    int _control_flag)
+{
+    if (_user) {
+        g_access_control_user_name = safe_string(_user);
+        g_access_control_zone = safe_string(_zone);
+        g_access_control_priv = _priv;
+    }
+    int old_flag = g_access_control_flag;
+    if (_control_flag >= 0) {
+        g_access_control_flag = _control_flag;
+    }
+    return CODE(old_flag);
+}
+
 irods::error db_gen_query_op(irods::plugin_context& _ctx, genQueryInp_t* _inp, genQueryOut_t* _out) {
     try {
         rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_gen_query_op");
         if (auto ret = init_l3kvg_catalog(); !ret.ok()) return ret;
         if (!_inp || !_out) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Null input/output");
+
+        // 1. Intercept ticket restriction queries
+        bool is_host = false, is_user = false, is_group = false;
+        for (int s = 0; s < _inp->selectInp.len; ++s) {
+            int sinx = _inp->selectInp.inx[s];
+            if (sinx == COL_TICKET_ALLOWED_HOST || sinx == COL_TICKET_ALLOWED_HOST_TICKET_ID) is_host = true;
+            if (sinx == COL_TICKET_ALLOWED_USER_NAME || sinx == COL_TICKET_ALLOWED_USER_TICKET_ID) is_user = true;
+            if (sinx == COL_TICKET_ALLOWED_GROUP_NAME || sinx == COL_TICKET_ALLOWED_GROUP_TICKET_ID) is_group = true;
+        }
+
+        if (is_host || is_user || is_group) {
+            std::string ticket_id_or_str;
+            for (int c = 0; c < _inp->sqlCondInp.len; ++c) {
+                int cinx = _inp->sqlCondInp.inx[c];
+                if (cinx == COL_TICKET_ALLOWED_HOST_TICKET_ID ||
+                    cinx == COL_TICKET_ALLOWED_USER_TICKET_ID ||
+                    cinx == COL_TICKET_ALLOWED_GROUP_TICKET_ID ||
+                    cinx == COL_TICKET_ID || cinx == COL_TICKET_STRING) {
+                    std::string cond_str = safe_string(_inp->sqlCondInp.value[c]);
+                    size_t first = cond_str.find_first_not_of("= '\"");
+                    size_t last = cond_str.find_last_not_of(" '\"");
+                    if (first != std::string::npos && last != std::string::npos && last >= first) {
+                        ticket_id_or_str = cond_str.substr(first, last - first + 1);
+                    }
+                }
+            }
+
+            std::vector<std::pair<std::string, std::string>> out_restrictions;
+            std::string restr_type = is_host ? "host" : (is_user ? "user" : "group");
+            g_catalog->get_ticket_restrictions(ticket_id_or_str, restr_type, out_restrictions);
+            if (out_restrictions.empty()) {
+                return ERROR(CAT_NO_ROWS_FOUND, "No rows found");
+            }
+
+            _out->rowCnt = out_restrictions.size();
+            _out->attriCnt = _inp->selectInp.len;
+            _out->continueInx = 0;
+            _out->totalRowCount = _out->rowCnt;
+            for (int s = 0; s < _inp->selectInp.len; ++s) {
+                int sinx = _inp->selectInp.inx[s];
+                int col_len = 1000;
+                _out->sqlResult[s].attriInx = sinx;
+                _out->sqlResult[s].len = col_len;
+                _out->sqlResult[s].value = (char*)malloc(_out->rowCnt * col_len);
+                memset(_out->sqlResult[s].value, 0, _out->rowCnt * col_len);
+                for (size_t r = 0; r < out_restrictions.size(); ++r) {
+                    char* dst = _out->sqlResult[s].value + r * col_len;
+                    if (sinx == COL_TICKET_ALLOWED_HOST_TICKET_ID ||
+                        sinx == COL_TICKET_ALLOWED_USER_TICKET_ID ||
+                        sinx == COL_TICKET_ALLOWED_GROUP_TICKET_ID) {
+                        strncpy(dst, out_restrictions[r].first.c_str(), col_len - 1);
+                    } else {
+                        strncpy(dst, out_restrictions[r].second.c_str(), col_len - 1);
+                    }
+                }
+            }
+            return SUCCESS();
+        }
+
+        // 2. Setup options & validate ticket if session ticket is active
+        irods::experimental::genquery2::options opts;
+        std::string ticket_target_path;
+        std::string ticket_target_type;
+        std::string ticket_cuser;
+        bool is_caller_admin = (_ctx.comm() ? (_ctx.comm()->clientUser.authInfo.authFlag >= LOCAL_PRIV_USER_AUTH) : (g_access_control_priv >= LOCAL_PRIV_USER_AUTH));
+        if (g_session_ticket[0] != '\0') {
+            if (_ctx.comm() && _ctx.comm()->clientUser.userName[0] != '\0') {
+                ticket_cuser = _ctx.comm()->clientUser.userName;
+            } else if (g_session_client_user[0] != '\0') {
+                ticket_cuser = g_session_client_user;
+            } else if (!g_access_control_user_name.empty()) {
+                ticket_cuser = g_access_control_user_name;
+            }
+            auto terr = g_catalog->validate_ticket(g_session_ticket, ticket_cuser, g_session_client_addr, &ticket_target_path, &ticket_target_type);
+            if (!terr.ok()) {
+                return terr;
+            }
+            opts.admin_mode = true;
+        } else {
+            if (_ctx.comm()) {
+                opts.user_name = _ctx.comm()->clientUser.userName;
+                opts.user_zone = _ctx.comm()->clientUser.rodsZone;
+                opts.admin_mode = (_ctx.comm()->clientUser.authInfo.authFlag >= LOCAL_PRIV_USER_AUTH);
+            } else if (!g_access_control_user_name.empty()) {
+                opts.user_name = g_access_control_user_name;
+                opts.user_zone = g_access_control_zone;
+                opts.admin_mode = (g_access_control_priv >= LOCAL_PRIV_USER_AUTH);
+            }
+        }
+        if (_inp->maxRows > 0) {
+            opts.default_number_of_rows = _inp->maxRows;
+        }
+
         std::vector<uint64_t> starting_nodes;
         auto ast = irods::catalog::bridge::synthesize_gq2_ast(_inp, g_catalog.get(), starting_nodes);
         irods::catalog::ResultSet results;
-        auto ret = g_catalog->execute_query(ast, results, starting_nodes);
+        auto ret = g_catalog->execute_query(ast, results, starting_nodes, "", &opts);
+
+        if (g_session_ticket[0] != '\0' && !is_caller_admin && !ticket_target_path.empty()) {
+            int coll_name_idx = -1;
+            int data_name_idx = -1;
+            for (int i = 0; i < _inp->selectInp.len; ++i) {
+                int pinx = irods::catalog::bridge::get_pure_inx(_inp->selectInp.inx[i]);
+                if (pinx == COL_COLL_NAME) {
+                    coll_name_idx = i;
+                } else if (pinx == COL_DATA_NAME) {
+                    data_name_idx = i;
+                }
+            }
+
+            std::string cond_coll_name;
+            std::string cond_data_name;
+            for (int k = 0; k < _inp->sqlCondInp.len; ++k) {
+                int pinx = irods::catalog::bridge::get_pure_inx(_inp->sqlCondInp.inx[k]);
+                if (pinx == COL_COLL_NAME && _inp->sqlCondInp.value[k]) {
+                    std::string val = _inp->sqlCondInp.value[k];
+                    auto p1 = val.find('\'');
+                    if (p1 != std::string::npos) {
+                        auto p2 = val.rfind('\'');
+                        if (p2 != std::string::npos && p2 > p1) {
+                            cond_coll_name = val.substr(p1 + 1, p2 - p1 - 1);
+                        }
+                    }
+                } else if (pinx == COL_DATA_NAME && _inp->sqlCondInp.value[k]) {
+                    std::string val = _inp->sqlCondInp.value[k];
+                    auto p1 = val.find('\'');
+                    if (p1 != std::string::npos) {
+                        auto p2 = val.rfind('\'');
+                        if (p2 != std::string::npos && p2 > p1) {
+                            cond_data_name = val.substr(p1 + 1, p2 - p1 - 1);
+                        }
+                    }
+                }
+            }
+
+            if (coll_name_idx >= 0 || data_name_idx >= 0 || !cond_coll_name.empty()) {
+                std::vector<l3kvg::Query::ResultRow> filtered_rows;
+                for (size_t r = 0; r < results.rows.size(); ++r) {
+                    std::string cname = (coll_name_idx >= 0) ? std::string(results.get_field(r, (size_t)coll_name_idx)) : cond_coll_name;
+                    std::string dname = (data_name_idx >= 0) ? std::string(results.get_field(r, (size_t)data_name_idx)) : cond_data_name;
+                    std::string row_path;
+                    bool is_coll_entity = false;
+                    if (!dname.empty()) {
+                        row_path = cname.empty() ? dname : (cname + "/" + dname);
+                    } else if (!cname.empty()) {
+                        row_path = cname;
+                        is_coll_entity = true;
+                    }
+
+                    bool allowed = false;
+                    if (!row_path.empty()) {
+                        if (ticket_target_type == "data") {
+                            if (row_path == ticket_target_path) allowed = true;
+                        } else {
+                            if (row_path == ticket_target_path || row_path.starts_with(ticket_target_path == "/" ? "/" : ticket_target_path + "/")) {
+                                allowed = true;
+                            }
+                        }
+                        if (!allowed) {
+                            irods::catalog::snowflake_id_t u_sid = 0;
+                            irods::catalog::snowflake_id_t obj_sid = 0;
+                            auto e_type = is_coll_entity ? irods::catalog::EntityType::Collection : irods::catalog::EntityType::DataObject;
+                            if (g_catalog->resolve_user_name(ticket_cuser, u_sid).ok() &&
+                                g_catalog->resolve_path(row_path, obj_sid, e_type).ok() && obj_sid != 0) {
+                                bool perm_allowed = false;
+                                if (g_catalog->check_permission(u_sid, obj_sid, "read", perm_allowed).ok() && perm_allowed) {
+                                    allowed = true;
+                                }
+                            }
+                        }
+                    } else {
+                        allowed = true;
+                    }
+
+                    if (allowed) {
+                        filtered_rows.push_back(std::move(results.rows[r]));
+                    }
+                }
+                results.rows = std::move(filtered_rows);
+            }
+        }
+
         irods::catalog::bridge::pack_gq1_results(results, _inp, _out);
         if (_out->rowCnt <= 0) {
             rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_gen_query_op SUCCESS (NO ROWS)");
             return ERROR(CAT_NO_ROWS_FOUND, "No rows found");
         }
+
+        // 3. If session ticket is active and data object was queried during an access check, increment uses
+        if (g_session_ticket[0] != '\0') {
+            bool is_access_check = false;
+            if (_inp && _inp->condInput.len > 0) {
+                for (int k = 0; k < _inp->condInput.len; ++k) {
+                    if (_inp->condInput.keyWord[k] && 
+                        (strcmp(_inp->condInput.keyWord[k], ACCESS_PERMISSION_KW) == 0 ||
+                         strcmp(_inp->condInput.keyWord[k], TICKET_KW) == 0)) {
+                        is_access_check = true;
+                        break;
+                    }
+                }
+            }
+            if (is_access_check) {
+                uint64_t q_data_id = 0;
+                for (int i = 0; i < _out->attriCnt; ++i) {
+                    if (_out->sqlResult[i].attriInx == COL_D_DATA_ID) {
+                        try {
+                            q_data_id = std::stoull(_out->sqlResult[i].value);
+                        } catch (...) {}
+                        break;
+                    }
+                }
+                if (q_data_id != 0) {
+                    auto uerr = g_catalog->increment_ticket_uses(g_session_ticket, q_data_id);
+                    if (!uerr.ok()) {
+                        return uerr;
+                    }
+                }
+            }
+        }
+
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_gen_query_op SUCCESS");
         return SUCCESS();
     } catch (const std::exception& e) {
@@ -1938,8 +2834,11 @@ irods::error db_execute_genquery2_op(
         if (const auto* sel = std::get_if<irods::experimental::genquery2::select>(_stmt)) {
             irods::catalog::ResultSet results;
             std::vector<uint64_t> starting_nodes;
-            auto ret = g_catalog->execute_query(*sel, results, starting_nodes);
+            auto ret = g_catalog->execute_query(*sel, results, starting_nodes, "", _opts);
             if (!ret.ok()) {
+                if (ret.code() == SYS_INVALID_INPUT_PARAM && _ctx.comm()) {
+                    addRErrorMsg(&_ctx.comm()->rError, SYS_INVALID_INPUT_PARAM, "Could not generate SQL from GenQuery2 string.");
+                }
                 return ret;
             }
 
@@ -1973,6 +2872,13 @@ irods::error db_execute_genquery2_op(
             return ERROR(SYS_MALLOC_ERR, "Failed to allocate memory for GenQuery2 output.");
         }
         return SUCCESS();
+    }
+    catch (const std::invalid_argument& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op invalid argument: %s", e.what());
+        if (_ctx.comm()) {
+            addRErrorMsg(&_ctx.comm()->rError, SYS_INVALID_INPUT_PARAM, "Could not generate SQL from GenQuery2 string.");
+        }
+        return ERROR(SYS_INVALID_INPUT_PARAM, e.what());
     }
     catch (const irods::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op irods::exception: %s", e.what());
@@ -2022,8 +2928,8 @@ public:
         add_operation<const char*, const char*, const char*, const char*>(irods::DATABASE_OP_MOD_RESC_DATA_PATHS, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*)>(db_mod_resc_data_paths_op));
         add_operation<const char*, const char*>(irods::DATABASE_OP_MOD_RESC_FREESPACE, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_mod_resc_freespace_op));
         add_operation<const char*, int>(irods::DATABASE_OP_DEL_RESC, std::function<irods::error(irods::plugin_context&, const char*, int)>(db_del_resc_op));
-        add_operation<const char*, const char*, const char*>(irods::DATABASE_OP_ADD_CHILD_RESC, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*)>(db_add_child_resc_op));
-        add_operation<const char*, const char*>(irods::DATABASE_OP_DEL_CHILD_RESC, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_del_child_resc_op));
+        add_operation<std::map<std::string, std::string>*>(irods::DATABASE_OP_ADD_CHILD_RESC, std::function<irods::error(irods::plugin_context&, std::map<std::string, std::string>*)>(db_add_child_resc_op));
+        add_operation<std::map<std::string, std::string>*>(irods::DATABASE_OP_DEL_CHILD_RESC, std::function<irods::error(irods::plugin_context&, std::map<std::string, std::string>*)>(db_del_child_resc_op));
         add_operation<const char*, char**>(irods::DATABASE_OP_GET_HIERARCHY_FOR_RESC, std::function<irods::error(irods::plugin_context&, const char*, char**)>(db_get_hierarchy_for_resc_op));
 
         add_operation<userInfo_t*>(irods::DATABASE_OP_REG_USER_RE, std::function<irods::error(irods::plugin_context&, userInfo_t*)>(db_reg_user_re_op));
@@ -2038,9 +2944,9 @@ public:
 
         add_operation<const char*, const char*, const char*, const char*, const char*, const KeyValPair*>(irods::DATABASE_OP_SET_AVU_METADATA, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, const char*, const KeyValPair*)>(db_set_avu_metadata_op));
         add_operation<const char*, const char*, const char*, const char*, const char*, const KeyValPair*>(irods::DATABASE_OP_ADD_AVU_METADATA, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, const char*, const KeyValPair*)>(db_add_avu_metadata_op));
-        add_operation<const char*, const char*, const char*, const char*, const char*, const KeyValPair*>(irods::DATABASE_OP_DEL_AVU_METADATA, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, const char*, const KeyValPair*)>(db_del_avu_metadata_op));
+        add_operation<int, const char*, const char*, const char*, const char*, const char*, int, const KeyValPair*>(irods::DATABASE_OP_DEL_AVU_METADATA, std::function<irods::error(irods::plugin_context&, int, const char*, const char*, const char*, const char*, const char*, int, const KeyValPair*)>(db_del_avu_metadata_op));
         add_operation<const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const KeyValPair*>(irods::DATABASE_OP_MOD_AVU_METADATA, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const KeyValPair*)>(db_mod_avu_metadata_op));
-        add_operation<const char*, const char*, const char*, const char*>(irods::DATABASE_OP_COPY_AVU_METADATA, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*)>(db_copy_avu_metadata_op));
+        add_operation<const char*, const char*, const char*, const char*, const KeyValPair*>(irods::DATABASE_OP_COPY_AVU_METADATA, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, const KeyValPair*)>(db_copy_avu_metadata_op));
         
         add_operation<const char*, const char*, const char*, const char*>(irods::DATABASE_OP_REG_ZONE, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*)>(db_reg_zone_op));
         add_operation<const char*, const char*, const char*>(irods::DATABASE_OP_MOD_ZONE, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*)>(db_mod_zone_op));
@@ -2058,6 +2964,7 @@ public:
 
         add_operation<const char*, const char*>(irods::DATABASE_OP_ADD_SPECIFIC_QUERY, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_add_specific_query_op));
         add_operation<const char*>(irods::DATABASE_OP_DEL_SPECIFIC_QUERY, std::function<irods::error(irods::plugin_context&, const char*)>(db_del_specific_query_op));
+        add_operation<specificQueryInp_t*, genQueryOut_t*>(irods::DATABASE_OP_SPECIFIC_QUERY, std::function<irods::error(irods::plugin_context&, specificQueryInp_t*, genQueryOut_t*)>(db_specific_query_op));
 
         add_operation<const char*, rodsLong_t>(irods::DATABASE_OP_SET_LOGICAL_QUOTA, std::function<irods::error(irods::plugin_context&, const char*, rodsLong_t)>(db_set_logical_quota_op));
         add_operation<const char*, std::vector<std::tuple<std::string, std::int64_t, std::int64_t, std::int64_t, std::int64_t>>*>(irods::DATABASE_OP_CHECK_LOGICAL_QUOTA, std::function<irods::error(irods::plugin_context&, const char*, std::vector<std::tuple<std::string, std::int64_t, std::int64_t, std::int64_t, std::int64_t>>*)>(db_check_logical_quota_op));
@@ -2072,6 +2979,9 @@ public:
         add_operation<int, const char*, const char*, const char*, const char*>(irods::DATABASE_OP_MOD_ACCESS_CONTROL, std::function<irods::error(irods::plugin_context&, int, const char*, const char*, const char*, const char*)>(db_mod_access_control_op));
         add_operation<rodsLong_t>(irods::DATABASE_OP_CHECK_PERMISSION_TO_MODIFY_DATA_OBJECT, std::function<irods::error(irods::plugin_context&, rodsLong_t)>(db_check_permission_to_modify_data_object_op));
         add_operation<rodsLong_t, rodsLong_t>(irods::DATABASE_OP_UPDATE_TICKET_WRITE_BYTE_COUNT, std::function<irods::error(irods::plugin_context&, rodsLong_t, rodsLong_t)>(db_update_ticket_write_byte_count_op));
+        add_operation<const char*, const char*, const char*, const char*, const char*, const KeyValPair*>(
+            irods::DATABASE_OP_MOD_TICKET,
+            std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, const char*, const KeyValPair*)>(db_mod_ticket_op));
         add_operation<const char*>(irods::DATABASE_OP_DATA_OBJECT_FINALIZE, std::function<irods::error(irods::plugin_context&, const char*)>(db_data_object_finalize_op));
         add_operation(irods::DATABASE_OP_DEL_UNUSED_AVUS, std::function<irods::error(irods::plugin_context&)>(db_del_unused_avus_op));
         add_operation<const char*, std::vector<std::string>*>(irods::DATABASE_OP_GET_DELAY_RULE_INFO, std::function<irods::error(irods::plugin_context&, const char*, std::vector<std::string>*)>(db_get_delay_rule_info_op));
@@ -2086,6 +2996,12 @@ public:
         add_operation<int*>("database_get_catalog_version", std::function<irods::error(irods::plugin_context&, int*)>(db_get_catalog_version_op));
         add_operation("database_initialize_catalog", std::function<irods::error(irods::plugin_context&)>(db_initialize_catalog_op));
         add_operation<genQueryInp_t*, genQueryOut_t*>(irods::DATABASE_OP_GEN_QUERY, std::function<irods::error(irods::plugin_context&, genQueryInp_t*, genQueryOut_t*)>(db_gen_query_op));
+        add_operation<const char*, const char*, const char*, int, int>(
+            irods::DATABASE_OP_GEN_QUERY_ACCESS_CONTROL_SETUP,
+            std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, int, int)>(db_gen_query_access_control_setup_op));
+        add_operation<const char*, const char*>(
+            irods::DATABASE_OP_GEN_QUERY_TICKET_SETUP,
+            std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_gen_query_ticket_setup_op));
         add_operation<const irods::experimental::genquery2::statement*,
                       const irods::experimental::genquery2::options*,
                       char**>(

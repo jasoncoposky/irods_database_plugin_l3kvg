@@ -6,6 +6,10 @@
 #include <unordered_map>
 #include "irods/private/genquery2_ast_types.hpp"
 
+namespace irods::experimental::genquery2 {
+    struct options;
+}
+
 namespace irods::catalog::compiler {
 
     struct GraphMap {
@@ -48,7 +52,7 @@ namespace irods::catalog::compiler {
     public:
         Gq2ToL3kvgCompiler() = default;
         
-        std::string compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias = "");
+        std::string compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias = "", const irods::experimental::genquery2::options* opts = nullptr);
 
         DmlPlan compile(const irods::experimental::genquery2::insert& ast) const;
         DmlPlan compile(const irods::experimental::genquery2::update& ast) const;
@@ -63,6 +67,7 @@ namespace irods::catalog::compiler {
         };
 
         void add_target_type(std::string_view t) { target_node_types_.emplace_back(t); }
+        const std::vector<std::string>& get_target_types() const { return target_node_types_; }
         void set_entry_type(std::string_view t) { entry_node_type_ = t; }
         const std::string& get_entry_type() const { return entry_node_type_; }
 

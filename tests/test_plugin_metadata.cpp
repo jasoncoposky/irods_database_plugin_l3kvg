@@ -52,9 +52,9 @@ TEST_F(MetadataPluginTest, AvuLifecycle) {
     ASSERT_TRUE(edge_found);
 
     // 3. Delete Metadata
-    ret = plugin()->call<const char*, const char*, const char*, const char*, const char*, const KeyValPair*>(
+    ret = plugin()->call<int, const char*, const char*, const char*, const char*, const char*, int, const KeyValPair*>(
         nullptr, irods::DATABASE_OP_DEL_AVU_METADATA, nullptr, 
-        "data", "1001", "color", "red", "none", nullptr);
+        0, "data", "1001", "color", "red", "none", 0, nullptr);
     ASSERT_TRUE(ret.ok());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -80,9 +80,9 @@ TEST_F(MetadataPluginTest, AvuLifecycle) {
     ASSERT_TRUE(server()->has_node(aid2));
 
     // 6. Copy AVU
-    ret = plugin()->call<const char*, const char*, const char*, const char*>(
+    ret = plugin()->call<const char*, const char*, const char*, const char*, const KeyValPair*>(
         nullptr, irods::DATABASE_OP_COPY_AVU_METADATA, nullptr, 
-        "data", "1001", "data", "1002");
+        "data", "data", "1001", "1002", nullptr);
     ASSERT_TRUE(ret.ok());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
