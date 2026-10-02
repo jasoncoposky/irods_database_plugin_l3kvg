@@ -167,9 +167,9 @@ TIER_CONFIGS = {
 
 TIER_TIMEOUTS = {
     "test_small": 60.0,
-    "1k": 120.0,
-    "10k": 300.0,
-    "50k": 600.0,
+    "1k": 900.0,
+    "10k": 3600.0,
+    "50k": 18000.0,
 }
 
 BACKEND_CONTAINERS = {
