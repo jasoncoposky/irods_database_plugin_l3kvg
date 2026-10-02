@@ -686,7 +686,7 @@ irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _in
             }
 
             bool allowed = false;
-            auto perm_ret = g_catalog->check_permission(usid, dsid, "delete_object", allowed, /*check_parents=*/true);
+            auto perm_ret = g_catalog->check_permission(usid, dsid, "delete_object", allowed, /*check_parents=*/false);
             if (perm_ret.code() == CAT_UNKNOWN_FILE) {
                 return ERROR(CAT_UNKNOWN_FILE, "data object unknown");
             }
