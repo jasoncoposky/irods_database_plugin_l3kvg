@@ -10,6 +10,12 @@ from bench_catalog_comparison import (
     compute_statistics,
     compute_speedup,
     run_in_container,
+    run_python_in_container,
+    generate_mkdir_worker_script,
+    generate_registration_worker_script,
+    generate_ils_worker_script,
+    generate_metadata_worker_script,
+    generate_query_worker_script,
     benchmark_mkdir,
     benchmark_registration,
     benchmark_ils,
@@ -19,6 +25,7 @@ from bench_catalog_comparison import (
     run_benchmark_orchestrator,
     BENCHMARK_SCHEMA_KEYS,
     TIER_CONFIGS,
+    TIER_TIMEOUTS,
 )
 
 class TestBenchHarness(unittest.TestCase):
@@ -154,52 +161,126 @@ class TestBenchHarness(unittest.TestCase):
             timeout=15.0
         )
 
-    @patch("bench_catalog_comparison.run_in_container")
-    def test_benchmark_mkdir(self, mock_run):
-        mock_run.return_value = ("", "", 0)
-        colls, durations = benchmark_mkdir("dummy-ctr", "/tempZone/home/rods/base", num_colls=3, depth=2)
+    @patch("subprocess.run")
+    def test_run_python_in_container_success(self, mock_run):
+        mock_proc = MagicMock()
+        mock_proc.stdout = '{"status": "ok"}'
+        mock_proc.stderr = ""
+        mock_proc.returncode = 0
+        mock_run.return_value = mock_proc
+
+        stdout, stderr, rc = run_python_in_container("my-container", "print('hi')", timeout=30.0)
+        self.assertEqual(stdout, '{"status": "ok"}')
+        self.assertEqual(stderr, "")
+        self.assertEqual(rc, 0)
+        mock_run.assert_called_once_with(
+            ["docker", "exec", "-i", "my-container", "su", "-", "irods", "-c", "python3 -"],
+            input="print('hi')",
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+        )
+
+    @patch("subprocess.run")
+    def test_run_python_in_container_timeout(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="python3", timeout=10.0)
+        stdout, stderr, rc = run_python_in_container("my-container", "code", timeout=10.0)
+        self.assertEqual(stdout, "")
+        self.assertIn("timed out after 10.0s", stderr)
+        self.assertEqual(rc, -1)
+
+    def test_worker_script_generators(self):
+        query_code = generate_query_worker_script("/tempZone/home/rods/base", query_iterations=5, target_obj_name="bench_obj_0")
+        self.assertIn("WHERE COLL_NAME LIKE '{base_coll}%'", query_code)
+        self.assertIn("CAT_NO_ROWS_FOUND", query_code)
+        self.assertIn("sys.exit(1)", query_code)
+
+        mkdir_code = generate_mkdir_worker_script("/tempZone/home/rods/base", num_colls=3, depth=2)
+        self.assertIn("imkdir", mkdir_code)
+        self.assertIn("colls_by_depth", mkdir_code)
+
+        reg_code = generate_registration_worker_script("/tempZone/home/rods/base", ["/c0"], num_objects=3)
+        self.assertIn("itouch", reg_code)
+
+        ils_code = generate_ils_worker_script("/tempZone/home/rods/base", recursive=True, samples=3)
+        self.assertIn("ils", ils_code)
+
+        meta_code = generate_metadata_worker_script(["/base/obj0"], avus_per_obj=2)
+        self.assertIn("imeta", meta_code)
+
+    @patch("bench_catalog_comparison.run_python_in_container")
+    def test_benchmark_mkdir_success(self, mock_run_py):
+        mock_run_py.return_value = (
+            '{"coll_list": ["/base/c0", "/base/c0/c1", "/base/c2"], "durations": [100, 200, 300]}',
+            "",
+            0,
+        )
+        colls, durations = benchmark_mkdir("dummy-ctr", "/base", num_colls=3, depth=2)
         self.assertEqual(len(colls), 3)
         self.assertEqual(len(durations), 3)
-        self.assertEqual(colls[0], "/tempZone/home/rods/base/coll_0")
-        self.assertEqual(colls[1], "/tempZone/home/rods/base/coll_0/coll_1")
-        self.assertEqual(colls[2], "/tempZone/home/rods/base/coll_2")
-        # 1 imkdir -p for base, 3 imkdir for colls
-        self.assertEqual(mock_run.call_count, 4)
+        self.assertEqual(colls[0], "/base/c0")
+        self.assertEqual(durations[0], 100)
 
-    @patch("bench_catalog_comparison.run_in_container")
-    def test_benchmark_registration(self, mock_run):
-        mock_run.return_value = ("", "", 0)
-        coll_list = ["/tempZone/home/rods/base/c0", "/tempZone/home/rods/base/c1"]
-        objs, durations = benchmark_registration("dummy-ctr", "/tempZone/home/rods/base", coll_list, num_objects=4)
-        self.assertEqual(len(objs), 4)
-        self.assertEqual(len(durations), 4)
-        self.assertEqual(objs[0], "/tempZone/home/rods/base/c0/bench_obj_0")
-        self.assertEqual(objs[1], "/tempZone/home/rods/base/c1/bench_obj_1")
-        self.assertEqual(objs[2], "/tempZone/home/rods/base/c0/bench_obj_2")
-        self.assertEqual(objs[3], "/tempZone/home/rods/base/c1/bench_obj_3")
-        self.assertEqual(mock_run.call_count, 4)
+    @patch("bench_catalog_comparison.run_python_in_container")
+    def test_benchmark_mkdir_error(self, mock_run_py):
+        mock_run_py.return_value = ("", "imkdir -p failed: Permission denied", 1)
+        with self.assertRaises(RuntimeError) as ctx:
+            benchmark_mkdir("dummy-ctr", "/base", num_colls=3, depth=2)
+        self.assertIn("Permission denied", str(ctx.exception))
 
-    @patch("bench_catalog_comparison.run_in_container")
-    def test_benchmark_ils(self, mock_run):
-        mock_run.return_value = ("ils output", "", 0)
-        durations = benchmark_ils("dummy-ctr", "/tempZone/home/rods/base", recursive=True, samples=3)
+    @patch("bench_catalog_comparison.run_python_in_container")
+    def test_benchmark_registration_success(self, mock_run_py):
+        mock_run_py.return_value = (
+            '{"obj_list": ["/base/c0/bench_obj_0", "/base/c1/bench_obj_1"], "durations": [150, 160]}',
+            "",
+            0,
+        )
+        objs, durations = benchmark_registration("dummy-ctr", "/base", ["/base/c0", "/base/c1"], num_objects=2)
+        self.assertEqual(len(objs), 2)
+        self.assertEqual(len(durations), 2)
+
+    @patch("bench_catalog_comparison.run_python_in_container")
+    def test_benchmark_registration_error(self, mock_run_py):
+        mock_run_py.return_value = ("", "itouch failed: catalog connection refused", 1)
+        with self.assertRaises(RuntimeError) as ctx:
+            benchmark_registration("dummy-ctr", "/base", ["/base/c0"], num_objects=2)
+        self.assertIn("connection refused", str(ctx.exception))
+
+    @patch("bench_catalog_comparison.run_python_in_container")
+    def test_benchmark_ils_success(self, mock_run_py):
+        mock_run_py.return_value = ('{"durations": [400, 420, 410]}', "", 0)
+        durations = benchmark_ils("dummy-ctr", "/base", recursive=True, samples=3)
         self.assertEqual(len(durations), 3)
-        self.assertEqual(mock_run.call_count, 3)
-        mock_run.assert_called_with("dummy-ctr", "ils -r '/tempZone/home/rods/base'")
+        self.assertEqual(durations[0], 400)
 
-    @patch("bench_catalog_comparison.run_in_container")
-    def test_benchmark_metadata(self, mock_run):
-        mock_run.return_value = ("", "", 0)
-        obj_list = ["/base/obj0", "/base/obj1"]
-        durations = benchmark_metadata("dummy-ctr", obj_list, avus_per_obj=2, sample_size=2)
-        # 2 objects * 2 AVUs = 4 calls
-        self.assertEqual(len(durations), 4)
-        self.assertEqual(mock_run.call_count, 4)
+    @patch("bench_catalog_comparison.run_python_in_container")
+    def test_benchmark_ils_error(self, mock_run_py):
+        mock_run_py.return_value = ("", "ils failed: collection not found", 1)
+        with self.assertRaises(RuntimeError) as ctx:
+            benchmark_ils("dummy-ctr", "/base", recursive=True, samples=3)
+        self.assertIn("collection not found", str(ctx.exception))
 
-    @patch("bench_catalog_comparison.run_in_container")
-    def test_benchmark_query(self, mock_run):
-        mock_run.return_value = ("query output", "", 0)
-        result = benchmark_query("dummy-ctr", "/tempZone/home/rods/base", query_iterations=2)
+    @patch("bench_catalog_comparison.run_python_in_container")
+    def test_benchmark_metadata_success(self, mock_run_py):
+        mock_run_py.return_value = ('{"durations": [250, 260, 270]}', "", 0)
+        durations = benchmark_metadata("dummy-ctr", ["/base/obj0"], avus_per_obj=3)
+        self.assertEqual(len(durations), 3)
+
+    @patch("bench_catalog_comparison.run_python_in_container")
+    def test_benchmark_metadata_error(self, mock_run_py):
+        mock_run_py.return_value = ("", "imeta add failed: duplicate attribute", 1)
+        with self.assertRaises(RuntimeError) as ctx:
+            benchmark_metadata("dummy-ctr", ["/base/obj0"], avus_per_obj=1)
+        self.assertIn("duplicate attribute", str(ctx.exception))
+
+    @patch("bench_catalog_comparison.run_python_in_container")
+    def test_benchmark_query_success(self, mock_run_py):
+        mock_run_py.return_value = (
+            '{"avu_lookup": [100, 110], "wildcard_scan": [200, 210], "branching_join": [300, 310], "all": [100, 200, 300, 110, 210, 310]}',
+            "",
+            0,
+        )
+        result = benchmark_query("dummy-ctr", "/base", query_iterations=2)
         self.assertIn("avu_lookup", result)
         self.assertIn("wildcard_scan", result)
         self.assertIn("branching_join", result)
@@ -209,44 +290,118 @@ class TestBenchHarness(unittest.TestCase):
         self.assertEqual(len(result["branching_join"]), 2)
         self.assertEqual(len(result["all"]), 6)
 
+    @patch("bench_catalog_comparison.run_python_in_container")
+    def test_benchmark_query_error_validation(self, mock_run_py):
+        mock_run_py.return_value = ("", "Query a failed with rc=4: CAT_SQL_ERR", 1)
+        with self.assertRaises(RuntimeError) as ctx:
+            benchmark_query("dummy-ctr", "/base", query_iterations=2)
+        self.assertIn("CAT_SQL_ERR", str(ctx.exception))
+
     @patch("bench_catalog_comparison.run_in_container")
-    def test_cleanup_benchmark_data(self, mock_run):
+    def test_cleanup_benchmark_data_success(self, mock_run):
         mock_run.return_value = ("", "", 0)
-        durations = cleanup_benchmark_data("dummy-ctr", "/tempZone/home/rods/base")
+        durations = cleanup_benchmark_data("dummy-ctr", "/base")
         self.assertEqual(len(durations), 1)
         self.assertGreater(mock_run.call_count, 0)
 
-    def test_tier_configs(self):
-        for tier in ["test_small", "1k", "10k", "50k"]:
-            self.assertIn(tier, TIER_CONFIGS)
-            cfg = TIER_CONFIGS[tier]
-            self.assertIn("num_objects", cfg)
-            self.assertIn("num_colls", cfg)
-            self.assertIn("depth", cfg)
-        self.assertEqual(TIER_CONFIGS["test_small"]["num_objects"], 10)
-        self.assertEqual(TIER_CONFIGS["test_small"]["num_colls"], 3)
-        self.assertEqual(TIER_CONFIGS["test_small"]["depth"], 2)
+    @patch("bench_catalog_comparison.run_in_container")
+    def test_cleanup_benchmark_data_fallback_and_safety(self, mock_run):
+        # 1st call: irm -rf succeeds (0)
+        # 2nd call: irmtrash -M -f fails (1)
+        # 3rd call: echo y | irmtrash -M succeeds (0)
+        mock_run.side_effect = [
+            ("", "", 0),
+            ("irmtrash: invalid option -- 'f'", "Option not supported", 1),
+            ("", "", 0),
+        ]
+        durations = cleanup_benchmark_data("dummy-ctr", "/base")
+        self.assertEqual(len(durations), 1)
+        self.assertEqual(mock_run.call_count, 3)
+        self.assertEqual(mock_run.call_args_list[2][0][1], "echo y | irmtrash -M")
 
     @patch("bench_catalog_comparison.run_in_container")
-    def test_orchestrator_dry_run(self, mock_run):
-        mock_run.return_value = ("", "", 0)
+    def test_cleanup_benchmark_data_failure(self, mock_run):
+        mock_run.return_value = ("", "Permission denied", 1)
+        with self.assertRaises(RuntimeError) as ctx:
+            cleanup_benchmark_data("dummy-ctr", "/base")
+        self.assertIn("Permission denied", str(ctx.exception))
+
+    def test_tier_configs_and_timeouts(self):
+        for tier in ["test_small", "1k", "10k", "50k"]:
+            self.assertIn(tier, TIER_CONFIGS)
+            self.assertIn(tier, TIER_TIMEOUTS)
+            self.assertGreater(TIER_TIMEOUTS[tier], 0)
+
+        self.assertLessEqual(TIER_TIMEOUTS["test_small"], TIER_TIMEOUTS["1k"])
+        self.assertLessEqual(TIER_TIMEOUTS["1k"], TIER_TIMEOUTS["10k"])
+        self.assertLessEqual(TIER_TIMEOUTS["10k"], TIER_TIMEOUTS["50k"])
+
+    @patch("bench_catalog_comparison.cleanup_benchmark_data")
+    @patch("bench_catalog_comparison.benchmark_query")
+    @patch("bench_catalog_comparison.benchmark_metadata")
+    @patch("bench_catalog_comparison.benchmark_ils")
+    @patch("bench_catalog_comparison.benchmark_registration")
+    @patch("bench_catalog_comparison.benchmark_mkdir")
+    def test_sub_workload_speedups(self, m_mkdir, m_reg, m_ils, m_meta, m_query, m_clean):
+        m_mkdir.return_value = (["/c0"], [100_000_000])
+        m_reg.return_value = (["/c0/o0"], [100_000_000])
+        m_ils.return_value = [50_000_000]
+        m_meta.return_value = [80_000_000]
+        m_clean.return_value = [200_000_000]
+        m_query.return_value = {
+            "avu_lookup": [100_000_000],
+            "wildcard_scan": [150_000_000],
+            "branching_join": [200_000_000],
+            "all": [100_000_000, 150_000_000, 200_000_000],
+        }
+
+        results = run_benchmark_orchestrator(
+            backends=["both"],
+            tiers=["test_small"],
+            iterations=1,
+            dry_run=True,
+        )
+        tier_data = results["tiers"]["test_small"]
+        self.assertIn("speedup", tier_data)
+        speedup = tier_data["speedup"]
+        self.assertIn("query_sub_workloads", speedup)
+        sub_speedups = speedup["query_sub_workloads"]
+        self.assertIn("avu_lookup", sub_speedups)
+        self.assertIn("wildcard_scan", sub_speedups)
+        self.assertIn("branching_join", sub_speedups)
+
+    @patch("bench_catalog_comparison.cleanup_benchmark_data")
+    @patch("bench_catalog_comparison.benchmark_query")
+    @patch("bench_catalog_comparison.benchmark_metadata")
+    @patch("bench_catalog_comparison.benchmark_ils")
+    @patch("bench_catalog_comparison.benchmark_registration")
+    @patch("bench_catalog_comparison.benchmark_mkdir")
+    def test_orchestrator_dry_run(self, m_mkdir, m_reg, m_ils, m_meta, m_query, m_clean):
+        m_mkdir.return_value = (["/c0"], [10_000_000])
+        m_reg.return_value = (["/c0/o0"], [10_000_000])
+        m_ils.return_value = [10_000_000]
+        m_meta.return_value = [10_000_000]
+        m_clean.return_value = [10_000_000]
+        m_query.return_value = {
+            "avu_lookup": [10_000_000],
+            "wildcard_scan": [10_000_000],
+            "branching_join": [10_000_000],
+            "all": [10_000_000, 10_000_000, 10_000_000],
+        }
+
         results = run_benchmark_orchestrator(
             backends=["l3kvg"],
             tiers=["test_small"],
             iterations=1,
             dry_run=True,
-            query_iterations=1,
-            metadata_sample=2,
         )
         self.assertIn("tiers", results)
         self.assertIn("test_small", results["tiers"])
-        tier_data = results["tiers"]["test_small"]
-        self.assertIn("backends", tier_data)
-        self.assertIn("l3kvg", tier_data["backends"])
-        l3_metrics = tier_data["backends"]["l3kvg"]
+        l3_metrics = results["tiers"]["test_small"]["backends"]["l3kvg"]
         for expected_key in ["mkdir", "registration", "ils", "metadata", "query", "cleanup"]:
             self.assertIn(expected_key, l3_metrics)
             self.assertTrue(set(BENCHMARK_SCHEMA_KEYS).issubset(l3_metrics[expected_key].keys()))
+
 
 if __name__ == '__main__':
     unittest.main()

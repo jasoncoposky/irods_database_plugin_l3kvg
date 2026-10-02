@@ -116,6 +116,20 @@ def run_in_container(container, cmd, as_irods=True, timeout=60.0):
     except subprocess.TimeoutExpired:
         return "", f"Command timed out after {timeout}s", -1
 
+
+def run_python_in_container(container, code, timeout=300.0):
+    """
+    Executes a Python script inside a docker container under the 'irods' user.
+    Pipes code directly via stdin to eliminate Docker CLI spawning overhead.
+    """
+    full_cmd = ["docker", "exec", "-i", container, "su", "-", "irods", "-c", "python3 -"]
+    try:
+        res = subprocess.run(full_cmd, input=code, capture_output=True, text=True, timeout=timeout)
+        return res.stdout, res.stderr, res.returncode
+    except subprocess.TimeoutExpired:
+        return "", f"In-container Python script timed out after {timeout}s", -1
+
+
 TIER_CONFIGS = {
     "test_small": {
         "num_objects": 10,
@@ -151,105 +165,252 @@ TIER_CONFIGS = {
     },
 }
 
+TIER_TIMEOUTS = {
+    "test_small": 60.0,
+    "1k": 120.0,
+    "10k": 300.0,
+    "50k": 600.0,
+}
+
 BACKEND_CONTAINERS = {
     "l3kvg": "ubuntu-2404-l3kvg-irods-catalog-provider-1",
     "postgres": "test-postgres-bench-irods-catalog-provider-1",
 }
 
 
-def benchmark_mkdir(container, base_coll, num_colls, depth):
+def generate_mkdir_worker_script(base_coll, num_colls, depth):
+    return f"""
+import sys, time, subprocess, json
+
+base_coll = {json.dumps(base_coll)}
+num_colls = {int(num_colls)}
+depth = max(1, {int(depth)})
+
+res_base = subprocess.run(["imkdir", "-p", base_coll], capture_output=True, text=True)
+if res_base.returncode != 0:
+    sys.stderr.write(f"imkdir -p failed on {{base_coll}}: {{res_base.stderr}}\\n")
+    sys.exit(1)
+
+colls_by_depth = {{0: [base_coll]}}
+coll_list = []
+durations = []
+
+for i in range(num_colls):
+    target_parent_depth = i % depth
+    while target_parent_depth not in colls_by_depth or not colls_by_depth[target_parent_depth]:
+        target_parent_depth = (target_parent_depth - 1) % depth
+    parent_list = colls_by_depth[target_parent_depth]
+    parent = parent_list[(i // depth) % len(parent_list)]
+    node_depth = target_parent_depth + 1
+    coll_path = f"{{parent}}/coll_{{i}}"
+
+    t0 = time.perf_counter_ns()
+    res = subprocess.run(["imkdir", coll_path], capture_output=True, text=True)
+    t1 = time.perf_counter_ns()
+    if res.returncode != 0:
+        sys.stderr.write(f"imkdir failed for {{coll_path}}: {{res.stderr}}\\n")
+        sys.exit(1)
+
+    durations.append(t1 - t0)
+    coll_list.append(coll_path)
+    if node_depth not in colls_by_depth:
+        colls_by_depth[node_depth] = []
+    colls_by_depth[node_depth].append(coll_path)
+
+print(json.dumps({{"coll_list": coll_list, "durations": durations}}))
+"""
+
+
+def generate_registration_worker_script(base_coll, coll_list, num_objects):
+    return f"""
+import sys, time, subprocess, json
+
+base_coll = {json.dumps(base_coll)}
+coll_list = {json.dumps(coll_list)}
+num_objects = {int(num_objects)}
+
+target_colls = coll_list if coll_list else [base_coll]
+obj_list = []
+durations = []
+
+for i in range(num_objects):
+    target_coll = target_colls[i % len(target_colls)]
+    obj_path = f"{{target_coll}}/bench_obj_{{i}}"
+
+    t0 = time.perf_counter_ns()
+    res = subprocess.run(["itouch", obj_path], capture_output=True, text=True)
+    t1 = time.perf_counter_ns()
+    if res.returncode != 0:
+        sys.stderr.write(f"itouch failed for {{obj_path}}: {{res.stderr}}\\n")
+        sys.exit(1)
+
+    durations.append(t1 - t0)
+    obj_list.append(obj_path)
+
+print(json.dumps({{"obj_list": obj_list, "durations": durations}}))
+"""
+
+
+def generate_ils_worker_script(base_coll, recursive=True, samples=5):
+    cmd_list = ["ils", "-r", base_coll] if recursive else ["ils", base_coll]
+    return f"""
+import sys, time, subprocess, json
+
+base_coll = {json.dumps(base_coll)}
+cmd = {json.dumps(cmd_list)}
+samples = max(1, {int(samples)})
+
+durations = []
+for _ in range(samples):
+    t0 = time.perf_counter_ns()
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    t1 = time.perf_counter_ns()
+    if res.returncode != 0:
+        sys.stderr.write(f"ils failed for {{base_coll}}: {{res.stderr}}\\n")
+        sys.exit(1)
+    durations.append(t1 - t0)
+
+print(json.dumps({{"durations": durations}}))
+"""
+
+
+def generate_metadata_worker_script(sample, avus_per_obj=3):
+    return f"""
+import sys, time, subprocess, json
+
+sample = {json.dumps(sample)}
+avus_per_obj = {int(avus_per_obj)}
+
+durations = []
+for obj in sample:
+    for k in range(avus_per_obj):
+        t0 = time.perf_counter_ns()
+        res = subprocess.run(
+            ["imeta", "add", "-d", obj, f"attr_{{k}}", f"val_{{k}}", f"unit_{{k}}"],
+            capture_output=True,
+            text=True
+        )
+        t1 = time.perf_counter_ns()
+        if res.returncode != 0:
+            sys.stderr.write(f"imeta add failed for {{obj}}: {{res.stderr}}\\n")
+            sys.exit(1)
+        durations.append(t1 - t0)
+
+print(json.dumps({{"durations": durations}}))
+"""
+
+
+def generate_query_worker_script(base_coll, query_iterations=100, target_obj_name="bench_obj_0"):
+    return f"""
+import sys, time, subprocess, json
+
+base_coll = {json.dumps(base_coll)}
+target_obj_name = {json.dumps(target_obj_name)}
+query_iterations = max(1, {int(query_iterations)})
+
+# Detect imeta qu support
+test_qu = subprocess.run(["imeta", "qu", "-d", "attr_0", "=", "val_0"], capture_output=True, text=True)
+if test_qu.returncode == 0 or ("Unrecognized subcommand" not in test_qu.stderr and "Unrecognized subcommand" not in test_qu.stdout):
+    cmd_a = ["imeta", "qu", "-d", "attr_0", "=", "val_0"]
+else:
+    cmd_a = ["iquest", "%s/%s", f"SELECT COLL_NAME, DATA_NAME WHERE COLL_NAME LIKE '{{base_coll}}%' AND META_DATA_ATTR_NAME = 'attr_0' AND META_DATA_ATTR_VALUE = 'val_0'"]
+
+cmd_b = ["iquest", "%s/%s", f"SELECT COLL_NAME, DATA_NAME WHERE COLL_NAME LIKE '{{base_coll}}%' AND DATA_NAME LIKE 'bench_obj_%'"]
+cmd_c = ["iquest", "%s/%s/%s/%s", f"SELECT COLL_NAME, DATA_NAME, RESC_NAME, DATA_REPL_NUM WHERE COLL_NAME LIKE '{{base_coll}}%' AND DATA_NAME = '{{target_obj_name}}'"]
+
+durations_a, durations_b, durations_c, durations_all = [], [], [], []
+
+for _ in range(query_iterations):
+    # a) AVU exact match lookup
+    t0 = time.perf_counter_ns()
+    res_a = subprocess.run(cmd_a, capture_output=True, text=True)
+    t1 = time.perf_counter_ns()
+    if res_a.returncode != 0 and "CAT_NO_ROWS_FOUND" not in res_a.stderr and "CAT_NO_ROWS_FOUND" not in res_a.stdout:
+        sys.stderr.write(f"Query a failed with rc={{res_a.returncode}}: {{res_a.stderr}} {{res_a.stdout}}\\n")
+        sys.exit(1)
+    durations_a.append(t1 - t0)
+    durations_all.append(t1 - t0)
+
+    # b) GenQuery wildcard scan
+    t0 = time.perf_counter_ns()
+    res_b = subprocess.run(cmd_b, capture_output=True, text=True)
+    t1 = time.perf_counter_ns()
+    if res_b.returncode != 0 and "CAT_NO_ROWS_FOUND" not in res_b.stderr and "CAT_NO_ROWS_FOUND" not in res_b.stdout:
+        sys.stderr.write(f"Query b failed with rc={{res_b.returncode}}: {{res_b.stderr}} {{res_b.stdout}}\\n")
+        sys.exit(1)
+    durations_b.append(t1 - t0)
+    durations_all.append(t1 - t0)
+
+    # c) Branching join
+    t0 = time.perf_counter_ns()
+    res_c = subprocess.run(cmd_c, capture_output=True, text=True)
+    t1 = time.perf_counter_ns()
+    if res_c.returncode != 0 and "CAT_NO_ROWS_FOUND" not in res_c.stderr and "CAT_NO_ROWS_FOUND" not in res_c.stdout:
+        sys.stderr.write(f"Query c failed with rc={{res_c.returncode}}: {{res_c.stderr}} {{res_c.stdout}}\\n")
+        sys.exit(1)
+    durations_c.append(t1 - t0)
+    durations_all.append(t1 - t0)
+
+print(json.dumps({{"avu_lookup": durations_a, "wildcard_scan": durations_b, "branching_join": durations_c, "all": durations_all}}))
+"""
+
+
+def benchmark_mkdir(container, base_coll, num_colls, depth, timeout=60.0):
     """
     Creates a deterministic directory tree with num_colls collections down to depth depth under base_coll.
-    Records per-collection creation duration using monotonic clock (time.perf_counter_ns()).
+    Runs via an in-container Python worker to isolate pure catalog execution latencies.
     Returns list of created collection paths and timing array.
     """
     if num_colls <= 0:
         return [], []
 
-    depth = max(1, depth)
-    run_in_container(container, f"imkdir -p '{base_coll}'")
+    code = generate_mkdir_worker_script(base_coll, num_colls, depth)
+    out, err, rc = run_python_in_container(container, code, timeout=timeout)
+    if rc != 0:
+        raise RuntimeError(f"imkdir benchmark failed in container: {err} {out}")
 
-    colls_by_depth = {0: [base_coll]}
-    coll_list = []
-    durations = []
-
-    for i in range(num_colls):
-        target_parent_depth = i % depth
-        while target_parent_depth not in colls_by_depth or not colls_by_depth[target_parent_depth]:
-            target_parent_depth = (target_parent_depth - 1) % depth
-        parent_list = colls_by_depth[target_parent_depth]
-        parent = parent_list[(i // depth) % len(parent_list)]
-        node_depth = target_parent_depth + 1
-        coll_path = f"{parent}/coll_{i}"
-
-        t0 = time.perf_counter_ns()
-        out, err, rc = run_in_container(container, f"imkdir '{coll_path}'")
-        t1 = time.perf_counter_ns()
-        if rc != 0:
-            raise RuntimeError(f"imkdir failed for {coll_path}: {err} {out}")
-
-        durations.append(t1 - t0)
-        coll_list.append(coll_path)
-        if node_depth not in colls_by_depth:
-            colls_by_depth[node_depth] = []
-        colls_by_depth[node_depth].append(coll_path)
-
-    return coll_list, durations
+    data = json.loads(out)
+    return data["coll_list"], data["durations"]
 
 
-def benchmark_registration(container, base_coll, coll_list, num_objects):
+def benchmark_registration(container, base_coll, coll_list, num_objects, timeout=60.0):
     """
     Distributes num_objects across coll_list using zero-byte files (itouch <path>).
-    Records registration durations using time.perf_counter_ns().
+    Runs via an in-container Python worker to isolate pure catalog execution latencies.
     Returns list of object paths and timing array.
     """
     if num_objects <= 0:
         return [], []
 
-    target_colls = coll_list if coll_list else [base_coll]
-    obj_list = []
-    durations = []
+    code = generate_registration_worker_script(base_coll, coll_list, num_objects)
+    out, err, rc = run_python_in_container(container, code, timeout=timeout)
+    if rc != 0:
+        raise RuntimeError(f"itouch benchmark failed in container: {err} {out}")
 
-    for i in range(num_objects):
-        target_coll = target_colls[i % len(target_colls)]
-        obj_path = f"{target_coll}/bench_obj_{i}"
-
-        t0 = time.perf_counter_ns()
-        out, err, rc = run_in_container(container, f"itouch '{obj_path}'")
-        t1 = time.perf_counter_ns()
-        if rc != 0:
-            raise RuntimeError(f"itouch failed for {obj_path}: {err} {out}")
-
-        durations.append(t1 - t0)
-        obj_list.append(obj_path)
-
-    return obj_list, durations
+    data = json.loads(out)
+    return data["obj_list"], data["durations"]
 
 
-def benchmark_ils(container, base_coll, recursive=True, samples=5):
+def benchmark_ils(container, base_coll, recursive=True, samples=5, timeout=60.0):
     """
     Executes recursive directory tree walk (ils -r <base_coll>) and measures total traversal duration.
-    Measures multiple sample runs and returns timing array.
+    Runs via an in-container Python worker.
+    Returns timing array of sample durations in nanoseconds.
     """
-    cmd = f"ils -r '{base_coll}'" if recursive else f"ils '{base_coll}'"
-    durations = []
+    code = generate_ils_worker_script(base_coll, recursive=recursive, samples=samples)
+    out, err, rc = run_python_in_container(container, code, timeout=timeout)
+    if rc != 0:
+        raise RuntimeError(f"ils benchmark failed in container: {err} {out}")
 
-    for _ in range(max(1, samples)):
-        t0 = time.perf_counter_ns()
-        out, err, rc = run_in_container(container, cmd)
-        t1 = time.perf_counter_ns()
-        if rc != 0:
-            raise RuntimeError(f"ils failed for {base_coll}: {err} {out}")
-        durations.append(t1 - t0)
-
-    return durations
+    data = json.loads(out)
+    return data["durations"]
 
 
-def benchmark_metadata(container, obj_list, avus_per_obj=3, sample_size=None):
+def benchmark_metadata(container, obj_list, avus_per_obj=3, sample_size=None, timeout=60.0):
     """
     For a sample of objects, adds AVUs (imeta add -d <obj> attr_<k> val_<k> unit_<k>).
-    Records metadata addition durations.
-    Returns timing array.
+    Runs via an in-container Python worker.
+    Returns timing array of durations in nanoseconds.
     """
     if not obj_list:
         return []
@@ -261,86 +422,54 @@ def benchmark_metadata(container, obj_list, avus_per_obj=3, sample_size=None):
     else:
         sample = obj_list
 
-    durations = []
-    for obj in sample:
-        for k in range(avus_per_obj):
-            cmd = f"imeta add -d '{obj}' attr_{k} val_{k} unit_{k}"
-            t0 = time.perf_counter_ns()
-            out, err, rc = run_in_container(container, cmd)
-            t1 = time.perf_counter_ns()
-            if rc != 0:
-                raise RuntimeError(f"imeta add failed for {obj}: {err} {out}")
-            durations.append(t1 - t0)
+    code = generate_metadata_worker_script(sample, avus_per_obj=avus_per_obj)
+    out, err, rc = run_python_in_container(container, code, timeout=timeout)
+    if rc != 0:
+        raise RuntimeError(f"metadata benchmark failed in container: {err} {out}")
 
-    return durations
+    data = json.loads(out)
+    return data["durations"]
 
 
-def benchmark_query(container, base_coll, query_iterations=100, target_obj_name="bench_obj_0"):
+def benchmark_query(container, base_coll, query_iterations=100, target_obj_name="bench_obj_0", timeout=60.0):
     """
-    Executes:
-      a) imeta qu -d attr_0 = val_0 (AVU exact match lookup; falls back to iquest if imeta qu unsupported)
-      b) iquest "%s/%s" "SELECT COLL_NAME, DATA_NAME WHERE DATA_NAME LIKE 'bench_obj_%'" (GenQuery wildcard scan)
-      c) iquest "%s/%s/%s/%s" "SELECT COLL_NAME, DATA_NAME, RESC_NAME, DATA_REPL_NUM WHERE DATA_NAME = '...'" (branching join)
-    Records query execution durations.
-    Returns dict of timing arrays.
+    Executes collection-scoped queries inside the container:
+      a) imeta qu -d attr_0 = val_0 (AVU lookup; fallback to scoped iquest)
+      b) iquest "%s/%s" "SELECT COLL_NAME, DATA_NAME WHERE COLL_NAME LIKE '{base_coll}%' AND DATA_NAME LIKE 'bench_obj_%'"
+      c) iquest "%s/%s/%s/%s" "SELECT COLL_NAME, DATA_NAME, RESC_NAME, DATA_REPL_NUM WHERE COLL_NAME LIKE '{base_coll}%' AND DATA_NAME = '{target_obj_name}'"
+    Asserts returncode == 0 for all query executions (allowing CAT_NO_ROWS_FOUND).
+    Returns dict of timing arrays in nanoseconds.
     """
-    cmd_a = "imeta qu -d attr_0 = val_0"
-    out, err, rc = run_in_container(container, cmd_a)
-    if rc != 0 and ("Unrecognized subcommand" in err or "Unrecognized subcommand" in out):
-        cmd_a = 'iquest "%s/%s" "SELECT COLL_NAME, DATA_NAME WHERE META_DATA_ATTR_NAME = \'attr_0\' AND META_DATA_ATTR_VALUE = \'val_0\'"'
+    code = generate_query_worker_script(base_coll, query_iterations, target_obj_name)
+    out, err, rc = run_python_in_container(container, code, timeout=timeout)
+    if rc != 0:
+        raise RuntimeError(f"query benchmark failed in container: {err} {out}")
 
-    cmd_b = 'iquest "%s/%s" "SELECT COLL_NAME, DATA_NAME WHERE DATA_NAME LIKE \'bench_obj_%\'"'
-    cmd_c = f'iquest "%s/%s/%s/%s" "SELECT COLL_NAME, DATA_NAME, RESC_NAME, DATA_REPL_NUM WHERE DATA_NAME = \'{target_obj_name}\'"'
-
-    durations_a = []
-    durations_b = []
-    durations_c = []
-    durations_all = []
-
-    for _ in range(max(1, query_iterations)):
-        # a) AVU exact match lookup
-        t0 = time.perf_counter_ns()
-        out_a, err_a, rc_a = run_in_container(container, cmd_a)
-        t1 = time.perf_counter_ns()
-        dur_a = t1 - t0
-        durations_a.append(dur_a)
-        durations_all.append(dur_a)
-
-        # b) GenQuery wildcard scan
-        t0 = time.perf_counter_ns()
-        out_b, err_b, rc_b = run_in_container(container, cmd_b)
-        t1 = time.perf_counter_ns()
-        dur_b = t1 - t0
-        durations_b.append(dur_b)
-        durations_all.append(dur_b)
-
-        # c) Branching join
-        t0 = time.perf_counter_ns()
-        out_c, err_c, rc_c = run_in_container(container, cmd_c)
-        t1 = time.perf_counter_ns()
-        dur_c = t1 - t0
-        durations_c.append(dur_c)
-        durations_all.append(dur_c)
-
-    return {
-        "avu_lookup": durations_a,
-        "wildcard_scan": durations_b,
-        "branching_join": durations_c,
-        "all": durations_all,
-    }
+    data = json.loads(out)
+    return data
 
 
-def cleanup_benchmark_data(container, base_coll):
+def cleanup_benchmark_data(container, base_coll, timeout=60.0):
     """
-    Runs irm -rf <base_coll> and irmtrash -M -f to cleanly reset catalog state.
+    Runs irm -rf <base_coll> and irmtrash -M -f (with echo y | irmtrash -M fallback) to cleanly reset catalog state.
+    Asserts returncode == 0 and prevents stdin blocking.
     Returns timing array with cleanup duration in nanoseconds.
     """
     durations = []
     t0 = time.perf_counter_ns()
-    run_in_container(container, f"irm -rf '{base_coll}'")
-    out, err, rc = run_in_container(container, "irmtrash -M -f")
-    if rc != 0 and ("Option not supported" in err or "invalid option" in err or "invalid option" in out):
-        run_in_container(container, "irmtrash -M")
+
+    out_rm, err_rm, rc_rm = run_in_container(container, f"irm -rf '{base_coll}'", timeout=timeout)
+    if rc_rm != 0:
+        raise RuntimeError(f"irm -rf failed on {base_coll}: {err_rm} {out_rm}")
+
+    out_trash, err_trash, rc_trash = run_in_container(container, "irmtrash -M -f", timeout=timeout)
+    if rc_trash != 0:
+        out_trash2, err_trash2, rc_trash2 = run_in_container(
+            container, "echo y | irmtrash -M", timeout=timeout
+        )
+        if rc_trash2 != 0:
+            raise RuntimeError(f"irmtrash failed on {base_coll}: {err_trash2} {out_trash2}")
+
     t1 = time.perf_counter_ns()
     durations.append(t1 - t0)
     return durations
@@ -391,13 +520,14 @@ def run_benchmark_orchestrator(
         if tier not in TIER_CONFIGS:
             raise ValueError(f"Unknown tier '{tier}'. Supported tiers: {list(TIER_CONFIGS.keys())}")
         tier_cfg = TIER_CONFIGS[tier].copy()
+        tier_timeout = TIER_TIMEOUTS.get(tier, 120.0)
         q_iters = query_iterations if query_iterations is not None else tier_cfg["query_iterations"]
         m_sample = metadata_sample if metadata_sample is not None else tier_cfg["metadata_sample"]
         ils_samps = tier_cfg.get("ils_samples", 5)
 
         print(f"\n{'='*70}")
         print(f"Starting Tier: '{tier}' ({tier_cfg['num_objects']} objects, {tier_cfg['num_colls']} colls, depth {tier_cfg['depth']})")
-        print(f"Backends to benchmark: {selected_backends} | Iterations: {iterations}")
+        print(f"Backends to benchmark: {selected_backends} | Iterations: {iterations} | Scale Timeout: {tier_timeout}s")
         print(f"{'='*70}")
 
         if tier not in existing_data["tiers"]:
@@ -428,39 +558,39 @@ def run_benchmark_orchestrator(
                 print(f"  Iteration {it}/{iterations} on {backend} (base_coll: {base_coll})...")
 
                 # Pre-cleanup
-                cleanup_benchmark_data(container, base_coll)
+                cleanup_benchmark_data(container, base_coll, timeout=tier_timeout)
 
                 # 1. mkdir
                 colls, d_mkdir = benchmark_mkdir(
-                    container, base_coll, tier_cfg["num_colls"], tier_cfg["depth"]
+                    container, base_coll, tier_cfg["num_colls"], tier_cfg["depth"], timeout=tier_timeout
                 )
                 mkdir_all.extend(d_mkdir)
 
                 # 2. registration
                 objs, d_reg = benchmark_registration(
-                    container, base_coll, colls, tier_cfg["num_objects"]
+                    container, base_coll, colls, tier_cfg["num_objects"], timeout=tier_timeout
                 )
                 reg_all.extend(d_reg)
 
                 # 3. ils
-                d_ils = benchmark_ils(container, base_coll, recursive=True, samples=ils_samps)
+                d_ils = benchmark_ils(container, base_coll, recursive=True, samples=ils_samps, timeout=tier_timeout)
                 ils_all.extend(d_ils)
 
                 # 4. metadata
                 d_meta = benchmark_metadata(
-                    container, objs, avus_per_obj=3, sample_size=m_sample
+                    container, objs, avus_per_obj=3, sample_size=m_sample, timeout=tier_timeout
                 )
                 meta_all.extend(d_meta)
 
                 # 5. query
-                d_query = benchmark_query(container, base_coll, query_iterations=q_iters)
+                d_query = benchmark_query(container, base_coll, query_iterations=q_iters, timeout=tier_timeout)
                 q_avu_all.extend(d_query["avu_lookup"])
                 q_wildcard_all.extend(d_query["wildcard_scan"])
                 q_join_all.extend(d_query["branching_join"])
                 q_all.extend(d_query["all"])
 
                 # 6. cleanup
-                d_clean = cleanup_benchmark_data(container, base_coll)
+                d_clean = cleanup_benchmark_data(container, base_coll, timeout=tier_timeout)
                 cleanup_all.extend(d_clean)
 
             # Compute statistics for backend workloads
@@ -510,6 +640,9 @@ def run_benchmark_orchestrator(
             ]:
                 st = backend_metrics[key]
                 print(f"{name:<22} | {st['mean_ms']:<10.3f} | {st['median_ms']:<11.3f} | {st['p95_ms']:<9.3f} | {st['ops_per_sec']:<9.2f}")
+                if key == "query" and "sub_workloads" in st:
+                    for sub_name, sub_st in st["sub_workloads"].items():
+                        print(f"  - {sub_name:<18} | {sub_st['mean_ms']:<10.3f} | {sub_st['median_ms']:<11.3f} | {sub_st['p95_ms']:<9.3f} | {sub_st['ops_per_sec']:<9.2f}")
             print(f"{'-'*75}")
 
         # Compute speedups if both backends exist in this tier
@@ -520,12 +653,25 @@ def run_benchmark_orchestrator(
             for wk in ["mkdir", "collection_ingestion", "registration", "ils", "listing", "metadata", "query", "genquery", "cleanup"]:
                 if wk in pg_wks and wk in l3_wks:
                     speedups[wk] = compute_speedup(pg_wks[wk], l3_wks[wk])
+
+            # Query sub-workload speedups
+            query_sub_speedups = {}
+            pg_q_subs = pg_wks.get("query", {}).get("sub_workloads", {})
+            l3_q_subs = l3_wks.get("query", {}).get("sub_workloads", {})
+            for sub_k in ["avu_lookup", "wildcard_scan", "branching_join"]:
+                if sub_k in pg_q_subs and sub_k in l3_q_subs:
+                    query_sub_speedups[sub_k] = compute_speedup(pg_q_subs[sub_k], l3_q_subs[sub_k])
+            speedups["query_sub_workloads"] = query_sub_speedups
             tier_entry["speedup"] = speedups
+
             print(f"\nSpeedup Factors (PostgreSQL Latency / L3KVG Latency):")
             print(f"{'-'*45}")
             for wk in ["mkdir", "registration", "ils", "metadata", "query", "cleanup"]:
                 if wk in speedups:
                     print(f"  {wk:<20}: {speedups[wk]:.2f}x")
+            if "query_sub_workloads" in speedups:
+                for sub_k, sub_val in speedups["query_sub_workloads"].items():
+                    print(f"    - {sub_k:<18}: {sub_val:.2f}x")
             print(f"{'-'*45}")
 
         # Also expose tier at root for convenience
