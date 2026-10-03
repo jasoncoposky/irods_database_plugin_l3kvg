@@ -4,6 +4,7 @@
 #include "L3KVG/RemoteL3KVClient.hpp"
 #include "L3KVG/Node.hpp"
 #include "L3KVG/KeyBuilder.hpp"
+#include "L3KVG/MutationBatch.hpp"
 #include "irods/catalog/l3kvg_mapper.hpp"
 #include "irods/catalog/catalog_schemas.hpp"
 #include "irods/catalog/gq2_compiler.hpp"
@@ -747,35 +748,61 @@ namespace irods::catalog {
             if (!obj.version.empty()) buf.set_str(0, "v", obj.version);
             if (!obj.comments.empty()) buf.set_str(0, "c", obj.comments);
             if (!obj.status.empty()) buf.set_str(0, "st", obj.status);
-            client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
-            add_index(EntityType::DataObject, "n", obj.name, sid);
-            add_index(EntityType::DataObject, "id", std::to_string(obj.id), sid);
+            l3kvg::MutationBatch batch;
+            batch.put_node(sid, buf.move_to_string());
+
+            char id_hex[17];
+            std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
+
+            std::string idx_name = get_idx_key(EntityType::DataObject, "n", obj.name);
+            batch.put_raw(idx_name, id_hex);
+            batch.put_raw(idx_name + ":" + std::string(id_hex), id_hex);
+
+            std::string idx_id = get_idx_key(EntityType::DataObject, "id", std::to_string(obj.id));
+            batch.put_raw(idx_id, id_hex);
+
             if (!full_path.empty()) {
-                add_index(EntityType::DataObject, "path", full_path, sid);
+                std::string idx_path = get_idx_key(EntityType::DataObject, "path", full_path);
+                batch.put_raw(idx_path, id_hex);
             }
             
             snowflake_id_t cid = make_id(EntityType::Collection, obj.coll_id);
             #ifdef IRODS_SERVER
             rodsLog(LOG_NOTICE, "L3_CATALOG: Creating CONTAINS edge: %016llx -- CONTAINS --> %016llx", (unsigned long long)cid, (unsigned long long)sid);
             #endif
-            add_edge(cid, "CONTAINS", 1.0, sid);
+            batch.add_edge(cid, "CONTAINS", 1.0, sid, "{}");
 
             snowflake_id_t uid = resolve_user(obj.owner_name, obj.owner_zone);
             if (uid) {
                 #ifdef IRODS_SERVER
                 rodsLog(LOG_NOTICE, "L3_CATALOG: Creating OWNS edge: %016llx -- OWNS --> %016llx", (unsigned long long)uid, (unsigned long long)sid);
                 #endif
-                add_edge(uid, "OWNS", 1.0, sid);
+                batch.add_edge(uid, "OWNS", 1.0, sid, "{}");
+
+                // Owner access
+                std::string aid_uuid = std::to_string(uid) + ":" + std::to_string(sid);
+                snowflake_id_t aid = SnowflakeID::create(local_cluster_id_, aid_uuid);
+
+                lite3cpp::Buffer abuf; abuf.init_object();
+                abuf.set_str(0, "l", "own");
+                abuf.set_str(0, "t", "access_type");
+                abuf.set_str(0, "entity_type", "access");
+                abuf.set_str(0, "u", obj.owner_name);
+                std::string zone_str = obj.owner_zone.empty() ? local_zone_name_ : obj.owner_zone;
+                abuf.set_str(0, "z", zone_str);
+                abuf.set_i64(0, "uid", static_cast<int64_t>(uid));
+
+                batch.put_node(aid, abuf.move_to_string());
+                batch.add_edge(uid, "HAS_ACCESS", 1.0, aid, "{}");
+
+                auto members = client_->get_in_neighbors_async(local_cluster_id_, uid, "MEMBER_OF").get();
+                for (auto mid : members) {
+                    batch.add_edge(mid, "HAS_ACCESS", 1.0, aid, "{}");
+                }
+                batch.add_edge(aid, "FOR_OBJECT", 1.0, sid, "{}");
             }
-            
-            // Implicitly grant 'own' access to the creator
-            // Use full path if available for unique resolution
-            auto access_ret = set_access(obj.owner_name, obj.owner_zone, (full_path.empty() ? obj.name : full_path), "own", false);
-            if (!access_ret.ok()) {
-                #ifdef IRODS_SERVER
-                rodsLog(LOG_NOTICE, "L3_CATALOG: register_data_object failed to set owner access for [%s]: %s", obj.name.c_str(), access_ret.result().c_str());
-                #endif
-            }
+
+            client_->execute_batch_async(local_cluster_id_, batch).get();
 
             out_id = obj.id; return SUCCESS();
         }

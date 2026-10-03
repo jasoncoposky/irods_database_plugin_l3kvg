@@ -15,6 +15,8 @@
 #include <regex>
 #include "irods/catalog/binary_key.hpp"
 #include "buffer.hpp"
+#include "L3KVG/MutationBatch.hpp"
+#include "L3KVG/KeyBuilder.hpp"
 
 namespace irods::catalog::test {
 
@@ -141,6 +143,62 @@ namespace irods::catalog::test {
                                 std::cerr << "[MockServer] Deleted Generic Key [" << key << "]" << std::endl;
                             }
 
+                            socket_.send(msgs[0], zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
+                            continue;
+                        } else if (cmd == "B") {
+                            if (msgs.size() < 4) continue;
+                            const auto& payload_msg = msgs[3];
+                            lite3cpp::Buffer buf(std::vector<uint8_t>(
+                                static_cast<const uint8_t*>(payload_msg.data()),
+                                static_cast<const uint8_t*>(payload_msg.data()) + payload_msg.size()
+                            ));
+                            size_t count = l3kvg::MutationBatch::item_count(buf);
+                            std::lock_guard<std::mutex> lock(mu_);
+                            for (size_t i = 0; i < count; ++i) {
+                                auto item = l3kvg::MutationBatch::read_item(buf, i);
+                                switch (item.op) {
+                                    case l3kvg::MutationOp::PutNode: {
+                                        nodes_[item.src].id = item.src;
+                                        nodes_[item.src].payload = std::string(item.value);
+                                        std::cerr << "[MockServer] Batch Stored Node [" << std::hex << item.src << "]" << std::endl;
+                                        break;
+                                    }
+                                    case l3kvg::MutationOp::PutRaw: {
+                                        generic_store_[std::string(item.key)] = std::string(item.value);
+                                        std::cerr << "[MockServer] Batch Stored Generic Key [" << item.key << "] value=[" << item.value << "]" << std::endl;
+                                        break;
+                                    }
+                                    case l3kvg::MutationOp::AddEdge: {
+                                        nodes_[item.src].edges.push_back({std::string(item.label), item.dst});
+                                        std::string in_key = std::string(l3kvg::KeyBuilder::edge_in_key(item.dst, item.label, item.src));
+                                        generic_store_[in_key] = "{}";
+                                        std::string out_key = std::string(l3kvg::KeyBuilder::edge_out_key(item.src, item.label, item.weight, item.dst));
+                                        generic_store_[out_key] = "{}";
+                                        std::cerr << "[MockServer] Batch Stored Edge [" << std::hex << item.src << "] --(" << item.label << ")--> [" << std::hex << item.dst << "]" << std::endl;
+                                        break;
+                                    }
+                                    case l3kvg::MutationOp::DelNode: {
+                                        nodes_.erase(item.src);
+                                        break;
+                                    }
+                                    case l3kvg::MutationOp::DelRaw: {
+                                        generic_store_.erase(std::string(item.key));
+                                        break;
+                                    }
+                                    case l3kvg::MutationOp::DelEdge: {
+                                        auto it = nodes_.find(item.src);
+                                        if (it != nodes_.end()) {
+                                            auto& edges = it->second.edges;
+                                            edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const auto& e) {
+                                                return e.first == item.label && e.second == item.dst;
+                                            }), edges.end());
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
                             socket_.send(msgs[0], zmq::send_flags::sndmore);
                             socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
