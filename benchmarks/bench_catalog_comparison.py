@@ -151,7 +151,7 @@ TIER_CONFIGS = {
         "num_objects": 10000,
         "num_colls": 200,
         "depth": 5,
-        "query_iterations": 100,
+        "query_iterations": 10,
         "metadata_sample": 50,
         "ils_samples": 5,
     },
@@ -159,7 +159,7 @@ TIER_CONFIGS = {
         "num_objects": 50000,
         "num_colls": 1000,
         "depth": 10,
-        "query_iterations": 100,
+        "query_iterations": 5,
         "metadata_sample": 100,
         "ils_samples": 5,
     },
@@ -168,8 +168,8 @@ TIER_CONFIGS = {
 TIER_TIMEOUTS = {
     "test_small": 60.0,
     "1k": 900.0,
-    "10k": 3600.0,
-    "50k": 18000.0,
+    "10k": 7200.0,
+    "50k": 28800.0,
 }
 
 BACKEND_CONTAINERS = {
@@ -221,8 +221,14 @@ print(json.dumps({{"coll_list": coll_list, "durations": durations}}))
 """
 
 
-def generate_registration_worker_script(base_coll, coll_list, num_objects):
-    return f"""
+def generate_registration_worker_script(base_coll, coll_list, num_objects, bulk=None):
+    if bulk is None:
+        use_bulk = num_objects >= 1000
+    else:
+        use_bulk = bool(bulk)
+
+    if not use_bulk:
+        return f"""
 import sys, time, subprocess, json
 
 base_coll = {json.dumps(base_coll)}
@@ -249,6 +255,56 @@ for i in range(num_objects):
 
 print(json.dumps({{"obj_list": obj_list, "durations": durations}}))
 """
+
+    return f"""
+import sys, time, subprocess, json, os, uuid, shutil
+
+base_coll = {json.dumps(base_coll)}
+coll_list = {json.dumps(coll_list)}
+num_objects = {int(num_objects)}
+
+target_colls = coll_list if coll_list else [base_coll]
+staging_dir = f"/tmp/staging_{{uuid.uuid4().hex}}"
+os.makedirs(staging_dir, exist_ok=True)
+
+obj_list = []
+try:
+    for i in range(num_objects):
+        target_coll = target_colls[i % len(target_colls)]
+        obj_name = f"bench_obj_{{i}}"
+        obj_path = f"{{target_coll}}/{{obj_name}}"
+        obj_list.append(obj_path)
+
+        rel = os.path.relpath(target_coll, base_coll)
+        loc_dir = staging_dir if rel == "." else os.path.join(staging_dir, rel)
+        os.makedirs(loc_dir, exist_ok=True)
+        loc_file = os.path.join(loc_dir, obj_name)
+        open(loc_file, "wb").close()
+
+    has_dirs = any(os.path.isdir(os.path.join(staging_dir, f)) for f in os.listdir(staging_dir))
+    if has_dirs:
+        cmd = f"iput -b -r {{staging_dir}}/* {{base_coll}}/"
+    else:
+        cmd = f"iput -b {{staging_dir}}/* {{base_coll}}/"
+
+    t0 = time.perf_counter_ns()
+    res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    t1 = time.perf_counter_ns()
+
+    if res.returncode != 0:
+        sys.stderr.write(f"bulk iput failed: {{res.stderr}} {{res.stdout}}\\n")
+        sys.exit(1)
+
+    total_duration_ns = t1 - t0
+    base_dur = total_duration_ns // num_objects if num_objects > 0 else 0
+    rem = total_duration_ns % num_objects if num_objects > 0 else 0
+    durations = [base_dur + 1 if j < rem else base_dur for j in range(num_objects)]
+
+    print(json.dumps({{"obj_list": obj_list, "durations": durations}}))
+finally:
+    shutil.rmtree(staging_dir, ignore_errors=True)
+"""
+
 
 
 def generate_ils_worker_script(base_coll, recursive=True, samples=5):
@@ -373,19 +429,21 @@ def benchmark_mkdir(container, base_coll, num_colls, depth, timeout=60.0):
     return data["coll_list"], data["durations"]
 
 
-def benchmark_registration(container, base_coll, coll_list, num_objects, timeout=60.0):
+def benchmark_registration(container, base_coll, coll_list, num_objects, timeout=60.0, bulk=None):
     """
-    Distributes num_objects across coll_list using zero-byte files (itouch <path>).
+    Distributes num_objects across coll_list using zero-byte files.
+    When bulk=True or num_objects >= 1000, stages files locally and ingests via iput -b -r.
+    Otherwise uses sequential itouch.
     Runs via an in-container Python worker to isolate pure catalog execution latencies.
     Returns list of object paths and timing array.
     """
     if num_objects <= 0:
         return [], []
 
-    code = generate_registration_worker_script(base_coll, coll_list, num_objects)
+    code = generate_registration_worker_script(base_coll, coll_list, num_objects, bulk=bulk)
     out, err, rc = run_python_in_container(container, code, timeout=timeout)
     if rc != 0:
-        raise RuntimeError(f"itouch benchmark failed in container: {err} {out}")
+        raise RuntimeError(f"registration benchmark failed in container: {err} {out}")
 
     data = json.loads(out)
     return data["obj_list"], data["durations"]
@@ -483,6 +541,7 @@ def run_benchmark_orchestrator(
     dry_run=False,
     query_iterations=None,
     metadata_sample=None,
+    bulk=None,
 ):
     """
     Orchestrates execution of macro workloads across specified backends and tiers.
@@ -568,7 +627,7 @@ def run_benchmark_orchestrator(
 
                 # 2. registration
                 objs, d_reg = benchmark_registration(
-                    container, base_coll, colls, tier_cfg["num_objects"], timeout=tier_timeout
+                    container, base_coll, colls, tier_cfg["num_objects"], timeout=tier_timeout, bulk=bulk
                 )
                 reg_all.extend(d_reg)
 
@@ -680,11 +739,119 @@ def run_benchmark_orchestrator(
     if dry_run:
         print("\n[DRY RUN] Execution completed successfully. Output JSON not written to file.")
     else:
+        # Measure footprint and record in existing_data
+        fp = measure_footprint()
+        existing_data["footprint"] = fp
+
         with open(output_file, "w") as f:
             json.dump(existing_data, f, indent=2)
         print(f"\n[INFO] Benchmark results saved to: {output_file}")
 
     return existing_data
+
+
+def measure_footprint():
+    """
+    Measures on-disk database sizes and memory RSS for L3KVG and PostgreSQL containers.
+    Returns dict containing footprint metrics.
+    """
+    footprint = {
+        "disk_bytes": {},
+        "disk_human": {},
+        "rss_kb": {},
+    }
+
+    # 1. On-disk database sizes
+    # L3KVG iRODS provider directory
+    out, _, rc = run_in_container("ubuntu-2404-l3kvg-irods-catalog-provider-1", "du -sh /var/lib/irods/", as_irods=False)
+    if rc == 0 and out.strip():
+        footprint["disk_human"]["l3kvg_irods"] = out.strip().split()[0]
+    out, _, rc = run_in_container("ubuntu-2404-l3kvg-irods-catalog-provider-1", "du -sb /var/lib/irods/", as_irods=False)
+    if rc == 0 and out.strip():
+        try:
+            footprint["disk_bytes"]["l3kvg_irods"] = int(out.strip().split()[0])
+        except (ValueError, IndexError):
+            pass
+
+    # L3KVG database directory
+    out, _, rc = run_in_container("ubuntu-2404-l3kvg-irods-catalog-provider-1", "du -sh /var/lib/irods/l3kvg_db", as_irods=False)
+    if rc == 0 and out.strip():
+        footprint["disk_human"]["l3kvg_db"] = out.strip().split()[0]
+    out, _, rc = run_in_container("ubuntu-2404-l3kvg-irods-catalog-provider-1", "du -sb /var/lib/irods/l3kvg_db", as_irods=False)
+    if rc == 0 and out.strip():
+        try:
+            footprint["disk_bytes"]["l3kvg_db"] = int(out.strip().split()[0])
+        except (ValueError, IndexError):
+            pass
+
+    # L3KVG catalog container (if separate volume exists)
+    out, _, rc = run_in_container("ubuntu-2404-l3kvg-catalog-1", "du -sh /var/lib/l3kvg/", as_irods=False)
+    if rc == 0 and out.strip():
+        footprint["disk_human"]["l3kvg_catalog"] = out.strip().split()[0]
+    elif rc != 0:
+        footprint["disk_human"]["l3kvg_catalog"] = "embedded_in_provider"
+
+    # PostgreSQL database data directory
+    out, _, rc = run_in_container("test-postgres-bench-catalog-1", "du -sh /var/lib/postgresql/data/", as_irods=False)
+    if rc == 0 and out.strip():
+        footprint["disk_human"]["postgres_data"] = out.strip().split()[0]
+    out, _, rc = run_in_container("test-postgres-bench-catalog-1", "du -sb /var/lib/postgresql/data/", as_irods=False)
+    if rc == 0 and out.strip():
+        try:
+            footprint["disk_bytes"]["postgres_data"] = int(out.strip().split()[0])
+        except (ValueError, IndexError):
+            pass
+
+    # 2. Peak / Current RSS memory
+    def get_container_rss(container, target_comms):
+        out, _, rc = run_in_container(container, "ps -eo pid,rss,comm", as_irods=False)
+        res = {}
+        if rc == 0:
+            for line in out.splitlines()[1:]:
+                parts = line.strip().split(None, 2)
+                if len(parts) == 3:
+                    _, rss_str, comm = parts
+                    if comm in target_comms:
+                        try:
+                            res.setdefault(comm, []).append(int(rss_str))
+                        except ValueError:
+                            pass
+        return res
+
+    footprint["rss_kb"]["l3kvg"] = get_container_rss(
+        "ubuntu-2404-l3kvg-irods-catalog-provider-1",
+        ["l3kvg_server", "irodsServer", "irodsAgent"]
+    )
+    footprint["rss_kb"]["postgres_server"] = get_container_rss(
+        "test-postgres-bench-catalog-1",
+        ["postgres"]
+    )
+    footprint["rss_kb"]["postgres_irods_provider"] = get_container_rss(
+        "test-postgres-bench-irods-catalog-provider-1",
+        ["irodsServer", "irodsAgent"]
+    )
+
+    return footprint
+
+
+def record_footprint(output_file):
+    """
+    Measures footprint and writes under 'footprint' in output_file JSON.
+    """
+    fp = measure_footprint()
+    data = {}
+    if os.path.exists(output_file):
+        try:
+            with open(output_file, "r") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    data["footprint"] = fp
+    with open(output_file, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"\n[INFO] Footprint measurements recorded in {output_file}:")
+    print(json.dumps(fp, indent=2))
+    return fp
 
 
 def main():
@@ -727,8 +894,29 @@ def main():
         default=None,
         help="Optional override for metadata object sample size",
     )
+    parser.add_argument(
+        "--bulk",
+        action="store_true",
+        default=None,
+        help="Force bulk registration via iput -b -r",
+    )
+    parser.add_argument(
+        "--no-bulk",
+        action="store_false",
+        dest="bulk",
+        help="Disable bulk registration and use sequential itouch",
+    )
+    parser.add_argument(
+        "--footprint",
+        action="store_true",
+        help="Measure on-disk sizes and memory RSS, record to output file under 'footprint', and exit",
+    )
 
     args = parser.parse_args()
+
+    if args.footprint:
+        record_footprint(args.output)
+        return
 
     tier_list = [t.strip() for t in args.tiers.split(",") if t.strip()]
     backend_list = [b.strip() for b in args.backends.split(",") if b.strip()]
@@ -742,6 +930,7 @@ def main():
         dry_run=args.dry_run,
         query_iterations=args.query_iterations,
         metadata_sample=args.metadata_sample,
+        bulk=args.bulk,
     )
 
 

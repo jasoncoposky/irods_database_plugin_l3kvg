@@ -706,12 +706,21 @@ namespace irods::catalog::bridge {
                         best_start_priority = 1;
                     }
                 }
-            } else if (std::regex_match(cond, match, eq_or_like_regex) || std::regex_match(cond, match, like_or_eq_regex)) {
+            } else if (std::regex_match(cond, match, eq_or_like_regex) || std::regex_match(cond, match, like_or_eq_regex) ||
+                       (inx == COL_COLL_NAME && std::regex_match(cond, match, like_regex))) {
                 std::string target_coll;
                 if (std::regex_match(cond, match, eq_or_like_regex)) {
                     target_coll = unescape_sql_literal(match[1].str());
-                } else {
+                } else if (std::regex_match(cond, match, like_or_eq_regex)) {
                     target_coll = unescape_sql_literal(match[2].str());
+                } else if (std::regex_match(cond, match, like_regex)) {
+                    target_coll = extract_literal(match);
+                    while (!target_coll.empty() && target_coll.back() == '%') {
+                        target_coll.pop_back();
+                    }
+                    while (target_coll.size() > 1 && target_coll.back() == '/') {
+                        target_coll.pop_back();
+                    }
                 }
                 if (inx == COL_COLL_NAME && _catalog != nullptr && best_start_priority < 3) {
                     snowflake_id_t sid = 0; EntityType type;
@@ -720,21 +729,13 @@ namespace irods::catalog::bridge {
                         _catalog->get_collection_subtree_ids(sid, coll_ids);
                         if (!coll_ids.empty()) {
                             if (likely_root == "DataObject") {
-                                std::vector<snowflake_id_t> data_ids;
-                                for (auto cid : coll_ids) {
-                                    auto children = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), cid, "CONTAINS", 0.0).get();
-                                    data_ids.insert(data_ids.end(), children.begin(), children.end());
-                                }
-                                _starting_nodes = std::move(data_ids);
-                                if (_starting_nodes.empty()) {
-                                    _starting_nodes.push_back(0xFFFFFFFFFFFFFFFFULL);
-                                }
-                            } else {
-                                _starting_nodes = std::move(coll_ids);
+                                likely_root = "Collection";
+                                ast.from_entity = "Collection";
                             }
+                            _starting_nodes = std::move(coll_ids);
                             resolved_start = true;
                             best_start_priority = 3;
-                            rodsLog(LOG_NOTICE, "L3_BRIDGE: eq_or_like resolved %zu starting nodes for '%s'", _starting_nodes.size(), target_coll.c_str());
+                            rodsLog(LOG_NOTICE, "L3_BRIDGE: eq_or_like resolved %zu collection starting nodes for '%s'", _starting_nodes.size(), target_coll.c_str());
                         }
                     }
                 }

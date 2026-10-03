@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 import subprocess
 import os
 import sys
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -23,6 +24,8 @@ from bench_catalog_comparison import (
     benchmark_query,
     cleanup_benchmark_data,
     run_benchmark_orchestrator,
+    measure_footprint,
+    record_footprint,
     BENCHMARK_SCHEMA_KEYS,
     TIER_CONFIGS,
     TIER_TIMEOUTS,
@@ -401,6 +404,79 @@ class TestBenchHarness(unittest.TestCase):
         for expected_key in ["mkdir", "registration", "ils", "metadata", "query", "cleanup"]:
             self.assertIn(expected_key, l3_metrics)
             self.assertTrue(set(BENCHMARK_SCHEMA_KEYS).issubset(l3_metrics[expected_key].keys()))
+
+    def test_bulk_registration_script_generation(self):
+        # Scale tier default (>= 1000 objects)
+        bulk_code = generate_registration_worker_script("/tempZone/home/rods/base", ["/c0"], num_objects=1000)
+        self.assertIn("iput -b -r", bulk_code)
+        self.assertIn("staging", bulk_code)
+        self.assertIn("shutil.rmtree", bulk_code)
+        self.assertNotIn("itouch", bulk_code)
+
+    def test_explicit_bulk_options(self):
+        # Force bulk for small objects
+        forced_bulk = generate_registration_worker_script("/tempZone/home/rods/base", ["/c0"], num_objects=5, bulk=True)
+        self.assertIn("iput -b -r", forced_bulk)
+        self.assertIn("staging", forced_bulk)
+
+        # Force sequential for large objects
+        forced_seq = generate_registration_worker_script("/tempZone/home/rods/base", ["/c0"], num_objects=2000, bulk=False)
+        self.assertIn("itouch", forced_seq)
+        self.assertNotIn("iput -b -r", forced_seq)
+
+    @patch("bench_catalog_comparison.run_in_container")
+    def test_measure_footprint(self, mock_run):
+        def fake_run(container, cmd, as_irods=True):
+            if "du -sh /var/lib/irods/l3kvg_db" in cmd:
+                return ("5.0G\t/var/lib/irods/l3kvg_db", "", 0)
+            if "du -sb /var/lib/irods/l3kvg_db" in cmd:
+                return ("5000000000\t/var/lib/irods/l3kvg_db", "", 0)
+            if "du -sh /var/lib/irods/" in cmd:
+                return ("5.8G\t/var/lib/irods/", "", 0)
+            if "du -sb /var/lib/irods/" in cmd:
+                return ("6000000000\t/var/lib/irods/", "", 0)
+            if "du -sh /var/lib/postgresql/data/" in cmd:
+                return ("65M\t/var/lib/postgresql/data/", "", 0)
+            if "du -sb /var/lib/postgresql/data/" in cmd:
+                return ("68000000\t/var/lib/postgresql/data/", "", 0)
+            if "ps -eo pid,rss,comm" in cmd:
+                if "l3kvg" in container:
+                    return ("  PID   RSS COMMAND\n 100 200000 l3kvg_server\n 200 30000 irodsServer\n 300 90000 irodsAgent\n", "", 0)
+                elif "catalog-1" in container:
+                    return ("  PID   RSS COMMAND\n 1 25000 postgres\n 2 10000 postgres\n", "", 0)
+                else:
+                    return ("  PID   RSS COMMAND\n 10 35000 irodsServer\n 20 90000 irodsAgent\n", "", 0)
+            return ("", "not found", 1)
+
+        mock_run.side_effect = fake_run
+        fp = measure_footprint()
+        self.assertIn("disk_human", fp)
+        self.assertIn("disk_bytes", fp)
+        self.assertIn("rss_kb", fp)
+        self.assertEqual(fp["disk_human"]["l3kvg_irods"], "5.8G")
+        self.assertEqual(fp["disk_human"]["l3kvg_db"], "5.0G")
+        self.assertEqual(fp["disk_human"]["postgres_data"], "65M")
+        self.assertEqual(fp["disk_bytes"]["l3kvg_irods"], 6000000000)
+        self.assertIn("l3kvg", fp["rss_kb"])
+        self.assertEqual(fp["rss_kb"]["l3kvg"]["l3kvg_server"], [200000])
+
+    @patch("bench_catalog_comparison.measure_footprint")
+    def test_record_footprint(self, mock_mf):
+        import tempfile
+        mock_mf.return_value = {"disk_human": {"test": "100M"}}
+        with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".json") as tmp:
+            tmp.write('{"tiers": {}}')
+            tmp_path = tmp.name
+
+        try:
+            record_footprint(tmp_path)
+            with open(tmp_path, "r") as f:
+                data = json.load(f)
+            self.assertIn("footprint", data)
+            self.assertEqual(data["footprint"]["disk_human"]["test"], "100M")
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
 
 if __name__ == '__main__':
