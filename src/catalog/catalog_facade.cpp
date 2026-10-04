@@ -375,6 +375,16 @@ namespace irods::catalog {
              if (type == EntityType::DataObject && attr == "n") {
                  std::string multi_idx_key = idx_key + ":" + std::string(id_hex);
                  client_->put_edge_async(local_cluster_id_, multi_idx_key, id_hex).get();
+                 if (value.size() >= 3) {
+                     std::unordered_set<std::string> seen_trigrams;
+                     for (size_t i = 0; i + 3 <= value.size(); ++i) {
+                         std::string tri(value.substr(i, 3));
+                         if (seen_trigrams.insert(tri).second) {
+                             std::string tri_key = "idx:DataObject:tri:" + tri + ":" + std::string(id_hex);
+                             client_->put_edge_async(local_cluster_id_, tri_key, id_hex).get();
+                         }
+                     }
+                 }
              }
         }
 
@@ -389,6 +399,16 @@ namespace irods::catalog {
                  char id_hex[17];
                  std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)target_id);
                  client_->del_edge_async(local_cluster_id_, idx_key + ":" + std::string(id_hex)).get();
+                 if (value.size() >= 3) {
+                     std::unordered_set<std::string> seen_trigrams;
+                     for (size_t i = 0; i + 3 <= value.size(); ++i) {
+                         std::string tri(value.substr(i, 3));
+                         if (seen_trigrams.insert(tri).second) {
+                             std::string tri_key = "idx:DataObject:tri:" + tri + ":" + std::string(id_hex);
+                             client_->del_edge_async(local_cluster_id_, tri_key).get();
+                         }
+                     }
+                 }
              }
         }
 
@@ -757,6 +777,16 @@ namespace irods::catalog {
             std::string idx_name = get_idx_key(EntityType::DataObject, "n", obj.name);
             batch.put_raw(idx_name, id_hex);
             batch.put_raw(idx_name + ":" + std::string(id_hex), id_hex);
+            if (obj.name.size() >= 3) {
+                std::unordered_set<std::string> seen_trigrams;
+                for (size_t i = 0; i + 3 <= obj.name.size(); ++i) {
+                    std::string tri(obj.name.substr(i, 3));
+                    if (seen_trigrams.insert(tri).second) {
+                        std::string tri_key = "idx:DataObject:tri:" + tri + ":" + std::string(id_hex);
+                        batch.put_raw(tri_key, id_hex);
+                    }
+                }
+            }
 
             std::string idx_id = get_idx_key(EntityType::DataObject, "id", std::to_string(obj.id));
             batch.put_raw(idx_id, id_hex);
