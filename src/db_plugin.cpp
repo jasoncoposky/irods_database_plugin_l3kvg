@@ -267,11 +267,24 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
             return ERROR(CAT_UNKNOWN_COLLECTION, "parent collection unknown");
         }
 
+        static std::mutex s_cid_cache_mu;
+        static std::unordered_map<irods::catalog::snowflake_id_t, uint64_t> s_cid_cache;
         if (obj.coll_id == 0) {
-            auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), parent_sid).get();
-            if (!payload.empty()) {
-                lite3cpp::Buffer buf(payload);
-                obj.coll_id = buf.get_i64(0, "id");
+            {
+                std::lock_guard<std::mutex> lock(s_cid_cache_mu);
+                auto it = s_cid_cache.find(parent_sid);
+                if (it != s_cid_cache.end()) {
+                    obj.coll_id = it->second;
+                }
+            }
+            if (obj.coll_id == 0) {
+                auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), parent_sid).get();
+                if (!payload.empty()) {
+                    lite3cpp::Buffer buf(payload);
+                    obj.coll_id = buf.get_i64(0, "id");
+                    std::lock_guard<std::mutex> lock(s_cid_cache_mu);
+                    s_cid_cache[parent_sid] = obj.coll_id;
+                }
             }
         }
         _info->collId = obj.coll_id;
@@ -594,7 +607,7 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
         if (!_dst) return ERROR(SYS_INVALID_INPUT_PARAM, "null dataObjInfo_t (dst)");
 
         uint64_t data_id = _dst->dataId > 0 ? (uint64_t)_dst->dataId : (_src ? (uint64_t)_src->dataId : 0);
-        uint32_t next_rn = g_catalog->get_next_replica_number(data_id);
+        uint32_t next_rn = (_dst->replNum >= 0 && _dst->dataId == 0) ? (uint32_t)_dst->replNum : g_catalog->get_next_replica_number(data_id);
         _dst->replNum = next_rn;
         if (_dst->dataId == 0 && data_id > 0) {
             _dst->dataId = data_id;
@@ -625,15 +638,30 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
             rstrcpy(_dst->rescHier, _dst->rescName, MAX_NAME_LEN);
         }
 
+        static std::mutex s_rid_cache_mu;
+        static std::unordered_map<std::string, uint64_t> s_rid_cache;
         uint64_t resc_id = (uint64_t)_dst->rescId;
         if (resc_id == 0 && _dst->rescName[0] != '\0') {
-            irods::catalog::snowflake_id_t rsid;
-            if (g_catalog->resolve_resource_name(_dst->rescName, rsid).ok()) {
-                auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
-                if (!payload.empty()) {
-                    lite3cpp::Buffer buf(payload);
-                    resc_id = buf.get_i64(0, "id");
+            std::string rname(_dst->rescName);
+            {
+                std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+                auto it = s_rid_cache.find(rname);
+                if (it != s_rid_cache.end()) {
+                    resc_id = it->second;
                     _dst->rescId = resc_id;
+                }
+            }
+            if (resc_id == 0) {
+                irods::catalog::snowflake_id_t rsid;
+                if (g_catalog->resolve_resource_name(_dst->rescName, rsid).ok()) {
+                    auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
+                    if (!payload.empty()) {
+                        lite3cpp::Buffer buf(payload);
+                        resc_id = buf.get_i64(0, "id");
+                        _dst->rescId = resc_id;
+                        std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+                        s_rid_cache[rname] = resc_id;
+                    }
                 }
             }
         }
@@ -678,7 +706,7 @@ irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _in
             }
         }
 
-        if (adminMode == 0 && _ctx.comm()) {
+        if (adminMode == 0 && _ctx.comm() && !irods::is_privileged_client(*_ctx.comm())) {
             std::string user_name = safe_string(_ctx.comm()->clientUser.userName);
             irods::catalog::snowflake_id_t usid = 0;
             if (!user_name.empty()) {
@@ -2247,6 +2275,9 @@ irods::error db_mod_access_control_op(irods::plugin_context& _ctx, int _recursiv
 irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context& _ctx, rodsLong_t _data_id) {
     try {
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_permission_to_modify_data_object_op id [%ld]", _data_id);
+        if (_ctx.comm() && irods::is_privileged_client(*_ctx.comm())) {
+            return SUCCESS();
+        }
         bool allowed = false;
         
         std::string user_name;

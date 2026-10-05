@@ -1094,18 +1094,14 @@ namespace irods::catalog {
             buf.set_i64(0, "rid", repl.resource_id);
             buf.set_str(0, "mt", repl.modify_ts);
             buf.set_i64(0, "s", repl.size);
-            client_->put_node_async(local_cluster_id_, rid, buf.move_to_string()).get();
-            
+            l3kvg::MutationBatch batch;
+            batch.put_node(rid, buf.move_to_string());
             snowflake_id_t data_sid = make_id(EntityType::DataObject, repl.data_id);
             snowflake_id_t resc_sid = make_id(EntityType::Resource, repl.resource_id);
-            #ifdef IRODS_SERVER
-            rodsLog(LOG_DEBUG, "L3_CATALOG: Creating HAS_REPLICA edge: %016llx -- HAS_REPLICA --> %016llx", (unsigned long long)data_sid, (unsigned long long)rid);
-            #endif
-            add_edge(data_sid, "HAS_REPLICA", 1.0, rid);
-            #ifdef IRODS_SERVER
-            rodsLog(LOG_DEBUG, "L3_CATALOG: Creating STAYING_AT edge: %016llx -- STAYING_AT --> %016llx", (unsigned long long)rid, (unsigned long long)resc_sid);
-            #endif
-            add_edge(rid, "STAYING_AT", 1.0, resc_sid);
+            batch.add_edge(data_sid, "HAS_REPLICA", 1.0, rid, "{}");
+            batch.add_edge(rid, "STAYING_AT", 1.0, resc_sid, "{}");
+            batch.add_edge(resc_sid, "HOSTS_REPLICA", 1.0, rid, "{}");
+            client_->execute_batch_async(local_cluster_id_, batch).get();
             
             return SUCCESS();
         }
