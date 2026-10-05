@@ -3739,17 +3739,17 @@ namespace irods::catalog {
                 }
 
             #ifdef IRODS_SERVER
-            rodsLog(LOG_NOTICE, "L3_CATALOG: Executing Query with root_type [%s] and [%zu] starting nodes (query buffer size: %zu bytes)", effective_root_type.c_str(), sn.size(), query_buf.size());
+            rodsLog(LOG_DEBUG, "L3_CATALOG: Executing Query with root_type [%s] and [%zu] starting nodes (query buffer size: %zu bytes)", effective_root_type.c_str(), sn.size(), query_buf.size());
             #endif
 
                 auto fut = client_->resume_query_async(local_cluster_id_, sn, query_buf);
                 results.rows = fut.get();
 
             #ifdef IRODS_SERVER
-            rodsLog(LOG_NOTICE, "L3_CATALOG: Query returned %zu rows", results.rows.size());
+            rodsLog(LOG_DEBUG, "L3_CATALOG: Query returned %zu rows", results.rows.size());
             for (size_t r = 0; r < std::min(results.rows.size(), size_t(5)); ++r) {
                 for (const auto& [k, v] : results.rows[r].fields) {
-                    rodsLog(LOG_NOTICE, "L3_CATALOG: Result Row %zu: [%s]=[%s]", r, k.c_str(), v.c_str());
+                    rodsLog(LOG_DEBUG, "L3_CATALOG: Result Row %zu: [%s]=[%s]", r, k.c_str(), v.c_str());
                 }
             }
             #endif

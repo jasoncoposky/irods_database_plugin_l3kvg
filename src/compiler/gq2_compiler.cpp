@@ -730,14 +730,14 @@ namespace irods::catalog::compiler {
     }
 
     lite3cpp::Buffer Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias, const irods::experimental::genquery2::options* opts) {
-        rodsLog(LOG_NOTICE, "L3_COMPILER: Entering compile()");
+        rodsLog(LOG_DEBUG, "L3_COMPILER: Entering compile()");
 
         if (!override_root_alias.empty()) {
             entry_node_type_ = override_root_alias;
-            rodsLog(LOG_NOTICE, "L3_COMPILER: Using override root alias: %s", entry_node_type_.c_str());
+            rodsLog(LOG_DEBUG, "L3_COMPILER: Using override root alias: %s", entry_node_type_.c_str());
         } else if (!ast.from_entity.empty()) {
             entry_node_type_ = normalize_entity_type(ast.from_entity);
-            rodsLog(LOG_NOTICE, "L3_COMPILER: Using ast.from_entity root alias: %s", entry_node_type_.c_str());
+            rodsLog(LOG_DEBUG, "L3_COMPILER: Using ast.from_entity root alias: %s", entry_node_type_.c_str());
         } else {
             struct anchor_visitor : public boost::static_visitor<void> {
                  Gq2ToL3kvgCompiler* compiler;
@@ -822,11 +822,11 @@ namespace irods::catalog::compiler {
                 }
                 if (entry_node_type_.empty()) {
                     entry_node_type_ = "DataObject";
-                    rodsLog(LOG_NOTICE, "L3_COMPILER: Using default root alias: DataObject");
+                    rodsLog(LOG_DEBUG, "L3_COMPILER: Using default root alias: DataObject");
                 }
             }
         }
-        rodsLog(LOG_NOTICE, "L3_COMPILER: Final root alias: %s", entry_node_type_.c_str());
+        rodsLog(LOG_DEBUG, "L3_COMPILER: Final root alias: %s", entry_node_type_.c_str());
 
         lite3cpp::Buffer qbuf;
         qbuf.init_object();
@@ -975,7 +975,7 @@ namespace irods::catalog::compiler {
         for (const auto& target_view : target_node_types_) {
             std::string target(target_view);
             if (visited.count(target)) continue;
-            rodsLog(LOG_NOTICE, "L3_COMPILER: Finding path from %s to %s", entry_node_type_.c_str(), target.c_str());
+            rodsLog(LOG_DEBUG, "L3_COMPILER: Finding path from %s to %s", entry_node_type_.c_str(), target.c_str());
             auto path = find_path(entry_node_type_, target);
             
             std::string current_source = entry_node_type_;
@@ -1002,7 +1002,7 @@ namespace irods::catalog::compiler {
             }
         }
 
-        rodsLog(LOG_NOTICE, "L3_COMPILER: Compilation complete.");
+        rodsLog(LOG_DEBUG, "L3_COMPILER: Compilation complete.");
         if (!ast.range.number_of_rows.empty()) qbuf.set_i64(0, "limit", std::stoll(ast.range.number_of_rows));
         if (!ast.range.offset.empty()) qbuf.set_i64(0, "offset", std::stoll(ast.range.offset));
         qbuf.set_bool(0, "distinct", ast.distinct);

@@ -28,6 +28,11 @@ namespace irods::catalog {
             return it->second;
         }
         std::string_view get_field(size_t row, size_t col_idx) const {
+            if (row < rows.size()) {
+                if (col_idx < rows[row].projected_values.size()) {
+                    return rows[row].projected_values[col_idx];
+                }
+            }
             if (col_idx < 64) {
                 static const std::string idx_keys[] = {
                     "idx_0", "idx_1", "idx_2", "idx_3", "idx_4", "idx_5", "idx_6", "idx_7",

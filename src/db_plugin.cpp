@@ -1674,7 +1674,7 @@ irods::error db_del_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
 
 irods::error db_check_auth_op(irods::plugin_context& _ctx, const char* _scheme, const char* _challenge, const char* _response, const char* _user_name, int* _user_priv_level, int* _client_priv_level) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_check_auth_op user [%s]", safe_string(_user_name).c_str());
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_auth_op user [%s]", safe_string(_user_name).c_str());
         if (!_challenge || !_response || !_user_name || !_user_priv_level || !_client_priv_level) {
             return ERROR(CAT_INVALID_ARGUMENT, "null parameter in db_check_auth_op");
         }
@@ -1763,7 +1763,7 @@ irods::error db_check_auth_op(irods::plugin_context& _ctx, const char* _scheme, 
         }
         *_client_priv_level = *_user_priv_level;
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_check_auth_op SUCCESS (priv=%d)", *_user_priv_level);
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_auth_op SUCCESS (priv=%d)", *_user_priv_level);
         return SUCCESS();
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_check_auth_op EXCEPTION: %s", e.what());
@@ -2036,14 +2036,14 @@ static irods::error check_avu_access(
 
 irods::error db_add_avu_metadata_op(irods::plugin_context& _ctx, const char* _type, const char* _target_id, const char* _attr, const char* _val, const char* _units, const KeyValPair* _cond_input) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_add_avu_metadata_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_add_avu_metadata_op");
         irods::catalog::snowflake_id_t target_sid = 0;
         auto access_ret = check_avu_access(_ctx, _type, _target_id, "write", _cond_input, target_sid);
         if (!access_ret.ok()) {
             return access_ret;
         }
         auto ret = g_catalog->add_avu_metadata(safe_string(_type), safe_string(_target_id), {safe_string(_attr), safe_string(_val), safe_string(_units)});
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_add_avu_metadata_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_add_avu_metadata_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_add_avu_metadata_op EXCEPTION: %s", e.what());
@@ -2068,14 +2068,14 @@ static int check_mod_arg_type(const char* arg) {
 
 irods::error db_del_avu_metadata_op(irods::plugin_context& _ctx, int _option, const char* _type, const char* _target_id, const char* _attr, const char* _val, const char* _units, int _nocommit, const KeyValPair* _cond_input) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_avu_metadata_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_avu_metadata_op");
         irods::catalog::snowflake_id_t target_sid = 0;
         auto access_ret = check_avu_access(_ctx, _type, _target_id, "write", _cond_input, target_sid);
         if (!access_ret.ok()) {
             return access_ret;
         }
         auto ret = g_catalog->delete_avu_metadata(safe_string(_type), safe_string(_target_id), {safe_string(_attr), safe_string(_val), safe_string(_units)}, _option);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_avu_metadata_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_avu_metadata_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_avu_metadata_op EXCEPTION: %s", e.what());
@@ -2096,7 +2096,7 @@ irods::error db_mod_avu_metadata_op(
     const KeyValPair* _cond_input)
 {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_avu_metadata_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_avu_metadata_op");
 
         if (!_type || !_name || !_attribute || !_value) {
             return ERROR(CAT_INVALID_ARGUMENT, "Null parameter in db_mod_avu_metadata_op");
@@ -2175,7 +2175,7 @@ irods::error db_mod_avu_metadata_op(
             {safe_string(_attribute), safe_string(_value), safe_string(myUnits)},
             {safe_string(addAttr), safe_string(addValue), safe_string(addUnits)});
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_avu_metadata_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_avu_metadata_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_avu_metadata_op EXCEPTION: %s", e.what());
@@ -2192,7 +2192,7 @@ irods::error db_copy_avu_metadata_op(
     const KeyValPair* _cond_input)
 {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_copy_avu_metadata_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_copy_avu_metadata_op");
         if (!_type1 || !_type2 || !_name1 || !_name2) {
             return ERROR(CAT_INVALID_ARGUMENT, "null parameter in db_copy_avu_metadata_op");
         }
@@ -2207,7 +2207,7 @@ irods::error db_copy_avu_metadata_op(
             return ret2;
         }
         auto ret = g_catalog->copy_avu_metadata(safe_string(_type1), safe_string(_name1), safe_string(_type2), safe_string(_name2));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_copy_avu_metadata_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_copy_avu_metadata_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_copy_avu_metadata_op EXCEPTION: %s", e.what());
@@ -2217,14 +2217,14 @@ irods::error db_copy_avu_metadata_op(
 
 irods::error db_set_avu_metadata_op(irods::plugin_context& _ctx, const char* _type, const char* _target_id, const char* _attr, const char* _val, const char* _units, const KeyValPair* _cond_input) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_set_avu_metadata_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_set_avu_metadata_op");
         irods::catalog::snowflake_id_t target_sid = 0;
         auto access_ret = check_avu_access(_ctx, _type, _target_id, "write", _cond_input, target_sid);
         if (!access_ret.ok()) {
             return access_ret;
         }
         auto ret = g_catalog->set_avu_metadata(safe_string(_type), safe_string(_target_id), {safe_string(_attr), safe_string(_val), safe_string(_units)});
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_set_avu_metadata_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_set_avu_metadata_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_set_avu_metadata_op EXCEPTION: %s", e.what());
@@ -2246,7 +2246,7 @@ irods::error db_mod_access_control_op(irods::plugin_context& _ctx, int _recursiv
 
 irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context& _ctx, rodsLong_t _data_id) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_check_permission_to_modify_data_object_op id [%ld]", _data_id);
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_permission_to_modify_data_object_op id [%ld]", _data_id);
         bool allowed = false;
         
         std::string user_name;
@@ -2273,7 +2273,7 @@ irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context&
             }
         }
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_check_permission_to_modify_data_object_op id [%ld] allowed [%d]", _data_id, allowed);
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_permission_to_modify_data_object_op id [%ld] allowed [%d]", _data_id, allowed);
         if (allowed) return SUCCESS();
         rodsLog(LOG_ERROR, "L3_PLUGIN: Access Denied for user [%s] on object [%ld]", user_name.c_str(), _data_id);
         return ERROR(CAT_NO_ACCESS_PERMISSION, "User does not have permission to modify data object");
@@ -2296,7 +2296,7 @@ irods::error db_update_ticket_write_byte_count_op(irods::plugin_context& _ctx, r
 irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char* _path) {
     try {
         std::string json_str = safe_string(_path);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_data_object_finalize_op [%s]", json_str.c_str());
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_data_object_finalize_op [%s]", json_str.c_str());
         
         if (json_str.empty()) return SUCCESS();
 
@@ -2386,7 +2386,7 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
             }
         }
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_data_object_finalize_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_data_object_finalize_op SUCCESS");
         return SUCCESS();
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_data_object_finalize_op EXCEPTION: %s", e.what());
@@ -2421,17 +2421,17 @@ irods::error db_get_delay_rule_info_op(irods::plugin_context& _ctx, const char* 
 }
 
 irods::error db_delay_rule_lock_op(irods::plugin_context& _ctx, const char* _rule_id, const char* _lock_host, int _lock_host_pid) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_delay_rule_lock_op rule [%s] host [%s] pid [%d]", safe_string(_rule_id).c_str(), safe_string(_lock_host).c_str(), _lock_host_pid);
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_delay_rule_lock_op rule [%s] host [%s] pid [%d]", safe_string(_rule_id).c_str(), safe_string(_lock_host).c_str(), _lock_host_pid);
     if (!_rule_id || !_lock_host) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "null pointers");
     uint64_t id = 0;
     try { id = std::stoull(_rule_id); } catch (...) { return ERROR(SYS_INVALID_INPUT_PARAM, "invalid rule id"); }
     auto ret = g_catalog->lock_rule_execution(id, safe_string(_lock_host), _lock_host_pid);
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_delay_rule_lock_op ret=%d", ret.code());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_delay_rule_lock_op ret=%d", ret.code());
     return ret;
 }
 
 irods::error db_delay_rule_unlock_op(irods::plugin_context& _ctx, const char* _rule_ids) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_delay_rule_unlock_op [%s]", safe_string(_rule_ids).c_str());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_delay_rule_unlock_op [%s]", safe_string(_rule_ids).c_str());
     if (!_rule_ids) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "null pointers");
     try {
         auto j = lite3cpp::lite3_json::from_json_string(_rule_ids);
@@ -2451,7 +2451,7 @@ irods::error db_delay_rule_unlock_op(irods::plugin_context& _ctx, const char* _r
             }
         }
     } catch (...) {}
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_delay_rule_unlock_op SUCCESS");
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_delay_rule_unlock_op SUCCESS");
     return SUCCESS();
 }
 
@@ -2890,7 +2890,7 @@ irods::error db_gen_query_access_control_setup_op(
 
 irods::error db_gen_query_op(irods::plugin_context& _ctx, genQueryInp_t* _inp, genQueryOut_t* _out) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_gen_query_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_gen_query_op");
         if (auto ret = init_l3kvg_catalog(); !ret.ok()) return ret;
         if (!_inp || !_out) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Null input/output");
 
@@ -3077,7 +3077,7 @@ irods::error db_gen_query_op(irods::plugin_context& _ctx, genQueryInp_t* _inp, g
 
         irods::catalog::bridge::pack_gq1_results(results, _inp, _out);
         if (_out->rowCnt <= 0) {
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_gen_query_op SUCCESS (NO ROWS)");
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_gen_query_op SUCCESS (NO ROWS)");
             return ERROR(CAT_NO_ROWS_FOUND, "No rows found");
         }
 
@@ -3113,7 +3113,7 @@ irods::error db_gen_query_op(irods::plugin_context& _ctx, genQueryInp_t* _inp, g
             }
         }
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_gen_query_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_gen_query_op SUCCESS");
         return SUCCESS();
     } catch (const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_gen_query_op EXCEPTION: %s", e.what());
