@@ -2316,12 +2316,21 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
                         if (t == lite3cpp::Type::String) {
                             try { return std::stoull(std::string(j.get_str(after_ofs, key))); } catch (...) {}
                         }
+                        if (t == lite3cpp::Type::Bytes) {
+                            auto bytes = j.get_bytes(after_ofs, key);
+                            std::string s(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                            try { return std::stoull(s); } catch (...) {}
+                        }
                         return 0;
                     };
                     auto get_after_str = [&](std::string_view key, std::string_view def = "") -> std::string {
                         auto t = j.get_type(after_ofs, key);
                         if (t == lite3cpp::Type::String) return std::string(j.get_str(after_ofs, key));
                         if (t == lite3cpp::Type::Int64) return std::to_string(j.get_i64(after_ofs, key));
+                        if (t == lite3cpp::Type::Bytes) {
+                            auto bytes = j.get_bytes(after_ofs, key);
+                            return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                        }
                         return std::string(def);
                     };
 
