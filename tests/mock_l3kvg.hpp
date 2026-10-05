@@ -33,7 +33,7 @@ namespace irods::catalog::test {
             template<typename T>
             T get_attribute(const std::string& key) const {
                 if (payload.empty()) return T{};
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                lite3cpp::Buffer buf(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
                 if constexpr (std::is_same_v<T, std::string>) {
                     auto t = buf.get_type(0, key);
                     if (t == lite3cpp::Type::String) {
@@ -367,10 +367,7 @@ namespace irods::catalog::test {
 
                              std::vector<uint64_t> sn;
                              const auto& sn_msg = msgs[data_idx];
-                             if (sn_msg.size() % sizeof(uint64_t) == 0 && sn_msg.size() > 0) {
-                                 sn.resize(sn_msg.size() / sizeof(uint64_t));
-                                 std::memcpy(sn.data(), sn_msg.data(), sn_msg.size());
-                             } else if (sn_msg.size() > 0) {
+                             if (sn_msg.size() >= 2 && static_cast<const char*>(sn_msg.data())[0] == '[' && static_cast<const char*>(sn_msg.data())[sn_msg.size() - 1] == ']') {
                                  try {
                                      lite3cpp::Buffer sbuf = lite3cpp::lite3_json::from_json_string(sn_msg.to_string());
                                      if (sbuf.size() >= sizeof(lite3cpp::PackedNodeLayout)) {
@@ -384,6 +381,9 @@ namespace irods::catalog::test {
                                          }
                                      }
                                  } catch (...) {}
+                             } else if (sn_msg.size() % sizeof(uint64_t) == 0 && sn_msg.size() > 0) {
+                                 sn.resize(sn_msg.size() / sizeof(uint64_t));
+                                 std::memcpy(sn.data(), sn_msg.data(), sn_msg.size());
                              }
                              std::unordered_set<uint64_t> sn_set(sn.begin(), sn.end());
 
@@ -396,55 +396,82 @@ namespace irods::catalog::test {
                              for (const auto& [id, node] : nodes_) {
                                  if (!sn_set.empty() && !sn_set.count(id)) continue;
                                  bool match = true;
-                                 std::function<bool(size_t)> eval_filters = [&](size_t filter_arr_ofs) -> bool {
+                                 std::function<bool(size_t, std::string_view)> eval_filter_group = [&](size_t filter_arr_ofs, std::string_view group_type) -> bool {
                                      lite3cpp::NodeView arr_nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(q.data() + filter_arr_ofs));
+                                     bool is_or = (group_type == "or");
+                                     if (arr_nv.size() == 0) return true;
                                      for (uint32_t i = 0; i < arr_nv.size(); ++i) {
                                          if (q.arr_get_type(filter_arr_ofs, i) != lite3cpp::Type::Object) continue;
                                          size_t f_ofs = q.arr_get_obj(filter_arr_ofs, i);
+                                         bool item_match = true;
                                          if (q.get_type(f_ofs, "filters") == lite3cpp::Type::Array) {
-                                             if (!eval_filters(q.get_arr(f_ofs, "filters"))) return false;
-                                             continue;
-                                         }
-                                         if (q.get_type(f_ofs, "alias") != lite3cpp::Type::String || q.get_str(f_ofs, "alias") != root_alias) continue;
-                                         std::string key = (q.get_type(f_ofs, "key") == lite3cpp::Type::String) ? std::string(q.get_str(f_ofs, "key")) : "";
-                                         std::string val = (q.get_type(f_ofs, "value") == lite3cpp::Type::String) ? std::string(q.get_str(f_ofs, "value")) : "";
-                                         if (key == "_access_user") {
-                                             std::string owner = node.get_attribute<std::string>("o");
-                                             std::string n = node.get_attribute<std::string>("n");
-                                             if (owner != val) {
-                                                 bool is_public = (n == "/" || n.find('/', 1) == std::string::npos ||
-                                                                   n.ends_with("/home") || n.ends_with("/trash") ||
-                                                                   n.ends_with("/public"));
-                                                 if (!is_public) return false;
+                                             std::string sub_grp = (q.get_type(f_ofs, "group") == lite3cpp::Type::String) 
+                                                 ? std::string(q.get_str(f_ofs, "group")) : "and";
+                                             item_match = eval_filter_group(q.get_arr(f_ofs, "filters"), sub_grp);
+                                         } else {
+                                             if (q.get_type(f_ofs, "alias") != lite3cpp::Type::String || q.get_str(f_ofs, "alias") != root_alias) {
+                                                 item_match = true;
+                                             } else {
+                                                 std::string key = (q.get_type(f_ofs, "key") == lite3cpp::Type::String) ? std::string(q.get_str(f_ofs, "key")) : "";
+                                                 std::string val = (q.get_type(f_ofs, "value") == lite3cpp::Type::String) ? std::string(q.get_str(f_ofs, "value")) : "";
+                                                 if (key == "_access_user") {
+                                                     std::string owner = node.get_attribute<std::string>("o");
+                                                     std::string n = node.get_attribute<std::string>("n");
+                                                     if (owner != val) {
+                                                         bool is_public = (n == "/" || n.find('/', 1) == std::string::npos ||
+                                                                           n.ends_with("/home") || n.ends_with("/trash") ||
+                                                                           n.ends_with("/public"));
+                                                         if (!is_public) item_match = false;
+                                                     }
+                                                 } else {
+                                                     int64_t op = (q.get_type(f_ofs, "op") == lite3cpp::Type::Int64) ? q.get_i64(f_ofs, "op") : 0;
+                                                     std::string attr = node.get_attribute<std::string>(key);
+                                                     if (op == 0) {
+                                                         item_match = (attr == val);
+                                                     } else if (op == 1) {
+                                                         item_match = (attr != val);
+                                                     } else if (op >= 2 && op <= 5) {
+                                                         try {
+                                                             int64_t a_num = std::stoll(attr);
+                                                             int64_t v_num = std::stoll(val);
+                                                             if (op == 2) item_match = (a_num > v_num);
+                                                             else if (op == 3) item_match = (a_num >= v_num);
+                                                             else if (op == 4) item_match = (a_num < v_num);
+                                                             else if (op == 5) item_match = (a_num <= v_num);
+                                                         } catch (...) {
+                                                             if (op == 2) item_match = (attr > val);
+                                                             else if (op == 3) item_match = (attr >= val);
+                                                             else if (op == 4) item_match = (attr < val);
+                                                             else if (op == 5) item_match = (attr <= val);
+                                                         }
+                                                     } else if (op == 6) {
+                                                         std::string regex_str = "^";
+                                                         for (char c : val) {
+                                                             if (c == '%') regex_str += ".*";
+                                                             else if (c == '_') regex_str += ".";
+                                                             else if (c == '.' || c == '*' || c == '+' || c == '?' || c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' || c == '|') { regex_str += "\\"; regex_str += c; }
+                                                             else regex_str += c;
+                                                         }
+                                                         regex_str += "$";
+                                                         try {
+                                                             std::regex re(regex_str, std::regex_constants::icase);
+                                                             item_match = std::regex_match(attr, re);
+                                                         } catch (...) { item_match = false; }
+                                                     }
+                                                 }
                                              }
-                                             continue;
                                          }
-                                         int64_t op = (q.get_type(f_ofs, "op") == lite3cpp::Type::Int64) ? q.get_i64(f_ofs, "op") : 0;
-                                         std::string attr = node.get_attribute<std::string>(key);
-                                         if (op == 0) {
-                                             if (attr != val) return false;
-                                         } else if (op == 1) {
-                                             if (attr == val) return false;
-                                         } else if (op == 6) {
-                                             std::string regex_str = "^";
-                                             for (char c : val) {
-                                                 if (c == '%') regex_str += ".*";
-                                                 else if (c == '_') regex_str += ".";
-                                                 else if (c == '.' || c == '*' || c == '+' || c == '?' || c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' || c == '|') { regex_str += "\\"; regex_str += c; }
-                                                 else regex_str += c;
-                                             }
-                                             regex_str += "$";
-                                             try {
-                                                 std::regex re(regex_str, std::regex_constants::icase);
-                                                 if (!std::regex_match(attr, re)) return false;
-                                             } catch (...) { return false; }
+                                         if (is_or) {
+                                             if (item_match) return true;
+                                         } else {
+                                             if (!item_match) return false;
                                          }
                                      }
-                                     return true;
+                                     return !is_or;
                                  };
 
                                  if (q.size() >= sizeof(lite3cpp::PackedNodeLayout) && q.get_type(0, "filters") == lite3cpp::Type::Array) {
-                                     match = eval_filters(q.get_arr(0, "filters"));
+                                     match = eval_filter_group(q.get_arr(0, "filters"), "and");
                                  }
 
                                  if (match) {

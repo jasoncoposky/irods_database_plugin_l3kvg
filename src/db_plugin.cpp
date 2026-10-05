@@ -3154,8 +3154,24 @@ irods::error db_execute_genquery2_op(
                     std::string_view val = results.get_field(r, c);
                     ss << "\"";
                     for (char ch : val) {
-                        if (ch == '"' || ch == '\\') ss << '\\';
-                        ss << ch;
+                        switch (ch) {
+                            case '"': ss << "\\\""; break;
+                            case '\\': ss << "\\\\"; break;
+                            case '\b': ss << "\\b"; break;
+                            case '\f': ss << "\\f"; break;
+                            case '\n': ss << "\\n"; break;
+                            case '\r': ss << "\\r"; break;
+                            case '\t': ss << "\\t"; break;
+                            default:
+                                if (static_cast<unsigned char>(ch) < 0x20) {
+                                    char hex[8];
+                                    std::snprintf(hex, sizeof(hex), "\\u%04x", static_cast<unsigned char>(ch));
+                                    ss << hex;
+                                } else {
+                                    ss << ch;
+                                }
+                                break;
+                        }
                     }
                     ss << "\"";
                 }

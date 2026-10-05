@@ -3687,6 +3687,7 @@ namespace irods::catalog {
         irods::error execute_dml(const compiler::DmlPlan& plan, lite3cpp::Buffer& result) {
             try {
                 auto set_dml_result = [&](int64_t rows_affected) {
+                    result.clear();
                     result.init_object();
                     result.set_i64(0, "rows_affected", rows_affected);
                     result.set_str(0, "status", "SUCCESS");

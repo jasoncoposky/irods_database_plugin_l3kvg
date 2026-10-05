@@ -460,6 +460,21 @@ namespace irods::catalog::compiler {
         {{"MSRVC", "User"},            {{Direction::Out, "OWNED_BY", "User"}}}
     };
 
+    static const GraphMap* find_column_mapping(std::string_view col) {
+        auto it = COLUMN_NAME_MAP.find(col);
+        if (it != COLUMN_NAME_MAP.end()) {
+            return &it->second;
+        }
+        std::string upper;
+        upper.reserve(col.size());
+        for (char c : col) upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+        auto it_upper = COLUMN_NAME_MAP.find(upper);
+        if (it_upper != COLUMN_NAME_MAP.end()) {
+            return &it_upper->second;
+        }
+        return nullptr;
+    }
+
     struct pc_visitor : public boost::static_visitor<std::pair<int, std::string>> {
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_equal& c) const { return {0, c.string_literal}; }
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_not_equal& c) const { return {1, c.string_literal}; }
@@ -538,12 +553,12 @@ namespace irods::catalog::compiler {
             std::string col_name;
             if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) col_name = col->name;
             else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) col_name = func->name;
-            auto it = COLUMN_NAME_MAP.find(col_name);
-            if (it == COLUMN_NAME_MAP.end()) {
+            const auto* gm = find_column_mapping(col_name);
+            if (!gm) {
                 throw std::invalid_argument("Unknown column: " + col_name);
             }
-            std::string node_type = std::string(it->second.node_type);
-            std::string bson_key = std::string(it->second.bson_key);
+            std::string node_type = std::string(gm->node_type);
+            std::string bson_key = std::string(gm->bson_key);
 
             if (col_name == "USER_TYPE") {
                 if (compiler->get_entry_type() == "Group") {
@@ -662,12 +677,12 @@ namespace irods::catalog::compiler {
                 compiler->add_target_type("Collection");
                 compiler->add_target_type("CollAccess");
             }
-            auto it = COLUMN_NAME_MAP.find(col.name);
-            if (it != COLUMN_NAME_MAP.end()) {
-                compiler->add_target_type(it->second.node_type);
+            const auto* gm = find_column_mapping(col.name);
+            if (gm) {
+                compiler->add_target_type(gm->node_type);
                 size_t p_ofs = buf.arr_append_obj(projs_arr_ofs);
-                buf.set_str(p_ofs, "alias", it->second.node_type);
-                buf.set_str(p_ofs, "property", it->second.bson_key);
+                buf.set_str(p_ofs, "alias", gm->node_type);
+                buf.set_str(p_ofs, "property", gm->bson_key);
                 buf.set_i64(p_ofs, "agg", 0);
                 buf.set_str(p_ofs, "as", "idx_" + std::to_string(col_idx++));
             } else {
@@ -693,12 +708,12 @@ namespace irods::catalog::compiler {
                         compiler->add_target_type("Collection");
                         compiler->add_target_type("CollAccess");
                     }
-                    auto it = COLUMN_NAME_MAP.find(col->name);
-                    if (it != COLUMN_NAME_MAP.end()) {
-                        compiler->add_target_type(it->second.node_type);
+                    const auto* gm = find_column_mapping(col->name);
+                    if (gm) {
+                        compiler->add_target_type(gm->node_type);
                         size_t p_ofs = buf.arr_append_obj(projs_arr_ofs);
-                        buf.set_str(p_ofs, "alias", it->second.node_type);
-                        buf.set_str(p_ofs, "property", it->second.bson_key);
+                        buf.set_str(p_ofs, "alias", gm->node_type);
+                        buf.set_str(p_ofs, "property", gm->bson_key);
                         buf.set_i64(p_ofs, "agg", agg);
                         buf.set_bool(p_ofs, "distinct", func.distinct);
                         buf.set_str(p_ofs, "as", "idx_" + std::to_string(col_idx++));
@@ -837,14 +852,14 @@ namespace irods::catalog::compiler {
             size_t groups_ofs = qbuf.set_arr(0, "groups");
             for (const auto& expr : ast.group_by.expressions) {
                 if (const auto* col = std::get_if<irods::experimental::genquery2::column>(&expr)) {
-                    auto it = COLUMN_NAME_MAP.find(col->name);
-                    if (it == COLUMN_NAME_MAP.end()) {
+                    const auto* gm = find_column_mapping(col->name);
+                    if (!gm) {
                         throw std::invalid_argument("Unknown column: " + col->name);
                     }
-                    add_target_type(it->second.node_type);
+                    add_target_type(gm->node_type);
                     size_t g_ofs = qbuf.arr_append_obj(groups_ofs);
-                    qbuf.set_str(g_ofs, "alias", it->second.node_type);
-                    qbuf.set_str(g_ofs, "property", it->second.bson_key);
+                    qbuf.set_str(g_ofs, "alias", gm->node_type);
+                    qbuf.set_str(g_ofs, "property", gm->bson_key);
                 } else if (const auto* func = std::get_if<irods::experimental::genquery2::function>(&expr)) {
                     std::string fn_name = boost::algorithm::to_upper_copy(func->name);
                     std::string col_alias;
@@ -852,13 +867,13 @@ namespace irods::catalog::compiler {
                     std::vector<std::string> fn_args;
                     for (const auto& arg : func->arguments) {
                         if (const auto* c = std::get_if<irods::experimental::genquery2::column>(&arg)) {
-                            auto it = COLUMN_NAME_MAP.find(c->name);
-                            if (it == COLUMN_NAME_MAP.end()) {
+                            const auto* gm = find_column_mapping(c->name);
+                            if (!gm) {
                                 throw std::invalid_argument("Unknown column: " + c->name);
                             }
-                            add_target_type(it->second.node_type);
-                            col_alias = it->second.node_type;
-                            col_prop = it->second.bson_key;
+                            add_target_type(gm->node_type);
+                            col_alias = gm->node_type;
+                            col_prop = gm->bson_key;
                         } else if (const auto* s = std::get_if<std::string>(&arg)) {
                             fn_args.push_back(*s);
                         }
@@ -880,26 +895,26 @@ namespace irods::catalog::compiler {
             size_t sorts_ofs = qbuf.set_arr(0, "sorts");
             for (const auto& se : ast.order_by.sort_expressions) {
                 if (const auto* col = std::get_if<irods::experimental::genquery2::column>(&se.expr)) {
-                    auto it = COLUMN_NAME_MAP.find(col->name);
-                    if (it == COLUMN_NAME_MAP.end()) {
+                    const auto* gm = find_column_mapping(col->name);
+                    if (!gm) {
                         throw std::invalid_argument("Unknown column: " + col->name);
                     }
-                    add_target_type(it->second.node_type);
+                    add_target_type(gm->node_type);
                     size_t s_ofs = qbuf.arr_append_obj(sorts_ofs);
-                    qbuf.set_str(s_ofs, "alias", it->second.node_type);
-                    qbuf.set_str(s_ofs, "property", it->second.bson_key);
+                    qbuf.set_str(s_ofs, "alias", gm->node_type);
+                    qbuf.set_str(s_ofs, "property", gm->bson_key);
                     qbuf.set_bool(s_ofs, "ascending", se.ascending_order);
                 } else if (const auto* func = std::get_if<irods::experimental::genquery2::function>(&se.expr)) {
                     for (const auto& arg : func->arguments) {
                         if (const auto* c = std::get_if<irods::experimental::genquery2::column>(&arg)) {
-                            auto it = COLUMN_NAME_MAP.find(c->name);
-                            if (it == COLUMN_NAME_MAP.end()) {
+                            const auto* gm = find_column_mapping(c->name);
+                            if (!gm) {
                                 throw std::invalid_argument("Unknown column: " + c->name);
                             }
-                            add_target_type(it->second.node_type);
+                            add_target_type(gm->node_type);
                             size_t s_ofs = qbuf.arr_append_obj(sorts_ofs);
-                            qbuf.set_str(s_ofs, "alias", it->second.node_type);
-                            qbuf.set_str(s_ofs, "property", it->second.bson_key);
+                            qbuf.set_str(s_ofs, "alias", gm->node_type);
+                            qbuf.set_str(s_ofs, "property", gm->bson_key);
                             qbuf.set_bool(s_ofs, "ascending", se.ascending_order);
                             break;
                         }
@@ -1074,21 +1089,6 @@ namespace irods::catalog::compiler {
             if (et == "User" || et == "Resource") return 2;
             if (et == "Zone") return 1;
             return 0;
-        }
-
-        const GraphMap* find_column_mapping(std::string_view col) {
-            auto it = COLUMN_NAME_MAP.find(col);
-            if (it != COLUMN_NAME_MAP.end()) {
-                return &it->second;
-            }
-            std::string upper;
-            upper.reserve(col.size());
-            for (char c : col) upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
-            auto it_upper = COLUMN_NAME_MAP.find(upper);
-            if (it_upper != COLUMN_NAME_MAP.end()) {
-                return &it_upper->second;
-            }
-            return nullptr;
         }
 
         void map_assignment(const std::string& col, const std::string& val, const std::string& entity_type, std::unordered_map<std::string, std::string>& properties) {
