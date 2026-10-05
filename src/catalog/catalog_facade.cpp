@@ -46,6 +46,8 @@ namespace irods::catalog {
     static std::mutex s_reg_cache_mu;
     static std::unordered_map<snowflake_id_t, std::string> s_coll_path_cache;
     static std::unordered_map<std::string, snowflake_id_t> s_user_id_cache;
+    static std::mutex s_path_cache_mu;
+    static std::unordered_map<std::string, snowflake_id_t> s_coll_name_cache;
 
     static void invalidate_user_cache(snowflake_id_t uid) {
         if (uid != 0) {
@@ -1376,6 +1378,10 @@ namespace irods::catalog {
                 std::lock_guard<std::mutex> lock(s_reg_cache_mu);
                 s_coll_path_cache[sid] = coll.name;
             }
+            {
+                std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                s_coll_name_cache[coll.name] = sid;
+            }
 
             snowflake_id_t psid = 0;
             if (coll.parent_id != 0) {
@@ -1418,6 +1424,11 @@ namespace irods::catalog {
                 client_->put_node_async(local_cluster_id_, coll_sid, buf.move_to_string()).get();
                 del_index(EntityType::Collection, "n", old_prefix);
                 add_index(EntityType::Collection, "n", new_prefix, coll_sid);
+                {
+                    std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                    s_coll_name_cache.erase(old_prefix);
+                    s_coll_name_cache[new_prefix] = coll_sid;
+                }
             }
 
             auto children = client_->get_neighbors_async(local_cluster_id_, coll_sid, "CONTAINS", 0.0).get();
@@ -1572,6 +1583,10 @@ namespace irods::catalog {
                 std::lock_guard<std::mutex> lock(s_reg_cache_mu);
                 s_coll_path_cache.clear();
             }
+            {
+                std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                s_coll_name_cache.erase(std::string(old_name));
+            }
             return SUCCESS(); 
         }
 
@@ -1606,6 +1621,10 @@ namespace irods::catalog {
             {
                 std::lock_guard<std::mutex> lock(s_reg_cache_mu);
                 s_coll_path_cache.clear();
+            }
+            {
+                std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                s_coll_name_cache.erase(old_coll_name);
             }
             return SUCCESS();
         }
@@ -1765,10 +1784,12 @@ namespace irods::catalog {
             l3kvg::MutationBatch batch;
 
             // Delete path index and edges
+            std::string deleted_coll_path;
             if (!payload.empty()) {
                 try {
                     lite3cpp::Buffer buf(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
                     std::string path = safe_get_str(buf, 0, "n");
+                    deleted_coll_path = path;
                     if (!path.empty()) {
                         batch.del_raw(get_idx_key(EntityType::Collection, "n", path));
                     }
@@ -1838,6 +1859,10 @@ namespace irods::catalog {
             {
                 std::lock_guard<std::mutex> lock(s_reg_cache_mu);
                 s_coll_path_cache.erase(sid);
+            }
+            if (!deleted_coll_path.empty()) {
+                std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                s_coll_name_cache.erase(deleted_coll_path);
             }
             return SUCCESS(); 
         }
@@ -2564,8 +2589,27 @@ namespace irods::catalog {
         uint16_t get_cluster_id() const { return local_cluster_id_; }
 
         irods::error resolve_path(std::string_view path, snowflake_id_t& out_id, EntityType& out_type) {
+            std::string path_str(path);
+            {
+                std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                auto it = s_coll_name_cache.find(path_str);
+                if (it != s_coll_name_cache.end()) {
+                    out_id = it->second;
+                    out_type = EntityType::Collection;
+                    return SUCCESS();
+                }
+            }
+
             snowflake_id_t sid = resolve_id_from_index(EntityType::Collection, "n", path);
-            if (sid) { out_id = sid; out_type = EntityType::Collection; return SUCCESS(); }
+            if (sid) {
+                {
+                    std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                    s_coll_name_cache[path_str] = sid;
+                }
+                out_id = sid;
+                out_type = EntityType::Collection;
+                return SUCCESS();
+            }
             
             sid = resolve_id_from_index(EntityType::DataObject, "path", path);
             if (sid) { out_id = sid; out_type = EntityType::DataObject; return SUCCESS(); }
@@ -2610,7 +2654,20 @@ namespace irods::catalog {
                 }
                 return sid;
             } else if (et == EntityType::Collection) {
-                snowflake_id_t sid = resolve_id_from_index(EntityType::Collection, "n", target_id_or_name);
+                snowflake_id_t sid = 0;
+                {
+                    std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                    auto it = s_coll_name_cache.find(std::string(target_id_or_name));
+                    if (it != s_coll_name_cache.end()) {
+                        return it->second;
+                    }
+                }
+                sid = resolve_id_from_index(EntityType::Collection, "n", target_id_or_name);
+                if (sid) {
+                    std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                    s_coll_name_cache[std::string(target_id_or_name)] = sid;
+                    return sid;
+                }
                 if (!sid) {
                     EntityType out_et;
                     resolve_path(target_id_or_name, sid, out_et);

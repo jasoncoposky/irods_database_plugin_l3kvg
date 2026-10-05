@@ -136,7 +136,7 @@ static char g_session_client_zone[NAME_LEN]{};
 irods::error init_l3kvg_catalog();
 
 static void atfork_child() {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: atfork_child() in PID %d, resetting catalog from parent PID %d", getpid(), g_catalog_pid);
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: atfork_child() in PID %d, resetting catalog from parent PID %d", getpid(), g_catalog_pid);
     g_catalog.release();
     g_catalog = nullptr;
     g_catalog_pid = 0;
@@ -245,7 +245,7 @@ irods::error db_rollback_op(irods::plugin_context& _ctx) { return SUCCESS(); }
 // Data Objects
 irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _info) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_data_obj_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_data_obj_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null dataObjInfo_t");
         irods::catalog::data_object obj;
         obj.id = (uint64_t)_info->dataId; 
@@ -260,7 +260,7 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
         irods::catalog::EntityType parent_type = irods::catalog::EntityType::Collection;
         irods::catalog::snowflake_id_t parent_sid = 0;
         if (!g_catalog->resolve_path(parent_path, parent_sid, parent_type).ok() || !parent_sid) {
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_data_obj_op parent collection unknown: %s", parent_path.c_str());
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_reg_data_obj_op parent collection unknown: %s", parent_path.c_str());
             if (_ctx.comm()) {
                 addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + parent_path + "' is unknown").c_str());
             }
@@ -320,7 +320,7 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
                 }
             }
             if (!allowed) {
-                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_data_obj_op: Access Denied for user [%s] on parent [%s]",
+                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_reg_data_obj_op: Access Denied for user [%s] on parent [%s]",
                         user_name.c_str(), parent_path.c_str());
                 if (_ctx.comm()) {
                     addRErrorMsg(&_ctx.comm()->rError, 0,
@@ -370,12 +370,12 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
 
         if (obj.id <= 0) g_catalog->get_next_sequence_value("R_DATA_MAIN", obj.id);
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_data_obj_op: obj.name=%s, obj.coll_id=%llu, obj.id=%llu", obj.name.c_str(), (unsigned long long)obj.coll_id, (unsigned long long)obj.id);
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: db_reg_data_obj_op: obj.name=%s, obj.coll_id=%llu, obj.id=%llu", obj.name.c_str(), (unsigned long long)obj.coll_id, (unsigned long long)obj.id);
 
         irods::catalog::data_id_t out_id;
         auto ret = g_catalog->register_data_object(obj, out_id);
         if (!ret.ok()) {
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_data_obj_op ERROR: %ld - %s", ret.code(), ret.result().c_str());
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_data_obj_op ERROR: %ld - %s", ret.code(), ret.result().c_str());
             return ret;
         }
         _info->dataId = out_id;
@@ -412,7 +412,7 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
                 rodsLog(LOG_ERROR, "L3_PLUGIN: db_reg_data_obj_op failed to register replica: %s", repl_ret.result().c_str());
             }
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_data_obj_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_data_obj_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_data_obj_op EXCEPTION: %s", e.what());
@@ -422,7 +422,7 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
 
 irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t* _info, keyValPair_t* _reg_param) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_data_obj_meta_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_data_obj_meta_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null dataObjInfo_t");
 
         uint64_t data_id = (uint64_t)_info->dataId;
@@ -442,7 +442,7 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
         }
 
         if (data_id == 0) {
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_mod_data_obj_meta_op: data object not found for path [%s]", safe_string(_info->objPath).c_str());
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_mod_data_obj_meta_op: data object not found for path [%s]", safe_string(_info->objPath).c_str());
             return ERROR(CAT_UNKNOWN_FILE, "data object not found");
         }
 
@@ -485,10 +485,10 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
                     g_catalog->check_permission(usid, dsid, req_level, allowed);
                 }
             }
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_mod_data_obj_meta_op: user=%s usid=%llx dsid=%llx level=%s allowed=%d",
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_mod_data_obj_meta_op: user=%s usid=%llx dsid=%llx level=%s allowed=%d",
                     user_name.c_str(), (unsigned long long)usid, (unsigned long long)dsid, req_level.c_str(), allowed ? 1 : 0);
             if (!allowed) {
-                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_mod_data_obj_meta_op: Access Denied for user [%s] on object [%llu] with level [%s]",
+                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_mod_data_obj_meta_op: Access Denied for user [%s] on object [%llu] with level [%s]",
                         user_name.c_str(), (unsigned long long)data_id, req_level.c_str());
                 return ERROR(CAT_NO_ACCESS_PERMISSION, "User does not have permission to modify data object metadata");
             }
@@ -549,13 +549,13 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
 
             bool all_replicas = (_reg_param && getValByKey(_reg_param, ALL_KW) != nullptr);
 
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_mod_data_obj_meta_op calling modify_replicas_for_data_object data_id=%llu target_repl_num=%u target_resc_hier='%s' all_replicas=%d updates_len=%zu",
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_mod_data_obj_meta_op calling modify_replicas_for_data_object data_id=%llu target_repl_num=%u target_resc_hier='%s' all_replicas=%d updates_len=%zu",
                     (unsigned long long)data_id, target_repl_num, target_resc_hier.c_str(), all_replicas ? 1 : 0, updates.size());
 
             g_catalog->modify_replicas_for_data_object(data_id, target_repl_num, target_resc_hier, updates, all_repl_status, all_replicas);
         }
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_data_obj_meta_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_data_obj_meta_op SUCCESS");
         return SUCCESS();
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_data_obj_meta_op EXCEPTION: %s", e.what());
@@ -565,9 +565,9 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
 
 irods::error db_rename_object_op(irods::plugin_context& _ctx, rodsLong_t _obj_id, const char* _new_name) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_rename_object_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_rename_object_op");
         auto ret = g_catalog->rename_object((uint64_t)_obj_id, safe_string(_new_name));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_rename_object_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_rename_object_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_rename_object_op EXCEPTION: %s", e.what());
@@ -577,9 +577,9 @@ irods::error db_rename_object_op(irods::plugin_context& _ctx, rodsLong_t _obj_id
 
 irods::error db_move_object_op(irods::plugin_context& _ctx, rodsLong_t _obj_id, rodsLong_t _target_coll_id) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_move_object_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_move_object_op");
         auto ret = g_catalog->move_object((uint64_t)_obj_id, (uint64_t)_target_coll_id);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_move_object_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_move_object_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_move_object_op EXCEPTION: %s", e.what());
@@ -590,7 +590,7 @@ irods::error db_move_object_op(irods::plugin_context& _ctx, rodsLong_t _obj_id, 
 // Replicas
 irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src, dataObjInfo_t* _dst, keyValPair_t* _cond) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_replica_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_replica_op");
         if (!_dst) return ERROR(SYS_INVALID_INPUT_PARAM, "null dataObjInfo_t (dst)");
 
         uint64_t data_id = _dst->dataId > 0 ? (uint64_t)_dst->dataId : (_src ? (uint64_t)_src->dataId : 0);
@@ -651,7 +651,7 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
             size};
         
         auto ret = g_catalog->register_replica(repl);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_replica_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_replica_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_replica_op EXCEPTION: %s", e.what());
@@ -661,7 +661,7 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
 
 irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _info, keyValPair_t* _cond) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_unreg_replica_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_unreg_replica_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null dataObjInfo_t");
 
         int adminMode = 0;
@@ -703,7 +703,7 @@ irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _in
                 return ERROR(CAT_UNKNOWN_FILE, "data object unknown");
             }
             if (!perm_ret.ok() || !allowed) {
-                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_unreg_replica_op: permission denied for user [%s] on data_id [%lld]",
+                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_unreg_replica_op: permission denied for user [%s] on data_id [%lld]",
                         user_name.c_str(), (long long)_info->dataId);
                 return ERROR(CAT_NO_ACCESS_PERMISSION, "check_data_object_only failed");
             }
@@ -725,7 +725,7 @@ irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _in
         }
 
         auto ret = g_catalog->unregister_replica((uint64_t)_info->dataId, (uint32_t)_info->replNum);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_unreg_replica_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_unreg_replica_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_unreg_replica_op EXCEPTION: %s", e.what());
@@ -735,7 +735,7 @@ irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _in
 
 irods::error db_update_replica_access_time(irods::plugin_context& _ctx, const char* _json_input, char** _out) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_update_replica_access_time");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_update_replica_access_time");
         if (!_json_input || !_out) {
             return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Received one or more null pointers.");
         }
@@ -762,7 +762,7 @@ irods::error db_update_replica_access_time(irods::plugin_context& _ctx, const ch
             }
         }
         
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_update_replica_access_time SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_update_replica_access_time SUCCESS");
         return SUCCESS();
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_update_replica_access_time EXCEPTION: %s", e.what());
@@ -773,7 +773,7 @@ irods::error db_update_replica_access_time(irods::plugin_context& _ctx, const ch
 // Collections
 irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_coll_op name [%s] owner [%s]", _info && _info->collName ? _info->collName : "null", _info && _info->collOwnerName ? _info->collOwnerName : "null");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_coll_op name [%s] owner [%s]", _info && _info->collName ? _info->collName : "null", _info && _info->collOwnerName ? _info->collOwnerName : "null");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null collInfo_t");
         irods::catalog::collection coll;
         coll.id = (uint64_t)_info->collId; 
@@ -869,9 +869,9 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         auto ret = g_catalog->register_collection(coll, out_id);
         if (ret.ok()) {
             _info->collId = out_id;
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_coll_op SUCCESS");
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_coll_op SUCCESS");
         } else {
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_coll_op ERROR: %ld - %s", ret.code(), ret.result().c_str());
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_coll_op ERROR: %ld - %s", ret.code(), ret.result().c_str());
         }
         return ret;
     } catch(const std::exception& e) {
@@ -882,7 +882,7 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
 
 irods::error db_reg_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _info) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_coll_by_admin_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_coll_by_admin_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null collInfo_t");
 
         std::string coll_name = safe_string(_info->collName);
@@ -897,7 +897,7 @@ irods::error db_reg_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _i
                 try {
                     lite3cpp::Buffer buf(payload);
                     _info->collId = buf.get_i64(0, "id");
-                    rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_coll_by_admin_op: collection [%s] already exists (id %d), returning SUCCESS", coll_name.c_str(), _info->collId);
+                    rodsLog(LOG_DEBUG, "L3_PLUGIN: db_reg_coll_by_admin_op: collection [%s] already exists (id %d), returning SUCCESS", coll_name.c_str(), _info->collId);
                     return SUCCESS();
                 } catch (...) {}
             }
@@ -911,7 +911,7 @@ irods::error db_reg_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _i
 
 irods::error db_mod_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_coll_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_coll_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null collInfo_t");
         
         uint64_t coll_id = (uint64_t)_info->collId;
@@ -970,7 +970,7 @@ irods::error db_mod_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
                 safe_string(_info->condInput.value[i]));
             if (!err.ok()) rodsLog(LOG_ERROR, "L3_PLUGIN: db_mod_coll_op modify_collection keyword [%s] failed: %s", _info->condInput.keyWord[i], err.result().c_str());
         }
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_coll_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_coll_op SUCCESS");
         return SUCCESS();
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_coll_op EXCEPTION: %s", e.what());
@@ -980,7 +980,7 @@ irods::error db_mod_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
 
 irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_coll_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_coll_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null collInfo_t");
         
         uint64_t coll_id = (uint64_t)_info->collId;
@@ -1021,7 +1021,7 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         }
 
         if (sid == 0 && coll_id == 0) {
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_op: Collection [%s] not found", coll_name.c_str());
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_del_coll_op: Collection [%s] not found", coll_name.c_str());
             if (_ctx.comm()) {
                 addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is unknown").c_str());
             }
@@ -1049,7 +1049,7 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
                         bool parent_allowed = false;
                         auto p_ret = g_catalog->check_permission(usid, psid, "modify_object", parent_allowed, /*check_parents=*/false);
                         if (!p_ret.ok() || !parent_allowed) {
-                            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_op: parent permission denied for user [%s] on [%s]",
+                            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_del_coll_op: parent permission denied for user [%s] on [%s]",
                                     user_name.c_str(), logicalParentDirName);
                             return ERROR(CAT_NO_ACCESS_PERMISSION, "check_parent_collection_access failed");
                         }
@@ -1064,7 +1064,7 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
                 return ERROR(CAT_UNKNOWN_COLLECTION, "Collection not found");
             }
             if (!perm_ret.ok() || !allowed) {
-                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_op: permission denied for user [%s] on collection [%s]",
+                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_del_coll_op: permission denied for user [%s] on collection [%s]",
                         user_name.c_str(), coll_name.c_str());
                 return ERROR(CAT_NO_ACCESS_PERMISSION, "check_collection_access failed");
             }
@@ -1077,7 +1077,7 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
             return empty_err;
         }
         if (!is_empty) {
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_op: collection [%s] is not empty", coll_name.c_str());
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_del_coll_op: collection [%s] is not empty", coll_name.c_str());
             if (_ctx.comm()) {
                 addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is not empty").c_str());
             }
@@ -1085,7 +1085,7 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         }
 
         auto ret = g_catalog->delete_collection(coll_id ? coll_id : sid);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_coll_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_coll_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_coll_op EXCEPTION: %s", e.what());
@@ -1095,7 +1095,7 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
 
 irods::error db_del_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _info) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_coll_by_admin_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_coll_by_admin_op");
         irods::error ret_ctx = _ctx.valid();
         if (!ret_ctx.ok()) return PASS(ret_ctx);
         if (!_info) return ERROR(CAT_INVALID_ARGUMENT, "null parameter");
@@ -1145,7 +1145,7 @@ irods::error db_del_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _i
         }
 
         if (sid == 0 && coll_id == 0) {
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_by_admin_op: Collection [%s] not found", coll_name.c_str());
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_del_coll_by_admin_op: Collection [%s] not found", coll_name.c_str());
             if (_ctx.comm()) {
                 addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is unknown").c_str());
             }
@@ -1159,7 +1159,7 @@ irods::error db_del_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _i
             return empty_err;
         }
         if (!is_empty) {
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_coll_by_admin_op: collection [%s] is not empty", coll_name.c_str());
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_del_coll_by_admin_op: collection [%s] is not empty", coll_name.c_str());
             if (_ctx.comm()) {
                 addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is not empty").c_str());
             }
@@ -1167,7 +1167,7 @@ irods::error db_del_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _i
         }
 
         auto ret = g_catalog->delete_collection(coll_id ? coll_id : sid);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_coll_by_admin_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_coll_by_admin_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_coll_by_admin_op EXCEPTION: %s", e.what());
@@ -1177,9 +1177,9 @@ irods::error db_del_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _i
 
 irods::error db_rename_coll_op(irods::plugin_context& _ctx, const char* _old_name, const char* _new_name) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_rename_coll_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_rename_coll_op");
         auto ret = g_catalog->rename_collection(safe_string(_old_name), safe_string(_new_name));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_rename_coll_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_rename_coll_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_rename_coll_op EXCEPTION: %s", e.what());
@@ -1190,12 +1190,12 @@ irods::error db_rename_coll_op(irods::plugin_context& _ctx, const char* _old_nam
 // Resources
 irods::error db_reg_resc_op(irods::plugin_context& _ctx, std::map<std::string, std::string>* _info) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_resc_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_resc_op");
         if (auto ret = init_l3kvg_catalog(); !ret.ok()) return ret;
         irods::catalog::resource resc;
         if (_info) {
             for (auto const& [key, val] : *_info) {
-                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_resc_op: key=[%s] val=[%s]", key.c_str(), val.c_str());
+                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_reg_resc_op: key=[%s] val=[%s]", key.c_str(), val.c_str());
                 if (key == "resource_property_id" || key == "resc_id" || key == "RESC_ID") resc.id = val.empty() ? 0 : std::stoull(val);
                 else if (key == "resource_property_name" || key == "resc_name" || key == "RESC_NAME") resc.name = val;
                 else if (key == "resource_property_type" || key == "resc_type_name" || key == "RESC_TYPE_NAME" || key == "resc_type") resc.type = val;
@@ -1213,7 +1213,7 @@ irods::error db_reg_resc_op(irods::plugin_context& _ctx, std::map<std::string, s
         
         irods::catalog::resc_id_t out_id;
         auto ret = g_catalog->register_resource(resc, out_id);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_resc_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_resc_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_resc_op EXCEPTION: %s", e.what());
@@ -1223,14 +1223,14 @@ irods::error db_reg_resc_op(irods::plugin_context& _ctx, std::map<std::string, s
 
 irods::error db_mod_resc_op(irods::plugin_context& _ctx, const char* _resc, const char* _prop, const char* _val) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_resc_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_resc_op");
         irods::catalog::resc_id_t rid = 0;
         if (_resc && g_catalog->resolve_resource_name(_resc, rid).ok()) {
             auto ret = g_catalog->modify_resource(rid, safe_string(_prop), safe_string(_val));
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_resc_op SUCCESS");
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_resc_op SUCCESS");
             return ret;
         }
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_resc_op SUCCESS (no resc)");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_resc_op SUCCESS (no resc)");
         return SUCCESS();
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_resc_op EXCEPTION: %s", e.what());
@@ -1240,14 +1240,14 @@ irods::error db_mod_resc_op(irods::plugin_context& _ctx, const char* _resc, cons
 
 irods::error db_del_resc_op(irods::plugin_context& _ctx, const char* _resc, int _unused) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_resc_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_resc_op");
         irods::catalog::resc_id_t rid = 0;
         if (_resc && g_catalog->resolve_resource_name(_resc, rid).ok()) {
             auto ret = g_catalog->delete_resource(rid);
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_resc_op SUCCESS");
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_resc_op SUCCESS");
             return ret;
         }
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_resc_op SUCCESS (no resc)");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_resc_op SUCCESS (no resc)");
         return SUCCESS();
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_resc_op EXCEPTION: %s", e.what());
@@ -1257,7 +1257,7 @@ irods::error db_del_resc_op(irods::plugin_context& _ctx, const char* _resc, int 
 
 irods::error db_add_child_resc_op(irods::plugin_context& _ctx, std::map<std::string, std::string>* _resc_input) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_add_child_resc_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_add_child_resc_op");
         if (!_resc_input) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "NULL resc_input");
         std::map<std::string, std::string>& resc_input = *_resc_input;
 
@@ -1276,7 +1276,7 @@ irods::error db_add_child_resc_op(irods::plugin_context& _ctx, std::map<std::str
         std::string child_context = c_map.begin()->second;
 
         auto ret = g_catalog->add_child_resource(parent_name, child_name, child_context);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_add_child_resc_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_add_child_resc_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_add_child_resc_op EXCEPTION: %s", e.what());
@@ -1286,7 +1286,7 @@ irods::error db_add_child_resc_op(irods::plugin_context& _ctx, std::map<std::str
 
 irods::error db_del_child_resc_op(irods::plugin_context& _ctx, std::map<std::string, std::string>* _resc_input) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_child_resc_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_child_resc_op");
         if (!_resc_input) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "NULL resc_input");
         std::map<std::string, std::string>& resc_input = *_resc_input;
 
@@ -1299,7 +1299,7 @@ irods::error db_del_child_resc_op(irods::plugin_context& _ctx, std::map<std::str
         parser.first_child(child_name);
 
         auto ret = g_catalog->remove_child_resource(parent_name, child_name);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_child_resc_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_child_resc_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_child_resc_op EXCEPTION: %s", e.what());
@@ -1312,7 +1312,7 @@ irods::error db_gen_query_ticket_setup_op(
     const char*            _ticket,
     const char*            _client_addr)
 {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_gen_query_ticket_setup_op ticket=%s, addr=%s",
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_gen_query_ticket_setup_op ticket=%s, addr=%s",
             safe_string(_ticket).c_str(), safe_string(_client_addr).c_str());
     if (!_ticket || !_client_addr) {
         return ERROR(CAT_INVALID_ARGUMENT, "null parameter");
@@ -1337,7 +1337,7 @@ irods::error db_mod_ticket_op(
 {
     try {
         using namespace irods::catalog;
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_ticket_op op=%s, ticket=%s", safe_string(_op_name).c_str(), safe_string(_ticket_string).c_str());
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_ticket_op op=%s, ticket=%s", safe_string(_op_name).c_str(), safe_string(_ticket_string).c_str());
         if (!_op_name) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "NULL op_name");
 
         if (strcmp(_op_name, "session") == 0) {
@@ -1408,12 +1408,12 @@ irods::error db_mod_ticket_op(
 
 irods::error db_get_hierarchy_for_resc_op(irods::plugin_context& _ctx, const char* _resc_name, char** _hier) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_get_hierarchy_for_resc_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_get_hierarchy_for_resc_op");
         if (!_resc_name || !_hier) return ERROR(SYS_INVALID_INPUT_PARAM, "Null input");
         std::string hier;
         auto ret = g_catalog->get_hierarchy_for_resource(_resc_name, hier);
         if (ret.ok()) *_hier = strdup(hier.c_str());
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_get_hierarchy_for_resc_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_get_hierarchy_for_resc_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_get_hierarchy_for_resc_op EXCEPTION: %s", e.what());
@@ -1423,12 +1423,12 @@ irods::error db_get_hierarchy_for_resc_op(irods::plugin_context& _ctx, const cha
 
 irods::error db_update_resc_obj_count(irods::plugin_context& _ctx, const std::string* _resc_name, int _delta) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_update_resc_obj_count");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_update_resc_obj_count");
         if (!_resc_name) return ERROR(SYS_INVALID_INPUT_PARAM, "Null resource name");
         irods::catalog::snowflake_id_t rid = 0;
         if (!g_catalog->resolve_resource_name(*_resc_name, rid).ok()) return SUCCESS();
         auto ret = g_catalog->update_resource_object_count(rid, _delta);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_update_resc_obj_count SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_update_resc_obj_count SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_update_resc_obj_count EXCEPTION: %s", e.what());
@@ -1437,22 +1437,22 @@ irods::error db_update_resc_obj_count(irods::plugin_context& _ctx, const std::st
 }
 
 irods::error db_mod_resc_data_paths_op(irods::plugin_context& _ctx, const char* _resc, const char* _old_path, const char* _new_path, const char* _user) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_resc_data_paths_op resc [%s] old [%s] new [%s] user [%s]", safe_string(_resc).c_str(), safe_string(_old_path).c_str(), safe_string(_new_path).c_str(), safe_string(_user).c_str());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_resc_data_paths_op resc [%s] old [%s] new [%s] user [%s]", safe_string(_resc).c_str(), safe_string(_old_path).c_str(), safe_string(_new_path).c_str(), safe_string(_user).c_str());
     return SUCCESS();
 }
 
 irods::error db_mod_resc_freespace_op(irods::plugin_context& _ctx, const char* _resc, const char* _freespace) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_resc_freespace_op resc [%s] freespace [%s]", safe_string(_resc).c_str(), safe_string(_freespace).c_str());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_resc_freespace_op resc [%s] freespace [%s]", safe_string(_resc).c_str(), safe_string(_freespace).c_str());
     return SUCCESS();
 }
 
 // Identity
 irods::error db_reg_user_op(irods::plugin_context& _ctx, const irods::catalog::user& _user, irods::catalog::user_id_t* _out_id) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_user_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_user_op");
         if (!_out_id) return ERROR(SYS_INVALID_INPUT_PARAM, "null user_id_t pointer");
         auto ret = g_catalog->register_user(_user, *_out_id);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_user_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_user_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_user_op EXCEPTION: %s", e.what());
@@ -1462,7 +1462,7 @@ irods::error db_reg_user_op(irods::plugin_context& _ctx, const irods::catalog::u
 
 irods::error db_reg_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_user_re_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_user_re_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null userInfo_t");
         
         char userName2[NAME_LEN]{};
@@ -1496,7 +1496,7 @@ irods::error db_reg_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
             g_catalog->get_next_sequence_value("R_USER_MAIN", user.id);
         }
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_user_re_op: registering user [%s] type [%s] zone [%s] id [%lu]", user.name.c_str(), user.type.c_str(), user.zone.c_str(), user.id);
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: db_reg_user_re_op: registering user [%s] type [%s] zone [%s] id [%lu]", user.name.c_str(), user.type.c_str(), user.zone.c_str(), user.id);
         
         irods::catalog::user_id_t out_id;
         auto ret = g_catalog->register_user(user, out_id);
@@ -1510,7 +1510,7 @@ irods::error db_reg_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
             if (_info->rodsZone[0] == '\0') {
                 rstrcpy(_info->rodsZone, zoneToUse.c_str(), NAME_LEN);
             }
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_user_re_op SUCCESS");
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_user_re_op SUCCESS");
         } else {
             rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_user_re_op ERROR: %ld - %s", ret.code(), ret.result().c_str());
         }
@@ -1578,7 +1578,7 @@ static int decodePw(rsComm_t* rsComm, const char* in, char* out) {
 
 irods::error db_mod_user_op(irods::plugin_context& _ctx, const char* _user, const char* _option, const char* _value) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_user_op user [%s] opt [%s]", safe_string(_user).c_str(), safe_string(_option).c_str());
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_user_op user [%s] opt [%s]", safe_string(_user).c_str(), safe_string(_option).c_str());
         if (!_user || !_option || !_value) {
             return ERROR(SYS_INVALID_INPUT_PARAM, "null parameter in db_mod_user_op");
         }
@@ -1598,7 +1598,7 @@ irods::error db_mod_user_op(irods::plugin_context& _ctx, const char* _user, cons
         }
 
         auto ret = g_catalog->modify_user(safe_string(_user), opt, val);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_user_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_user_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_user_op EXCEPTION: %s", e.what());
@@ -1608,13 +1608,13 @@ irods::error db_mod_user_op(irods::plugin_context& _ctx, const char* _user, cons
 
 irods::error db_del_user_op(irods::plugin_context& _ctx, const char* _username) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_user_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_user_op");
         if (!_username) return ERROR(SYS_INVALID_INPUT_PARAM, "null username");
         char userName2[NAME_LEN]{};
         char zoneName[NAME_LEN]{};
         parseUserName(_username, userName2, zoneName);
         auto ret = g_catalog->delete_user(userName2, zoneName);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_user_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_user_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_user_op EXCEPTION: %s", e.what());
@@ -1624,7 +1624,7 @@ irods::error db_del_user_op(irods::plugin_context& _ctx, const char* _username) 
 
 irods::error db_del_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_user_re_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_user_re_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null userInfo_t");
 
         if (_ctx.comm()->clientUser.authInfo.authFlag < LOCAL_PRIV_USER_AUTH) {
@@ -1660,11 +1660,11 @@ irods::error db_del_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
             return ERROR(CAT_INVALID_USER, "invalid user");
         }
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: db_del_user_re_op: deleting user [%s#%s]", userName2, zoneToUse.c_str());
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: db_del_user_re_op: deleting user [%s#%s]", userName2, zoneToUse.c_str());
         
         auto ret = g_catalog->delete_user(userName2, zoneToUse);
         
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_user_re_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_user_re_op SUCCESS");
         return ret;
     } catch (const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_user_re_op EXCEPTION: %s", e.what());
@@ -1749,7 +1749,7 @@ irods::error db_check_auth_op(irods::plugin_context& _ctx, const char* _scheme, 
             }
 
             if (OK == 0) {
-                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_check_auth_op: Authentication failed for user [%s]", user_name.c_str());
+                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_check_auth_op: Authentication failed for user [%s]", user_name.c_str());
                 return ERROR(CAT_INVALID_AUTHENTICATION, "Authentication failed");
             }
         }
@@ -1773,7 +1773,7 @@ irods::error db_check_auth_op(irods::plugin_context& _ctx, const char* _scheme, 
 
 irods::error db_check_auth_credentials_op(irods::plugin_context& _ctx, const char* _username, const char* _zone, const char* _password, int* _correct) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_check_auth_credentials_op user [%s]", safe_string(_username).c_str());
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_auth_credentials_op user [%s]", safe_string(_username).c_str());
         if (!_username || !_zone || !_password || !_correct) {
             return ERROR(SYS_INVALID_INPUT_PARAM, "null parameter in db_check_auth_credentials_op");
         }
@@ -1786,7 +1786,7 @@ irods::error db_check_auth_credentials_op(irods::plugin_context& _ctx, const cha
         bool correct = false;
         auto ret = g_catalog->check_auth_credentials(safe_string(_username), safe_string(_zone), decoded_password, correct);
         *_correct = correct ? 1 : 0;
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_check_auth_credentials_op SUCCESS (correct=%d)", *_correct);
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_auth_credentials_op SUCCESS (correct=%d)", *_correct);
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_check_auth_credentials_op EXCEPTION: %s", e.what());
@@ -1801,7 +1801,7 @@ irods::error db_update_pam_password_op(irods::plugin_context& _ctx,
                                        char** _password_buffer,
                                        std::size_t _password_buffer_size) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_update_pam_password_op user [%s]", safe_string(_user_name).c_str());
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_update_pam_password_op user [%s]", safe_string(_user_name).c_str());
         if (!_user_name || !_password_buffer || !*_password_buffer) {
             return ERROR(CAT_INVALID_ARGUMENT, "null parameter in db_update_pam_password_op");
         }
@@ -1819,7 +1819,7 @@ irods::error db_update_pam_password_op(irods::plugin_context& _ctx,
         }
 
         std::strncpy(*_password_buffer, random_password.c_str(), _password_buffer_size);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_update_pam_password_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_update_pam_password_op SUCCESS");
         return SUCCESS();
     } catch (const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_update_pam_password_op EXCEPTION: %s", e.what());
@@ -1831,7 +1831,7 @@ irods::error db_make_temp_pw_op(irods::plugin_context& _ctx,
                                 char* _pw_value_to_hash,
                                 const char* _other_user) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_make_temp_pw_op other_user [%s]", safe_string(_other_user).c_str());
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_make_temp_pw_op other_user [%s]", safe_string(_other_user).c_str());
         if (!_pw_value_to_hash || !_other_user) {
             return ERROR(CAT_INVALID_ARGUMENT, "null parameter in db_make_temp_pw_op");
         }
@@ -1864,7 +1864,7 @@ irods::error db_make_temp_pw_op(irods::plugin_context& _ctx,
 
         g_catalog->modify_user(target_user, "password", newPw);
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_make_temp_pw_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_make_temp_pw_op SUCCESS");
         return SUCCESS();
     } catch (const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_make_temp_pw_op EXCEPTION: %s", e.what());
@@ -1876,7 +1876,7 @@ irods::error db_make_limited_pw_op(irods::plugin_context& _ctx,
                                    int _ttl,
                                    char* _pw_value_to_hash) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_make_limited_pw_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_make_limited_pw_op");
         if (!_pw_value_to_hash) {
             return ERROR(CAT_INVALID_ARGUMENT, "null parameter in db_make_limited_pw_op");
         }
@@ -1906,7 +1906,7 @@ irods::error db_make_limited_pw_op(irods::plugin_context& _ctx,
 
         g_catalog->modify_user(target_user, "password", newPw);
 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_make_limited_pw_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_make_limited_pw_op SUCCESS");
         return SUCCESS();
     } catch (const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_make_limited_pw_op EXCEPTION: %s", e.what());
@@ -1920,18 +1920,18 @@ irods::error db_mod_group_op(irods::plugin_context& _ctx, const char* _group, co
         const auto& config = irods::server_properties::instance().map().get_json();
         zone_str = config.at(KW_CFG_ZONE_NAME).get<std::string>();
     }
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_group_op group [%s] opt [%s] user [%s] zone [%s]", safe_string(_group).c_str(), safe_string(_option).c_str(), safe_string(_user).c_str(), zone_str.c_str());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_group_op group [%s] opt [%s] user [%s] zone [%s]", safe_string(_group).c_str(), safe_string(_option).c_str(), safe_string(_user).c_str(), zone_str.c_str());
     try {
         if (_option && std::string(_option) == "add") {
             auto ret = g_catalog->add_user_to_group(safe_string(_user), zone_str, safe_string(_group));
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_group_op SUCCESS");
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_group_op SUCCESS");
             return ret;
         } else if (_option && std::string(_option) == "remove") {
             auto ret = g_catalog->remove_user_from_group(safe_string(_user), zone_str, safe_string(_group));
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_group_op SUCCESS");
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_group_op SUCCESS");
             return ret;
         }
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_group_op SUCCESS (no opt)");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_group_op SUCCESS (no opt)");
         return SUCCESS();
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_group_op EXCEPTION: %s", e.what());
@@ -2026,7 +2026,7 @@ static irods::error check_avu_access(
     bool allowed = false;
     g_catalog->check_permission(usid, out_target_sid, safe_string(_req_level), allowed);
     if (!allowed) {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: check_avu_access: Access Denied for user [%s] on object [%s] with level [%s]",
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: check_avu_access: Access Denied for user [%s] on object [%s] with level [%s]",
                 user_name.c_str(), safe_string(_name).c_str(), safe_string(_req_level).c_str());
         return ERROR(CAT_NO_ACCESS_PERMISSION, "User does not have permission");
     }
@@ -2234,9 +2234,9 @@ irods::error db_set_avu_metadata_op(irods::plugin_context& _ctx, const char* _ty
 
 irods::error db_mod_access_control_op(irods::plugin_context& _ctx, int _recursive, const char* _access_level, const char* _user, const char* _zone, const char* _path) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_access_control_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_access_control_op");
         auto ret = g_catalog->set_access(safe_string(_user), safe_string(_zone), safe_string(_path), safe_string(_access_level), _recursive != 0);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_access_control_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_access_control_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_access_control_op EXCEPTION: %s", e.what());
@@ -2284,12 +2284,12 @@ irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context&
 }
 
 irods::error db_update_ticket_write_byte_count_op(irods::plugin_context& _ctx, rodsLong_t _data_id, rodsLong_t _bytes) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_update_ticket_write_byte_count_op id [%ld] bytes [%ld]", _data_id, _bytes);
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_update_ticket_write_byte_count_op id [%ld] bytes [%ld]", _data_id, _bytes);
     if (g_session_ticket[0] != '\0') {
         irods::catalog::snowflake_id_t dsid = g_catalog->make_id(irods::catalog::EntityType::DataObject, (uint64_t)_data_id);
         g_catalog->update_ticket_write_bytes(g_session_ticket, dsid, _bytes);
     }
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_update_ticket_write_byte_count_op SUCCESS");
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_update_ticket_write_byte_count_op SUCCESS");
     return SUCCESS();
 }
 
@@ -2395,7 +2395,7 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
 }
 
 irods::error db_get_delay_rule_info_op(irods::plugin_context& _ctx, const char* _rule_id, std::vector<std::string>* _out_info) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_get_delay_rule_info_op [%s]", safe_string(_rule_id).c_str());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_get_delay_rule_info_op [%s]", safe_string(_rule_id).c_str());
     if (!_rule_id || !_out_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null pointers");
     uint64_t id = 0;
     try { id = std::stoull(_rule_id); } catch (...) { return ERROR(SYS_INVALID_INPUT_PARAM, "invalid rule id"); }
@@ -2416,7 +2416,7 @@ irods::error db_get_delay_rule_info_op(irods::plugin_context& _ctx, const char* 
     _out_info->push_back(re.estimate);
     _out_info->push_back(re.notification_addr);
     _out_info->push_back(re.context);
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_get_delay_rule_info_op SUCCESS");
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_get_delay_rule_info_op SUCCESS");
     return SUCCESS();
 }
 
@@ -2456,48 +2456,48 @@ irods::error db_delay_rule_unlock_op(irods::plugin_context& _ctx, const char* _r
 }
 
 irods::error db_check_password_op(irods::plugin_context& _ctx, const char* _user, const char* _zone, const char* _password, int* _correct) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_check_password_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_password_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
     if (_correct) *_correct = 0;
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_check_password_op SUCCESS");
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_password_op SUCCESS");
     return SUCCESS();
 }
 
 irods::error db_make_session_token_op(irods::plugin_context& _ctx, const char* _user, const char* _zone, char* _token) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_make_session_token_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_make_session_token_op SUCCESS");
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_make_session_token_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_make_session_token_op SUCCESS");
     return SUCCESS();
 }
 
 irods::error db_check_session_token_op(irods::plugin_context& _ctx, const char* _user, const char* _zone, const char* _token, int* _correct) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_check_session_token_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_session_token_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
     if (_correct) *_correct = 0;
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_check_session_token_op SUCCESS");
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_session_token_op SUCCESS");
     return SUCCESS();
 }
 
 irods::error db_remove_session_tokens_op(irods::plugin_context& _ctx, const char* _user, const char* _zone) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_remove_session_tokens_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_remove_session_tokens_op SUCCESS");
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_remove_session_tokens_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_remove_session_tokens_op SUCCESS");
     return SUCCESS();
 }
 
 irods::error db_remove_password_op(irods::plugin_context& _ctx, const char* _user, const char* _zone) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_remove_password_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_remove_password_op SUCCESS");
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_remove_password_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_remove_password_op SUCCESS");
     return SUCCESS();
 }
 
 // Zones
 irods::error db_reg_zone_op(irods::plugin_context& _ctx, const char* _zone, const char* _type, const char* _conn, const char* _comment) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_zone_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_zone_op");
         irods::catalog::zone z;
         z.name = safe_string(_zone);
         z.type = safe_string(_type);
         z.connection = safe_string(_conn);
         z.comment = safe_string(_comment);
         auto ret = g_catalog->register_zone(z);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_zone_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_zone_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_zone_op EXCEPTION: %s", e.what());
@@ -2507,9 +2507,9 @@ irods::error db_reg_zone_op(irods::plugin_context& _ctx, const char* _zone, cons
 
 irods::error db_mod_zone_op(irods::plugin_context& _ctx, const char* _zone, const char* _prop, const char* _val) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_mod_zone_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_zone_op");
         auto ret = g_catalog->modify_zone(safe_string(_zone), safe_string(_prop), safe_string(_val));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_mod_zone_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_zone_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_zone_op EXCEPTION: %s", e.what());
@@ -2519,9 +2519,9 @@ irods::error db_mod_zone_op(irods::plugin_context& _ctx, const char* _zone, cons
 
 irods::error db_del_zone_op(irods::plugin_context& _ctx, const char* _zone) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_zone_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_zone_op");
         auto ret = g_catalog->delete_zone(safe_string(_zone));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_zone_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_zone_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_zone_op EXCEPTION: %s", e.what());
@@ -2532,9 +2532,9 @@ irods::error db_del_zone_op(irods::plugin_context& _ctx, const char* _zone) {
 // Token
 irods::error db_reg_token_op(irods::plugin_context& _ctx, const char* _name, const char* _value, const char* _namespace) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_token_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_token_op");
         auto ret = g_catalog->register_token(safe_string(_name), safe_string(_value), safe_string(_namespace));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_token_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_token_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_token_op EXCEPTION: %s", e.what());
@@ -2544,9 +2544,9 @@ irods::error db_reg_token_op(irods::plugin_context& _ctx, const char* _name, con
 
 irods::error db_del_token_op(irods::plugin_context& _ctx, const char* _name, const char* _namespace) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_token_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_token_op");
         auto ret = g_catalog->delete_token(safe_string(_name), safe_string(_namespace));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_token_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_token_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_token_op EXCEPTION: %s", e.what());
@@ -2557,9 +2557,9 @@ irods::error db_del_token_op(irods::plugin_context& _ctx, const char* _name, con
 // Quota
 irods::error db_set_quota_op(irods::plugin_context& _ctx, const char* _user, const char* _resc, rodsLong_t _limit) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_set_quota_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_set_quota_op");
         auto ret = g_catalog->set_quota(safe_string(_user), safe_string(_resc), _limit);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_set_quota_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_set_quota_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_set_quota_op EXCEPTION: %s", e.what());
@@ -2569,12 +2569,12 @@ irods::error db_set_quota_op(irods::plugin_context& _ctx, const char* _user, con
 
 irods::error db_check_quota_op(irods::plugin_context& _ctx, const char* _user, const char* _resc, rodsLong_t* _usage, int* _limit_exceeded) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_check_quota_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_quota_op");
         if (!_usage || !_limit_exceeded) return ERROR(SYS_INVALID_INPUT_PARAM, "Null inputs");
         int64_t usage = 0, limit = -1;
         auto ret = g_catalog->check_quota(safe_string(_user), safe_string(_resc), usage, limit);
         if (ret.ok()) { *_usage = usage; *_limit_exceeded = (limit >= 0 && usage > limit) ? 1 : 0; }
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_check_quota_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_quota_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_check_quota_op EXCEPTION: %s", e.what());
@@ -2585,14 +2585,14 @@ irods::error db_check_quota_op(irods::plugin_context& _ctx, const char* _user, c
 irods::error db_calc_usage_and_quota_op(irods::plugin_context& _ctx) { return SUCCESS(); }
 
 irods::error db_del_unused_avus_op(irods::plugin_context& _ctx) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_unused_avus_op");
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_unused_avus_op");
     return SUCCESS();
 }
 
 // Rules
 irods::error db_reg_rule_exec_op(irods::plugin_context& _ctx, ruleExecSubmitInp_t* _info) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_reg_rule_exec_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_rule_exec_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null ruleExecSubmitInp_t");
         irods::catalog::rule_exec re;
         re.id = 0; 
@@ -2617,7 +2617,7 @@ irods::error db_reg_rule_exec_op(irods::plugin_context& _ctx, ruleExecSubmitInp_
         uint64_t out_id = 0;
         auto ret = g_catalog->register_rule_execution(re, out_id);
         rstrcpy(_info->ruleExecId, std::to_string(re.id).c_str(), NAME_LEN);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_reg_rule_exec_op SUCCESS (id=%s, prio=%s, exeTime=%s)", _info->ruleExecId, re.priority.c_str(), re.exec_time.c_str());
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_rule_exec_op SUCCESS (id=%s, prio=%s, exeTime=%s)", _info->ruleExecId, re.priority.c_str(), re.exec_time.c_str());
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_rule_exec_op EXCEPTION: %s", e.what());
@@ -2627,10 +2627,10 @@ irods::error db_reg_rule_exec_op(irods::plugin_context& _ctx, ruleExecSubmitInp_
 
 irods::error db_del_rule_exec_op(irods::plugin_context& _ctx, const char* _rule_id) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_rule_exec_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_rule_exec_op");
         std::string rid_str = safe_string(_rule_id);
         auto ret = g_catalog->delete_rule_execution(rid_str.empty() ? 0 : std::stoull(rid_str));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_rule_exec_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_rule_exec_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_rule_exec_op EXCEPTION: %s", e.what());
@@ -2641,9 +2641,9 @@ irods::error db_del_rule_exec_op(irods::plugin_context& _ctx, const char* _rule_
 // Specific Query
 irods::error db_add_specific_query_op(irods::plugin_context& _ctx, const char* _alias, const char* _sql) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_add_specific_query_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_add_specific_query_op");
         auto ret = g_catalog->register_specific_query(safe_string(_alias), safe_string(_sql));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_add_specific_query_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_add_specific_query_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_add_specific_query_op EXCEPTION: %s", e.what());
@@ -2653,9 +2653,9 @@ irods::error db_add_specific_query_op(irods::plugin_context& _ctx, const char* _
 
 irods::error db_del_specific_query_op(irods::plugin_context& _ctx, const char* _alias) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_del_specific_query_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_specific_query_op");
         auto ret = g_catalog->delete_specific_query(safe_string(_alias));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_del_specific_query_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_specific_query_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_specific_query_op EXCEPTION: %s", e.what());
@@ -2669,13 +2669,13 @@ irods::error db_specific_query_op(
     genQueryOut_t*         _result)
 {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_specific_query_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_specific_query_op");
         if (!_spec_query_inp || !_result) {
             return ERROR(CAT_INVALID_ARGUMENT, "null parameter in db_specific_query_op");
         }
 
         std::string sql_str = safe_string(_spec_query_inp->sql);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: db_specific_query_op: query [%s]", sql_str.c_str());
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: db_specific_query_op: query [%s]", sql_str.c_str());
 
         bool is_show_coll_acls = (sql_str == "ShowCollAcls" ||
                                   sql_str.find("ShowCollAcls") != std::string::npos ||
@@ -2685,7 +2685,7 @@ irods::error db_specific_query_op(
             bool has_query = false;
             g_catalog->has_specific_query("ShowCollAcls", has_query);
             if (!has_query) {
-                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_specific_query_op: ShowCollAcls not found in catalog");
+                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_specific_query_op: ShowCollAcls not found in catalog");
                 return ERROR(CAT_UNKNOWN_SPECIFIC_QUERY, "unknown query: ShowCollAcls");
             }
 
@@ -2697,7 +2697,7 @@ irods::error db_specific_query_op(
             std::vector<irods::catalog::AclEntry> acls;
             auto ret = g_catalog->get_collection_acls(coll_name, acls);
             if (!ret.ok()) {
-                rodsLog(LOG_NOTICE, "L3_PLUGIN: db_specific_query_op: get_collection_acls failed: %s", ret.result().c_str());
+                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_specific_query_op: get_collection_acls failed: %s", ret.result().c_str());
                 return ret;
             }
 
@@ -2725,7 +2725,7 @@ irods::error db_specific_query_op(
                 std::strncpy(&_result->sqlResult[3].value[r * col_len], entry.user_type.c_str(), col_len - 1);
             }
 
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_specific_query_op SUCCESS (%d rows)", _result->rowCnt);
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_specific_query_op SUCCESS (%d rows)", _result->rowCnt);
             return SUCCESS();
         }
 
@@ -2733,7 +2733,7 @@ irods::error db_specific_query_op(
         bool has_query = false;
         g_catalog->has_specific_query(sql_str, has_query);
         if (!has_query) {
-            rodsLog(LOG_NOTICE, "L3_PLUGIN: db_specific_query_op: unknown query [%s]", sql_str.c_str());
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_specific_query_op: unknown query [%s]", sql_str.c_str());
             return ERROR(CAT_UNKNOWN_SPECIFIC_QUERY, "unknown query: " + sql_str);
         }
 
@@ -2742,7 +2742,7 @@ irods::error db_specific_query_op(
         _result->attriCnt = 0;
         _result->continueInx = 0;
         _result->totalRowCount = 0;
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_specific_query_op (0 rows)");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_specific_query_op (0 rows)");
         return ERROR(CAT_NO_ROWS_FOUND, "CAT_NO_ROWS_FOUND");
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_specific_query_op EXCEPTION: %s", e.what());
@@ -2753,9 +2753,9 @@ irods::error db_specific_query_op(
 // Logical Quota
 irods::error db_set_logical_quota_op(irods::plugin_context& _ctx, const char* _coll_name, rodsLong_t _limit) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_set_logical_quota_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_set_logical_quota_op");
         auto ret = g_catalog->set_logical_quota(safe_string(_coll_name), _limit);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_set_logical_quota_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_set_logical_quota_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_set_logical_quota_op EXCEPTION: %s", e.what());
@@ -2765,12 +2765,12 @@ irods::error db_set_logical_quota_op(irods::plugin_context& _ctx, const char* _c
 
 irods::error db_check_logical_quota_op(irods::plugin_context& _ctx, const char* _coll_name, std::vector<std::tuple<std::string, std::int64_t, std::int64_t, std::int64_t, std::int64_t>>* _quota_values) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_check_logical_quota_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_logical_quota_op");
         if (!_coll_name || !_quota_values) return ERROR(SYS_INVALID_INPUT_PARAM, "Null inputs");
         int64_t usage = 0, limit = -1;
         auto ret = g_catalog->check_logical_quota(safe_string(_coll_name), usage, limit);
         if (ret.ok()) _quota_values->push_back(std::make_tuple(safe_string(_coll_name), usage, limit, 0, 0));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_check_logical_quota_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_logical_quota_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_check_logical_quota_op EXCEPTION: %s", e.what());
@@ -2780,12 +2780,12 @@ irods::error db_check_logical_quota_op(irods::plugin_context& _ctx, const char* 
 
 irods::error db_calc_logical_usage_and_quota_op(irods::plugin_context& _ctx, const char* _coll_name, rodsLong_t* _usage, rodsLong_t* _limit) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_calc_logical_usage_and_quota_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_calc_logical_usage_and_quota_op");
         int64_t usage = 0, limit = -1;
         auto ret = g_catalog->calculate_logical_usage(safe_string(_coll_name), usage);
         if (ret.ok()) ret = g_catalog->check_logical_quota(safe_string(_coll_name), usage, limit);
         if (_usage) *_usage = usage; if (_limit) *_limit = limit;
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_calc_logical_usage_and_quota_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_calc_logical_usage_and_quota_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_calc_logical_usage_and_quota_op EXCEPTION: %s", e.what());
@@ -2800,11 +2800,11 @@ irods::error db_purge_server_load_op(irods::plugin_context& _ctx, const char* _h
 // Grid Config
 irods::error db_set_grid_configuration_value_op(irods::plugin_context& _ctx, const char* _ns, const char* _name, const char* _value) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_set_grid_configuration_value_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_set_grid_configuration_value_op");
         if (auto ret = init_l3kvg_catalog(); !ret.ok()) return ret;
         std::string full_name = safe_string(_ns) + ":" + safe_string(_name);
         auto ret = g_catalog->set_grid_configuration_value(full_name, safe_string(_value));
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_set_grid_configuration_value_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_set_grid_configuration_value_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_set_grid_configuration_value_op EXCEPTION: %s", e.what());
@@ -2814,13 +2814,13 @@ irods::error db_set_grid_configuration_value_op(irods::plugin_context& _ctx, con
 
 irods::error db_get_grid_configuration_value_op(irods::plugin_context& _ctx, const char* _ns, const char* _name, char* _value, std::size_t _value_buf_size) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_get_grid_configuration_value_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_get_grid_configuration_value_op");
         if (auto ret = init_l3kvg_catalog(); !ret.ok()) return ret;
         std::string val;
         std::string full_name = safe_string(_ns) + ":" + safe_string(_name);
         auto ret = g_catalog->get_grid_configuration_value(full_name, val);
         if (ret.ok()) strncpy(_value, val.c_str(), _value_buf_size - 1);
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_get_grid_configuration_value_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_get_grid_configuration_value_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_get_grid_configuration_value_op EXCEPTION: %s", e.what());
@@ -2836,11 +2836,11 @@ namespace irods::catalog::bridge {
 
 // GenQuery
 irods::error db_get_catalog_version_op(irods::plugin_context& _ctx, int* _version) {
-    rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_get_catalog_version_op");
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_get_catalog_version_op");
     try {
         if (!_version) return ERROR(SYS_INVALID_INPUT_PARAM, "Null version pointer");
         *_version = 2; 
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_get_catalog_version_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_get_catalog_version_op SUCCESS");
         return SUCCESS();
 
     } catch(const std::exception& e) {
@@ -2851,11 +2851,11 @@ irods::error db_get_catalog_version_op(irods::plugin_context& _ctx, int* _versio
 
 irods::error db_initialize_catalog_op(irods::plugin_context& _ctx) {
     try {
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_initialize_catalog_op");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_initialize_catalog_op");
         if (auto ret = init_l3kvg_catalog(); !ret.ok()) return ret;
         const auto& config = irods::server_properties::instance().map().get_json();
         auto ret = g_catalog->bootstrap_catalog(config.at(KW_CFG_ZONE_NAME).get<std::string>(), config.at(KW_CFG_ZONE_USER).get<std::string>());
-        rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_initialize_catalog_op SUCCESS");
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_initialize_catalog_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_initialize_catalog_op EXCEPTION: %s", e.what());

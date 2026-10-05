@@ -967,9 +967,6 @@ namespace irods::catalog::compiler {
                 has_collection = true;
             }
         }
-        if (has_data_object) {
-            add_target_type("Replica");
-        }
 
         // 5. Security & Permission filtering
         size_t filters_ofs = qbuf.set_arr(0, "filters");
