@@ -14,6 +14,7 @@
 #include <mutex>
 #include <regex>
 #include <cstring>
+#include <algorithm>
 #include "irods/catalog/binary_key.hpp"
 #include "buffer.hpp"
 #include "L3KVG/MutationBatch.hpp"
@@ -43,6 +44,10 @@ namespace irods::catalog::test {
 
         MockL3KVGServer(const std::string& endpoint) 
             : endpoint_(endpoint), ctx_(1), socket_(ctx_, zmq::socket_type::router), running_(false) {}
+
+        ~MockL3KVGServer() {
+            stop();
+        }
 
         void start() {
             socket_.bind(endpoint_);
@@ -74,13 +79,23 @@ namespace irods::catalog::test {
                         }
                         (void)principal_id;
 
-                        if (data_idx >= msgs.size()) continue;
+                        if (data_idx >= msgs.size()) {
+                            socket_.send(msgs[0], zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                            socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
+                            continue;
+                        }
 
                         std::string cmd = msgs[data_idx].to_string(); data_idx++;
-                        std::string key = (data_idx < msgs.size()) ? msgs[data_idx].to_string() : "";
                         
                         if (cmd == "P") {
-                            if (msgs.size() < data_idx + 2) continue;
+                            if (msgs.size() < data_idx + 2) {
+                                socket_.send(msgs[0], zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
+                                continue;
+                            }
+                            std::string key = msgs[data_idx].to_string();
                             std::string payload = msgs[data_idx + 1].to_string();
                             std::lock_guard<std::mutex> lock(mu_);
                             
@@ -117,7 +132,12 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "D") {
-                            if (msgs.size() < data_idx + 1) continue;
+                            if (msgs.size() < data_idx + 1) {
+                                socket_.send(msgs[0], zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
+                                continue;
+                            }
                             std::string key = msgs[data_idx].to_string();
                             std::lock_guard<std::mutex> lock(mu_);
                             
@@ -161,7 +181,12 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "B") {
-                            if (msgs.size() < data_idx + 1) continue;
+                            if (msgs.size() < data_idx + 1) {
+                                socket_.send(msgs[0], zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
+                                continue;
+                            }
                             const auto& payload_msg = msgs[data_idx];
                             lite3cpp::Buffer buf(std::vector<uint8_t>(
                                 static_cast<const uint8_t*>(payload_msg.data()),
@@ -203,7 +228,7 @@ namespace irods::catalog::test {
                                     case l3kvg::MutationOp::DelEdge: {
                                         auto it = nodes_.find(item.src);
                                         if (it != nodes_.end()) {
-                                            auto& edges = it->second.edges;
+                                             auto& edges = it->second.edges;
                                             edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const auto& e) {
                                                 return e.first == item.label && e.second == item.dst;
                                             }), edges.end());
@@ -217,7 +242,12 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "G") {
-                            if (msgs.size() < data_idx + 1) continue;
+                            if (msgs.size() < data_idx + 1) {
+                                socket_.send(msgs[0], zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
+                                continue;
+                            }
                             std::string key = msgs[data_idx].to_string();
                             std::string payload = "";
                             {
@@ -248,7 +278,12 @@ namespace irods::catalog::test {
                             std::cerr << "[MockServer] Sent Payload for [" << key << "]" << std::endl;
                             continue;
                         } else if (cmd == "N") {
-                            if (msgs.size() < data_idx + 2) continue;
+                            if (msgs.size() < data_idx + 2) {
+                                socket_.send(msgs[0], zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
+                                continue;
+                            }
                             uint64_t id = 0;
                             try { id = std::stoull(msgs[data_idx].to_string(), nullptr, 16); } catch (...) {}
                             std::string label = msgs[data_idx + 1].to_string();
@@ -275,7 +310,12 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t(j.dump()), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "I") {
-                            if (msgs.size() < data_idx + 2) continue;
+                            if (msgs.size() < data_idx + 2) {
+                                socket_.send(msgs[0], zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                                socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
+                                continue;
+                            }
                             uint64_t id = 0;
                             try { id = std::stoull(msgs[data_idx].to_string(), nullptr, 16); } catch (...) {}
                             std::string label = msgs[data_idx + 1].to_string();
@@ -303,10 +343,15 @@ namespace irods::catalog::test {
                         } else if (cmd == "H") {
                              socket_.send(msgs[0], zmq::send_flags::sndmore);
                              socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
-                             socket_.send(zmq::message_t(), zmq::send_flags::none);
+                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
                              continue;
                         } else if (cmd == "R") {
-                             if (msgs.size() < data_idx + 2) continue;
+                             if (msgs.size() < data_idx + 2) {
+                                 socket_.send(msgs[0], zmq::send_flags::sndmore);
+                                 socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                                 socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
+                                 continue;
+                             }
                              std::string query_json = msgs[data_idx + 1].to_string();
                              nlohmann::json q = nlohmann::json::parse(query_json);
                              
@@ -389,7 +434,12 @@ namespace irods::catalog::test {
                              socket_.send(zmq::message_t(results.dump()), zmq::send_flags::none);
                              continue;
                         } else if (cmd == "+") {
-                             if (msgs.size() < data_idx + 2) continue;
+                             if (msgs.size() < data_idx + 2) {
+                                 socket_.send(msgs[0], zmq::send_flags::sndmore);
+                                 socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                                 socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
+                                 continue;
+                             }
                              std::string key = msgs[data_idx].to_string();
                              int64_t delta = 1;
                              try { delta = std::stoll(msgs[data_idx + 1].to_string()); } catch (...) {}
@@ -436,9 +486,11 @@ namespace irods::catalog::test {
             return nodes_.find(id) != nodes_.end();
         }
         
-        const MockNode& get_node(uint64_t id) const {
+        MockNode get_node(uint64_t id) const {
             std::lock_guard<std::mutex> lock(mu_);
-            return nodes_.at(id);
+            auto it = nodes_.find(id);
+            if (it != nodes_.end()) return it->second;
+            return MockNode{};
         }
 
         std::string get_generic_value(const std::string& key) const {
