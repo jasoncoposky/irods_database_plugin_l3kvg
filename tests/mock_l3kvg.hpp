@@ -399,7 +399,7 @@ namespace irods::catalog::test {
                                  std::function<bool(size_t, std::string_view)> eval_filter_group = [&](size_t filter_arr_ofs, std::string_view group_type) -> bool {
                                      lite3cpp::NodeView arr_nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(q.data() + filter_arr_ofs));
                                      bool is_or = (group_type == "or");
-                                     if (arr_nv.size() == 0) return true;
+                                     if (arr_nv.size() == 0) return !is_or;
                                      for (uint32_t i = 0; i < arr_nv.size(); ++i) {
                                          if (q.arr_get_type(filter_arr_ofs, i) != lite3cpp::Type::Object) continue;
                                          size_t f_ofs = q.arr_get_obj(filter_arr_ofs, i);

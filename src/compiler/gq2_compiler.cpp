@@ -746,9 +746,9 @@ namespace irods::catalog::compiler {
                      std::string col_name;
                      if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) col_name = col->name;
                      else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) col_name = func->name;
-                     auto it = COLUMN_NAME_MAP.find(col_name);
-                     if (it != COLUMN_NAME_MAP.end()) {
-                         std::string t = std::string(it->second.node_type);
+                     const auto* gm = find_column_mapping(col_name);
+                     if (gm) {
+                         std::string t = std::string(gm->node_type);
                          if (col_name.rfind("DATA_ACCESS_", 0) == 0 || col_name.rfind("DATA_", 0) == 0) t = "DataObject";
                          else if (col_name.rfind("COLL_ACCESS_", 0) == 0 || col_name.rfind("COLL_", 0) == 0) t = "Collection";
                          else if (t == "CollUser" || t == "CollAccess") t = "Collection";
@@ -788,9 +788,9 @@ namespace irods::catalog::compiler {
                         std::string operator()(const irods::experimental::genquery2::column& col) const {
                             if (col.name.rfind("DATA_ACCESS_", 0) == 0 || col.name.rfind("DATA_", 0) == 0) return "DataObject";
                             if (col.name.rfind("COLL_ACCESS_", 0) == 0 || col.name.rfind("COLL_", 0) == 0) return "Collection";
-                            auto it = COLUMN_NAME_MAP.find(col.name);
-                            if (it != COLUMN_NAME_MAP.end()) {
-                                std::string t(it->second.node_type);
+                            const auto* gm = find_column_mapping(col.name);
+                            if (gm) {
+                                std::string t(gm->node_type);
                                 if (t == "CollUser" || t == "CollAccess") return "Collection";
                                 if (t == "Access" || t == "Replica") return "DataObject";
                                 return t;
@@ -802,9 +802,9 @@ namespace irods::catalog::compiler {
                                  if (auto* col = std::get_if<irods::experimental::genquery2::column>(&arg)) {
                                      if (col->name.rfind("DATA_ACCESS_", 0) == 0 || col->name.rfind("DATA_", 0) == 0) return "DataObject";
                                      if (col->name.rfind("COLL_ACCESS_", 0) == 0 || col->name.rfind("COLL_", 0) == 0) return "Collection";
-                                     auto it = COLUMN_NAME_MAP.find(col->name);
-                                     if (it != COLUMN_NAME_MAP.end()) {
-                                         std::string t(it->second.node_type);
+                                     const auto* gm = find_column_mapping(col->name);
+                                     if (gm) {
+                                         std::string t(gm->node_type);
                                          if (t == "CollUser" || t == "CollAccess") return "Collection";
                                          if (t == "Access" || t == "Replica") return "DataObject";
                                          return t;
