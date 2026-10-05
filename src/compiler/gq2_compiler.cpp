@@ -9,14 +9,13 @@
 #include <stdexcept>
 #include <type_traits>
 #include <algorithm>
-#include <nlohmann/json.hpp>
+#include "buffer.hpp"
 #include <boost/variant.hpp>
 #include <boost/algorithm/string.hpp>
 #include "irods/rodsGenQuery.h"
 
 namespace irods::catalog::compiler {
 
-    using json = nlohmann::json;
     namespace gq2 = irods::experimental::genquery2;
     using Direction = Gq2ToL3kvgCompiler::PathStep::Direction;
 
@@ -486,8 +485,54 @@ namespace irods::catalog::compiler {
 
     struct condition_visitor : public boost::static_visitor<void> {
         Gq2ToL3kvgCompiler* compiler;
-        json& j_filters;
-        condition_visitor(Gq2ToL3kvgCompiler* c, json& jf) : compiler(c), j_filters(jf) {}
+        lite3cpp::Buffer& buf;
+        size_t arr_ofs;
+        condition_visitor(Gq2ToL3kvgCompiler* c, lite3cpp::Buffer& b, size_t a) : compiler(c), buf(b), arr_ofs(a) {}
+
+        static void append_filter(lite3cpp::Buffer& b, size_t a_ofs, std::string_view alias, std::string_view key, int64_t op, std::string_view val, std::string_view prepended_op = "") {
+            size_t f_ofs = b.arr_append_obj(a_ofs);
+            b.set_str(f_ofs, "alias", alias);
+            b.set_str(f_ofs, "key", key);
+            b.set_i64(f_ofs, "op", op);
+            b.set_str(f_ofs, "value", val);
+            if (!prepended_op.empty()) {
+                b.set_str(f_ofs, "prepended_op", prepended_op);
+            }
+        }
+
+        static void copy_filter_element(const lite3cpp::Buffer& src, size_t src_arr_ofs, uint32_t src_idx,
+                                        lite3cpp::Buffer& dst, size_t dst_arr_ofs,
+                                        std::string_view override_prepended_op = "") {
+            if (src.arr_get_type(src_arr_ofs, src_idx) != lite3cpp::Type::Object) return;
+            size_t s_ofs = src.arr_get_obj(src_arr_ofs, src_idx);
+            size_t d_ofs = dst.arr_append_obj(dst_arr_ofs);
+            if (src.get_type(s_ofs, "group") != lite3cpp::Type::Invalid) {
+                dst.set_str(d_ofs, "group", src.get_str(s_ofs, "group"));
+                if (!override_prepended_op.empty()) {
+                    dst.set_str(d_ofs, "prepended_op", override_prepended_op);
+                } else if (src.get_type(s_ofs, "prepended_op") == lite3cpp::Type::String) {
+                    dst.set_str(d_ofs, "prepended_op", src.get_str(s_ofs, "prepended_op"));
+                }
+                if (src.get_type(s_ofs, "filters") == lite3cpp::Type::Array) {
+                    size_t src_sub_arr = src.get_arr(s_ofs, "filters");
+                    size_t dst_sub_arr = dst.set_arr(d_ofs, "filters");
+                    lite3cpp::NodeView sub_nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(src.data() + src_sub_arr));
+                    for (uint32_t i = 0; i < sub_nv.size(); ++i) {
+                        copy_filter_element(src, src_sub_arr, i, dst, dst_sub_arr);
+                    }
+                }
+            } else {
+                if (src.get_type(s_ofs, "alias") == lite3cpp::Type::String) dst.set_str(d_ofs, "alias", src.get_str(s_ofs, "alias"));
+                if (src.get_type(s_ofs, "key") == lite3cpp::Type::String) dst.set_str(d_ofs, "key", src.get_str(s_ofs, "key"));
+                if (src.get_type(s_ofs, "op") == lite3cpp::Type::Int64) dst.set_i64(d_ofs, "op", src.get_i64(s_ofs, "op"));
+                if (src.get_type(s_ofs, "value") == lite3cpp::Type::String) dst.set_str(d_ofs, "value", src.get_str(s_ofs, "value"));
+                if (!override_prepended_op.empty()) {
+                    dst.set_str(d_ofs, "prepended_op", override_prepended_op);
+                } else if (src.get_type(s_ofs, "prepended_op") == lite3cpp::Type::String) {
+                    dst.set_str(d_ofs, "prepended_op", src.get_str(s_ofs, "prepended_op"));
+                }
+            }
+        }
 
         void operator()(const irods::experimental::genquery2::condition& c) const {
             std::string col_name;
@@ -520,66 +565,83 @@ namespace irods::catalog::compiler {
                     return;
                 }
                 if (in_expr->list_of_string_literals.size() == 1) {
-                    j_filters.push_back({{"alias", node_type}, {"key", bson_key}, {"op", 0}, {"value", in_expr->list_of_string_literals[0]}});
+                    append_filter(buf, arr_ofs, node_type, bson_key, 0, in_expr->list_of_string_literals[0]);
                 } else {
-                    json in_or = json::array();
+                    size_t grp_ofs = buf.arr_append_obj(arr_ofs);
+                    buf.set_str(grp_ofs, "group", "or");
+                    buf.set_str(grp_ofs, "prepended_op", "and");
+                    size_t in_or = buf.set_arr(grp_ofs, "filters");
                     for (size_t idx = 0; idx < in_expr->list_of_string_literals.size(); ++idx) {
-                        json f = {{"alias", node_type}, {"key", bson_key}, {"op", 0}, {"value", in_expr->list_of_string_literals[idx]}};
-                        if (idx > 0) {
-                            f["prepended_op"] = "or";
-                        }
-                        in_or.push_back(f);
+                        append_filter(buf, in_or, node_type, bson_key, 0, in_expr->list_of_string_literals[idx], idx > 0 ? "or" : "");
                     }
-                    j_filters.push_back({{"group", "or"}, {"filters", in_or}, {"prepended_op", "and"}});
                 }
                 return;
             }
 
             if (auto* bet_expr = boost::get<irods::experimental::genquery2::condition_between>(&c.expression)) {
-                json bet_and = json::array();
-                bet_and.push_back({{"alias", node_type}, {"key", bson_key}, {"op", 3 /* >= */}, {"value", bet_expr->low}});
-                bet_and.push_back({{"alias", node_type}, {"key", bson_key}, {"op", 5 /* <= */}, {"value", bet_expr->high}, {"prepended_op", "and"}});
-                j_filters.push_back({{"group", "and"}, {"filters", bet_and}, {"prepended_op", "and"}});
+                size_t grp_ofs = buf.arr_append_obj(arr_ofs);
+                buf.set_str(grp_ofs, "group", "and");
+                buf.set_str(grp_ofs, "prepended_op", "and");
+                size_t bet_and = buf.set_arr(grp_ofs, "filters");
+                append_filter(buf, bet_and, node_type, bson_key, 3 /* >= */, bet_expr->low);
+                append_filter(buf, bet_and, node_type, bson_key, 5 /* <= */, bet_expr->high, "and");
                 return;
             }
 
             pc_visitor pcv;
             auto pc = boost::apply_visitor(pcv, c.expression);
             if (node_type == "Access" && bson_key == "t" && pc.second == "access_type" && pc.first == 0) {
-                json or_filters = json::array();
-                or_filters.push_back({{"alias", node_type}, {"key", bson_key}, {"op", pc.first}, {"value", "access_type"}});
-                or_filters.push_back({{"alias", node_type}, {"key", bson_key}, {"op", pc.first}, {"value", "access"}, {"prepended_op", "or"}});
-                j_filters.push_back({{"group", "or"}, {"filters", or_filters}, {"prepended_op", "and"}});
+                size_t grp_ofs = buf.arr_append_obj(arr_ofs);
+                buf.set_str(grp_ofs, "group", "or");
+                buf.set_str(grp_ofs, "prepended_op", "and");
+                size_t or_filters = buf.set_arr(grp_ofs, "filters");
+                append_filter(buf, or_filters, node_type, bson_key, pc.first, "access_type");
+                append_filter(buf, or_filters, node_type, bson_key, pc.first, "access", "or");
                 return;
             }
-            j_filters.push_back({{"alias", node_type}, {"key", bson_key}, {"op", pc.first}, {"value", pc.second}});
+            append_filter(buf, arr_ofs, node_type, bson_key, pc.first, pc.second);
         }
 
         void operator()(const irods::experimental::genquery2::logical_and& l) const { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
         void operator()(const irods::experimental::genquery2::logical_or& l) const {
-            json branch_filters = json::array();
+            lite3cpp::Buffer branch_buf;
+            branch_buf.init_array();
+            condition_visitor sub_vis(compiler, branch_buf, 0);
             for (const auto& c : l.condition) {
-                condition_visitor sub_vis(compiler, branch_filters);
                 boost::apply_visitor(sub_vis, c);
             }
-            if (branch_filters.empty()) return;
-            if (branch_filters.size() == 1) {
-                j_filters.push_back(branch_filters[0]);
+            if (branch_buf.size() < sizeof(lite3cpp::PackedNodeLayout)) return;
+            lite3cpp::NodeView bnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(branch_buf.data()));
+            if (bnv.size() == 0) return;
+            if (bnv.size() == 1) {
+                copy_filter_element(branch_buf, 0, 0, buf, arr_ofs);
             } else {
-                for (size_t idx = 1; idx < branch_filters.size(); ++idx) {
-                    branch_filters[idx]["prepended_op"] = "or";
+                size_t grp_ofs = buf.arr_append_obj(arr_ofs);
+                buf.set_str(grp_ofs, "group", "or");
+                buf.set_str(grp_ofs, "prepended_op", "and");
+                size_t or_arr = buf.set_arr(grp_ofs, "filters");
+                for (uint32_t idx = 0; idx < bnv.size(); ++idx) {
+                    copy_filter_element(branch_buf, 0, idx, buf, or_arr, idx > 0 ? "or" : "");
                 }
-                j_filters.push_back({{"group", "or"}, {"filters", branch_filters}, {"prepended_op", "and"}});
             }
         }
         void operator()(const irods::experimental::genquery2::logical_grouping& l) const {
-            json grp_filters = json::array();
+            lite3cpp::Buffer grp_buf;
+            grp_buf.init_array();
+            condition_visitor sub_vis(compiler, grp_buf, 0);
             for(const auto& c : l.conditions) {
-                condition_visitor sub_vis(compiler, grp_filters);
                 boost::apply_visitor(sub_vis, c);
             }
-            if (!grp_filters.empty()) {
-                j_filters.push_back({{"group", "and"}, {"filters", grp_filters}, {"prepended_op", "and"}});
+            if (grp_buf.size() < sizeof(lite3cpp::PackedNodeLayout)) return;
+            lite3cpp::NodeView gnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(grp_buf.data()));
+            if (gnv.size() > 0) {
+                size_t grp_ofs = buf.arr_append_obj(arr_ofs);
+                buf.set_str(grp_ofs, "group", "and");
+                buf.set_str(grp_ofs, "prepended_op", "and");
+                size_t sub_arr = buf.set_arr(grp_ofs, "filters");
+                for (uint32_t i = 0; i < gnv.size(); ++i) {
+                    copy_filter_element(grp_buf, 0, i, buf, sub_arr);
+                }
             }
         }
         void operator()(const irods::experimental::genquery2::logical_not& l) const { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
@@ -587,9 +649,10 @@ namespace irods::catalog::compiler {
 
     struct projection_visitor : public boost::static_visitor<void> {
         Gq2ToL3kvgCompiler* compiler;
-        json& j_projs;
+        lite3cpp::Buffer& buf;
+        size_t projs_arr_ofs;
         mutable int col_idx = 0;
-        projection_visitor(Gq2ToL3kvgCompiler* c, json& jp) : compiler(c), j_projs(jp) {}
+        projection_visitor(Gq2ToL3kvgCompiler* c, lite3cpp::Buffer& b, size_t p) : compiler(c), buf(b), projs_arr_ofs(p) {}
 
         void operator()(const irods::experimental::genquery2::column& col) const {
             if (col.name.rfind("DATA_ACCESS_", 0) == 0 && col.name != "DATA_ACCESS_TIME" && col.name != "DATA_ACCESS_DATA_ID") {
@@ -602,7 +665,11 @@ namespace irods::catalog::compiler {
             auto it = COLUMN_NAME_MAP.find(col.name);
             if (it != COLUMN_NAME_MAP.end()) {
                 compiler->add_target_type(it->second.node_type);
-                j_projs.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"agg", 0}, {"as", "idx_" + std::to_string(col_idx++)}});
+                size_t p_ofs = buf.arr_append_obj(projs_arr_ofs);
+                buf.set_str(p_ofs, "alias", it->second.node_type);
+                buf.set_str(p_ofs, "property", it->second.bson_key);
+                buf.set_i64(p_ofs, "agg", 0);
+                buf.set_str(p_ofs, "as", "idx_" + std::to_string(col_idx++));
             } else {
                 throw std::invalid_argument("Unknown column: " + col.name);
             }
@@ -629,7 +696,12 @@ namespace irods::catalog::compiler {
                     auto it = COLUMN_NAME_MAP.find(col->name);
                     if (it != COLUMN_NAME_MAP.end()) {
                         compiler->add_target_type(it->second.node_type);
-                        j_projs.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"agg", agg}, {"distinct", func.distinct}, {"as", "idx_" + std::to_string(col_idx++)}});
+                        size_t p_ofs = buf.arr_append_obj(projs_arr_ofs);
+                        buf.set_str(p_ofs, "alias", it->second.node_type);
+                        buf.set_str(p_ofs, "property", it->second.bson_key);
+                        buf.set_i64(p_ofs, "agg", agg);
+                        buf.set_bool(p_ofs, "distinct", func.distinct);
+                        buf.set_str(p_ofs, "as", "idx_" + std::to_string(col_idx++));
                     } else {
                         throw std::invalid_argument("Unknown column: " + col->name);
                     }
@@ -642,7 +714,7 @@ namespace irods::catalog::compiler {
         std::string normalize_entity_type(std::string_view raw);
     }
 
-    std::string Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias, const irods::experimental::genquery2::options* opts) {
+    lite3cpp::Buffer Gq2ToL3kvgCompiler::compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias, const irods::experimental::genquery2::options* opts) {
         rodsLog(LOG_NOTICE, "L3_COMPILER: Entering compile()");
 
         if (!override_root_alias.empty()) {
@@ -741,23 +813,28 @@ namespace irods::catalog::compiler {
         }
         rodsLog(LOG_NOTICE, "L3_COMPILER: Final root alias: %s", entry_node_type_.c_str());
 
-        json j;
-        // 1. Collect all target node types from projections and filters
-        json j_projs = json::array();
-        projection_visitor pv(this, j_projs);
+        lite3cpp::Buffer qbuf;
+        qbuf.init_object();
+        qbuf.set_str(0, "root_alias", entry_node_type_);
+
+        // 1. Projections
+        size_t projs_ofs = qbuf.set_arr(0, "projections");
+        projection_visitor pv(this, qbuf, projs_ofs);
         for (const auto& p : ast.projections) {
             boost::apply_visitor(pv, p);
         }
 
-        json j_filters = json::array();
-        condition_visitor cv(this, j_filters);
+        // Filters
+        lite3cpp::Buffer raw_filters_buf;
+        raw_filters_buf.init_array();
+        condition_visitor cv(this, raw_filters_buf, 0);
         for(const auto& w : ast.conditions) {
             boost::apply_visitor(cv, w);
         }
 
-        // 2. Collect targets from group_by
+        // 2. Groups
         if (!ast.group_by.expressions.empty()) {
-            json j_groups = json::array();
+            size_t groups_ofs = qbuf.set_arr(0, "groups");
             for (const auto& expr : ast.group_by.expressions) {
                 if (const auto* col = std::get_if<irods::experimental::genquery2::column>(&expr)) {
                     auto it = COLUMN_NAME_MAP.find(col->name);
@@ -765,7 +842,9 @@ namespace irods::catalog::compiler {
                         throw std::invalid_argument("Unknown column: " + col->name);
                     }
                     add_target_type(it->second.node_type);
-                    j_groups.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}});
+                    size_t g_ofs = qbuf.arr_append_obj(groups_ofs);
+                    qbuf.set_str(g_ofs, "alias", it->second.node_type);
+                    qbuf.set_str(g_ofs, "property", it->second.bson_key);
                 } else if (const auto* func = std::get_if<irods::experimental::genquery2::function>(&expr)) {
                     std::string fn_name = boost::algorithm::to_upper_copy(func->name);
                     std::string col_alias;
@@ -784,15 +863,21 @@ namespace irods::catalog::compiler {
                             fn_args.push_back(*s);
                         }
                     }
-                    j_groups.push_back({{"alias", col_alias}, {"property", col_prop}, {"func_name", fn_name}, {"func_args", fn_args}});
+                    size_t g_ofs = qbuf.arr_append_obj(groups_ofs);
+                    qbuf.set_str(g_ofs, "alias", col_alias);
+                    qbuf.set_str(g_ofs, "property", col_prop);
+                    qbuf.set_str(g_ofs, "func_name", fn_name);
+                    size_t fa_ofs = qbuf.set_arr(g_ofs, "func_args");
+                    for (const auto& fa : fn_args) {
+                        qbuf.arr_append_str(fa_ofs, fa);
+                    }
                 }
             }
-            j["groups"] = j_groups;
         }
 
-        // 3. Collect targets from order_by
+        // 3. Sorts
         if (!ast.order_by.sort_expressions.empty()) {
-            json j_sorts = json::array();
+            size_t sorts_ofs = qbuf.set_arr(0, "sorts");
             for (const auto& se : ast.order_by.sort_expressions) {
                 if (const auto* col = std::get_if<irods::experimental::genquery2::column>(&se.expr)) {
                     auto it = COLUMN_NAME_MAP.find(col->name);
@@ -800,7 +885,10 @@ namespace irods::catalog::compiler {
                         throw std::invalid_argument("Unknown column: " + col->name);
                     }
                     add_target_type(it->second.node_type);
-                    j_sorts.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"ascending", se.ascending_order}});
+                    size_t s_ofs = qbuf.arr_append_obj(sorts_ofs);
+                    qbuf.set_str(s_ofs, "alias", it->second.node_type);
+                    qbuf.set_str(s_ofs, "property", it->second.bson_key);
+                    qbuf.set_bool(s_ofs, "ascending", se.ascending_order);
                 } else if (const auto* func = std::get_if<irods::experimental::genquery2::function>(&se.expr)) {
                     for (const auto& arg : func->arguments) {
                         if (const auto* c = std::get_if<irods::experimental::genquery2::column>(&arg)) {
@@ -809,16 +897,18 @@ namespace irods::catalog::compiler {
                                 throw std::invalid_argument("Unknown column: " + c->name);
                             }
                             add_target_type(it->second.node_type);
-                            j_sorts.push_back({{"alias", it->second.node_type}, {"property", it->second.bson_key}, {"ascending", se.ascending_order}});
+                            size_t s_ofs = qbuf.arr_append_obj(sorts_ofs);
+                            qbuf.set_str(s_ofs, "alias", it->second.node_type);
+                            qbuf.set_str(s_ofs, "property", it->second.bson_key);
+                            qbuf.set_bool(s_ofs, "ascending", se.ascending_order);
                             break;
                         }
                     }
                 }
             }
-            j["sorts"] = j_sorts;
         }
 
-        // 4. If DataObject is root or targeted, ensure Replica layer semantics
+        // 4. DataObject / Replica
         bool has_data_object = (entry_node_type_ == "DataObject");
         bool has_collection = (entry_node_type_ == "Collection");
         for (const auto& t : target_node_types_) {
@@ -832,40 +922,40 @@ namespace irods::catalog::compiler {
             add_target_type("Replica");
         }
 
-        // 5. Security & Permission filtering for unprivileged users
-        if (opts && !opts->admin_mode && !opts->user_name.empty()) {
-            auto add_access_filter = [&](const std::string& alias) {
-                json access_filter = {
-                    {"alias", alias},
-                    {"key", "_access_user"},
-                    {"op", 0},
-                    {"value", std::string(opts->user_name)},
-                    {"prepended_op", "and"}
-                };
-                if (j_filters.empty()) {
-                    j_filters.push_back(access_filter);
-                } else {
-                    json wrapped = json::array();
-                    wrapped.push_back(access_filter);
-                    wrapped.push_back({{"group", "and"}, {"filters", j_filters}, {"prepended_op", "and"}});
-                    j_filters = wrapped;
-                }
-            };
+        // 5. Security & Permission filtering
+        size_t filters_ofs = qbuf.set_arr(0, "filters");
+        bool needs_access_filter = (opts && !opts->admin_mode && !opts->user_name.empty());
+        if (needs_access_filter && (has_data_object || has_collection)) {
+            std::vector<std::string> access_aliases;
+            if (has_data_object) access_aliases.push_back("DataObject");
+            if (has_collection) access_aliases.push_back("Collection");
 
-            if (has_data_object) {
-                add_access_filter("DataObject");
+            for (const auto& alias : access_aliases) {
+                condition_visitor::append_filter(qbuf, filters_ofs, alias, "_access_user", 0, opts->user_name, "and");
             }
-            if (has_collection) {
-                add_access_filter("Collection");
+            if (raw_filters_buf.size() >= sizeof(lite3cpp::PackedNodeLayout)) {
+                lite3cpp::NodeView rnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(raw_filters_buf.data()));
+                if (rnv.size() > 0) {
+                    size_t grp_ofs = qbuf.arr_append_obj(filters_ofs);
+                    qbuf.set_str(grp_ofs, "group", "and");
+                    qbuf.set_str(grp_ofs, "prepended_op", "and");
+                    size_t sub_arr = qbuf.set_arr(grp_ofs, "filters");
+                    for (uint32_t i = 0; i < rnv.size(); ++i) {
+                        condition_visitor::copy_filter_element(raw_filters_buf, 0, i, qbuf, sub_arr);
+                    }
+                }
+            }
+        } else {
+            if (raw_filters_buf.size() >= sizeof(lite3cpp::PackedNodeLayout)) {
+                lite3cpp::NodeView rnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(raw_filters_buf.data()));
+                for (uint32_t i = 0; i < rnv.size(); ++i) {
+                    condition_visitor::copy_filter_element(raw_filters_buf, 0, i, qbuf, filters_ofs);
+                }
             }
         }
 
-        j["projections"] = j_projs;
-        j["filters"] = j_filters;
-        j["root_alias"] = entry_node_type_;
-
-        // 6. Generate steps to all required target node types
-        json j_steps = json::array();
+        // 6. Generate steps
+        size_t steps_ofs = qbuf.set_arr(0, "steps");
         std::unordered_set<std::string> visited = { std::string(entry_node_type_) };
         for (const auto& target_view : target_node_types_) {
             std::string target(target_view);
@@ -879,23 +969,30 @@ namespace irods::catalog::compiler {
                     current_source = step.target_type;
                     continue;
                 }
+                size_t s_ofs = qbuf.arr_append_obj(steps_ofs);
                 if (step.dir == Direction::Out) {
-                    j_steps.push_back({{"type", "out"}, {"label", step.edge_label}, {"min_weight", 0.0}, {"target_alias", step.target_type}, {"source_alias", current_source}});
+                    qbuf.set_str(s_ofs, "type", "out");
+                    qbuf.set_str(s_ofs, "label", step.edge_label);
+                    qbuf.set_f64(s_ofs, "min_weight", 0.0);
+                    qbuf.set_str(s_ofs, "target_alias", step.target_type);
+                    qbuf.set_str(s_ofs, "source_alias", current_source);
                 } else {
-                    j_steps.push_back({{"type", "in"}, {"label", step.edge_label}, {"target_alias", step.target_type}, {"source_alias", current_source}});
+                    qbuf.set_str(s_ofs, "type", "in");
+                    qbuf.set_str(s_ofs, "label", step.edge_label);
+                    qbuf.set_str(s_ofs, "target_alias", step.target_type);
+                    qbuf.set_str(s_ofs, "source_alias", current_source);
                 }
                 visited.insert(std::string(step.target_type));
                 current_source = step.target_type;
             }
         }
-        j["steps"] = j_steps;
 
-        rodsLog(LOG_NOTICE, "L3_COMPILER: Compilation complete. Dumping JSON...");
-        if (!ast.range.number_of_rows.empty()) j["limit"] = std::stoull(ast.range.number_of_rows);
-        if (!ast.range.offset.empty()) j["offset"] = std::stoull(ast.range.offset);
-        j["distinct"] = ast.distinct;
+        rodsLog(LOG_NOTICE, "L3_COMPILER: Compilation complete.");
+        if (!ast.range.number_of_rows.empty()) qbuf.set_i64(0, "limit", std::stoll(ast.range.number_of_rows));
+        if (!ast.range.offset.empty()) qbuf.set_i64(0, "offset", std::stoll(ast.range.offset));
+        qbuf.set_bool(0, "distinct", ast.distinct);
 
-        return j.dump();
+        return qbuf;
     }
 
     std::vector<Gq2ToL3kvgCompiler::PathStep> Gq2ToL3kvgCompiler::find_path(std::string_view source, std::string_view target) {

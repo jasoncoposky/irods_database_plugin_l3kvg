@@ -4,6 +4,7 @@
 #include <vector>
 #include <variant>
 #include <unordered_map>
+#include "buffer.hpp"
 #include "irods/private/genquery2_ast_types.hpp"
 
 namespace irods::experimental::genquery2 {
@@ -52,7 +53,7 @@ namespace irods::catalog::compiler {
     public:
         Gq2ToL3kvgCompiler() = default;
         
-        std::string compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias = "", const irods::experimental::genquery2::options* opts = nullptr);
+        lite3cpp::Buffer compile(const irods::experimental::genquery2::select& ast, std::string_view override_root_alias = "", const irods::experimental::genquery2::options* opts = nullptr);
 
         DmlPlan compile(const irods::experimental::genquery2::insert& ast) const;
         DmlPlan compile(const irods::experimental::genquery2::update& ast) const;

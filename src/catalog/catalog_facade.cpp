@@ -23,7 +23,6 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <nlohmann/json.hpp>
 
 #ifdef IRODS_SERVER
 #include "irods/rodsLog.h"
@@ -3619,7 +3618,7 @@ namespace irods::catalog {
 
 
                 compiler::Gq2ToL3kvgCompiler compiler;
-                std::string query_json = compiler.compile(ast, effective_root_type, opts);
+                lite3cpp::Buffer query_buf = compiler.compile(ast, effective_root_type, opts);
                 if (effective_root_type.empty()) {
                     effective_root_type = compiler.get_entry_type();
                 }
@@ -3646,10 +3645,10 @@ namespace irods::catalog {
                 }
 
             #ifdef IRODS_SERVER
-            rodsLog(LOG_NOTICE, "L3_CATALOG: Executing Query with root_type [%s] and [%zu] starting nodes: %s", effective_root_type.c_str(), sn.size(), query_json.c_str());
+            rodsLog(LOG_NOTICE, "L3_CATALOG: Executing Query with root_type [%s] and [%zu] starting nodes (query buffer size: %zu bytes)", effective_root_type.c_str(), sn.size(), query_buf.size());
             #endif
 
-                auto fut = client_->resume_query_async(local_cluster_id_, sn, query_json);
+                auto fut = client_->resume_query_async(local_cluster_id_, sn, query_buf);
                 results.rows = fut.get();
 
             #ifdef IRODS_SERVER
@@ -3685,8 +3684,14 @@ namespace irods::catalog {
             return SUCCESS();
         }
 
-        irods::error execute_dml(const compiler::DmlPlan& plan, nlohmann::json& result) {
+        irods::error execute_dml(const compiler::DmlPlan& plan, lite3cpp::Buffer& result) {
             try {
+                auto set_dml_result = [&](int64_t rows_affected) {
+                    result.init_object();
+                    result.set_i64(0, "rows_affected", rows_affected);
+                    result.set_str(0, "status", "SUCCESS");
+                };
+
                 auto get_entity_type = [](std::string_view name, EntityType& out) -> bool {
                     if (name == "DataObject" || name == "DATA_NAME" || name == "DATA" || name == "data_object") {
                         out = EntityType::DataObject; return true;
@@ -3746,17 +3751,16 @@ namespace irods::catalog {
                                 add_edge(uid, "MEMBER_OF", 1.0, gid);
                             } catch (...) {}
                         }
-                        result["rows_affected"] = 1;
-                        result["status"] = "SUCCESS";
+                        set_dml_result(1);
                         return SUCCESS();
                     } else if (plan.action == compiler::DmlAction::Remove) {
                         uint64_t uid_val = 0, gid_val = 0;
                         for (const auto& cond : plan.conditions) {
                             if (cond.op == 0) {
                                 if (cond.property == "user_id" || cond.property == "u_id") {
-                                    try { uid_val = std::stoull(cond.value); } catch (...) {}
+                                     try { uid_val = std::stoull(cond.value); } catch (...) {}
                                 } else if (cond.property == "group_user_id" || cond.property == "id" || cond.property == "g_id") {
-                                    try { gid_val = std::stoull(cond.value); } catch (...) {}
+                                     try { gid_val = std::stoull(cond.value); } catch (...) {}
                                 }
                             }
                         }
@@ -3773,8 +3777,7 @@ namespace irods::catalog {
                             auto members = client_->get_in_neighbors_async(local_cluster_id_, gid, "MEMBER_OF").get();
                             for (auto u : members) del_edge(u, "MEMBER_OF", 1.0, gid);
                         }
-                        result["rows_affected"] = 1;
-                        result["status"] = "SUCCESS";
+                        set_dml_result(1);
                         return SUCCESS();
                     }
                 }
@@ -4052,22 +4055,19 @@ namespace irods::catalog {
                         }
                     }
 
-                    result["rows_affected"] = 1;
-                    result["status"] = "SUCCESS";
+                    set_dml_result(1);
                     return SUCCESS();
                 } else if (plan.action == compiler::DmlAction::Update) {
                     snowflake_id_t sid = resolve_target_sid(et, plan.conditions);
 
                     if (sid == 0) {
-                        result["rows_affected"] = 0;
-                        result["status"] = "SUCCESS";
+                        set_dml_result(0);
                         return SUCCESS();
                     }
 
                     std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
                     if (payload.empty()) {
-                        result["rows_affected"] = 0;
-                        result["status"] = "SUCCESS";
+                        set_dml_result(0);
                         return SUCCESS();
                     }
 
@@ -4077,8 +4077,7 @@ namespace irods::catalog {
                     for (const auto& cond : plan.conditions) {
                         std::string actual = get_prop_val(buf, cond.property);
                         if (!compare_vals(actual, cond.op, cond.value)) {
-                            result["rows_affected"] = 0;
-                            result["status"] = "SUCCESS";
+                            set_dml_result(0);
                             return SUCCESS();
                         }
                     }
@@ -4134,22 +4133,19 @@ namespace irods::catalog {
 
                     client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
 
-                    result["rows_affected"] = 1;
-                    result["status"] = "SUCCESS";
+                    set_dml_result(1);
                     return SUCCESS();
                 } else if (plan.action == compiler::DmlAction::Remove) {
                     snowflake_id_t sid = resolve_target_sid(et, plan.conditions);
 
                     if (sid == 0) {
-                        result["rows_affected"] = 0;
-                        result["status"] = "SUCCESS";
+                        set_dml_result(0);
                         return SUCCESS();
                     }
 
                     std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
                     if (payload.empty()) {
-                        result["rows_affected"] = 0;
-                        result["status"] = "SUCCESS";
+                        set_dml_result(0);
                         return SUCCESS();
                     }
 
@@ -4159,8 +4155,7 @@ namespace irods::catalog {
                     for (const auto& cond : plan.conditions) {
                         std::string actual = get_prop_val(buf, cond.property);
                         if (!compare_vals(actual, cond.op, cond.value)) {
-                            result["rows_affected"] = 0;
-                            result["status"] = "SUCCESS";
+                            set_dml_result(0);
                             return SUCCESS();
                         }
                     }
@@ -4198,8 +4193,7 @@ namespace irods::catalog {
                     // 4. Delete the node itself
                     client_->del_node_async(local_cluster_id_, sid).get();
 
-                    result["rows_affected"] = 1;
-                    result["status"] = "SUCCESS";
+                    set_dml_result(1);
                     return SUCCESS();
                 }
 
@@ -4321,7 +4315,7 @@ namespace irods::catalog {
     irods::error CatalogFacade::resolve_path(std::string_view path, snowflake_id_t& out_id, EntityType& out_type) { return pImpl_->resolve_path(path, out_id, out_type); }
     irods::error CatalogFacade::get_collection_subtree_ids(snowflake_id_t coll_sid, std::vector<snowflake_id_t>& out_ids) { return pImpl_->get_collection_subtree_ids(coll_sid, out_ids); }
     irods::error CatalogFacade::execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes, std::string_view root_type, const irods::experimental::genquery2::options* opts) { return pImpl_->execute_query(ast, results, starting_nodes, root_type, opts); }
-    irods::error CatalogFacade::execute_dml(const compiler::DmlPlan& plan, nlohmann::json& result) { return pImpl_->execute_dml(plan, result); }
+    irods::error CatalogFacade::execute_dml(const compiler::DmlPlan& plan, lite3cpp::Buffer& result) { return pImpl_->execute_dml(plan, result); }
     irods::error CatalogFacade::apply_atomic_operations(const std::vector<irods::experimental::dml::operation_type>& ops) { return pImpl_->apply_atomic_operations(ops); }
     irods::error CatalogFacade::get_next_sequence_value(std::string_view seq_name, uint64_t& out_val) { return pImpl_->get_next_sequence_value(seq_name, out_val); }
     snowflake_id_t CatalogFacade::make_id(EntityType type, uint64_t irods_id) { return pImpl_->make_id(type, irods_id); }

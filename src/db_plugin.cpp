@@ -7,7 +7,8 @@
 #include "irods/catalog/gq2_compiler.hpp"
 #include "irods/private/genquery2_driver.hpp"
 #include "irods/private/genquery2_sql.hpp"
-#include <nlohmann/json.hpp>
+#include "buffer.hpp"
+#include "json.hpp"
 #include "L3KVG/Node.hpp"
 #include "irods/rodsLog.h"
 #include "irods/rodsErrorTable.h"
@@ -169,25 +170,32 @@ irods::error init_l3kvg_catalog() {
         }
         const auto& db_config = config_json.at("plugin_configuration").at("database");
         
-        nlohmann::json spec_config;
+        lite3cpp::Buffer spec_config;
         if (db_config.contains(irods::KW_CFG_PLUGIN_SPECIFIC_CONFIGURATION)) {
-            spec_config = db_config.at(irods::KW_CFG_PLUGIN_SPECIFIC_CONFIGURATION);
+            spec_config = lite3cpp::lite3_json::from_json_string(db_config.at(irods::KW_CFG_PLUGIN_SPECIFIC_CONFIGURATION).dump());
         } else if (db_config.contains("l3kvg") && db_config.at("l3kvg").contains(irods::KW_CFG_PLUGIN_SPECIFIC_CONFIGURATION)) {
-            spec_config = db_config.at("l3kvg").at(irods::KW_CFG_PLUGIN_SPECIFIC_CONFIGURATION);
+            spec_config = lite3cpp::lite3_json::from_json_string(db_config.at("l3kvg").at(irods::KW_CFG_PLUGIN_SPECIFIC_CONFIGURATION).dump());
         }
 
         irods::catalog::Config cfg;
-        cfg.db_path = spec_config.value("db_path", "/var/lib/irods/l3kvg_db");
-        cfg.node_id = spec_config.value("node_id", (uint32_t)0);
-        cfg.zmq_endpoint = spec_config.value("zmq_endpoint", "tcp://127.0.0.1:5555");
+        cfg.db_path = (spec_config.size() >= sizeof(lite3cpp::PackedNodeLayout) && spec_config.get_type(0, "db_path") == lite3cpp::Type::String) 
+                      ? std::string(spec_config.get_str(0, "db_path")) : "/var/lib/irods/l3kvg_db";
+        cfg.node_id = (spec_config.size() >= sizeof(lite3cpp::PackedNodeLayout) && spec_config.get_type(0, "node_id") == lite3cpp::Type::Int64) 
+                      ? static_cast<uint32_t>(spec_config.get_i64(0, "node_id")) : 0;
+        cfg.zmq_endpoint = (spec_config.size() >= sizeof(lite3cpp::PackedNodeLayout) && spec_config.get_type(0, "zmq_endpoint") == lite3cpp::Type::String) 
+                           ? std::string(spec_config.get_str(0, "zmq_endpoint")) : "tcp://127.0.0.1:5555";
 
-        if (spec_config.contains("federation")) {
-            for (const auto& fed : spec_config.at("federation")) {
-                cfg.federation.push_back({
-                    fed.value("name", ""), 
-                    (uint16_t)fed.value("id", 0), 
-                    fed.value("endpoint", "")
-                });
+        if (spec_config.size() >= sizeof(lite3cpp::PackedNodeLayout) && spec_config.get_type(0, "federation") == lite3cpp::Type::Array) {
+            size_t fed_ofs = spec_config.get_arr(0, "federation");
+            lite3cpp::NodeView fnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(spec_config.data() + fed_ofs));
+            for (uint32_t i = 0; i < fnv.size(); ++i) {
+                if (spec_config.arr_get_type(fed_ofs, i) == lite3cpp::Type::Object) {
+                    size_t f_item = spec_config.arr_get_obj(fed_ofs, i);
+                    std::string name = (spec_config.get_type(f_item, "name") == lite3cpp::Type::String) ? std::string(spec_config.get_str(f_item, "name")) : "";
+                    uint16_t fid = (spec_config.get_type(f_item, "id") == lite3cpp::Type::Int64) ? static_cast<uint16_t>(spec_config.get_i64(f_item, "id")) : 0;
+                    std::string ep = (spec_config.get_type(f_item, "endpoint") == lite3cpp::Type::String) ? std::string(spec_config.get_str(f_item, "endpoint")) : "";
+                    cfg.federation.push_back({std::move(name), fid, std::move(ep)});
+                }
             }
         }
 
@@ -732,16 +740,26 @@ irods::error db_update_replica_access_time(irods::plugin_context& _ctx, const ch
             return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Received one or more null pointers.");
         }
         
-        auto json_input = nlohmann::json::parse(_json_input);
-        const auto& updates = json_input.at("access_time_updates");
-        
-        for (const auto& _j : updates) {
-            uint64_t data_id = _j.at("data_id").get<uint64_t>();
-            uint32_t repl_num = _j.at("replica_number").get<uint32_t>();
-            std::string atime = _j.at("atime").get<std::string>();
-            
-            auto ret = g_catalog->update_replica_access_time(data_id, repl_num, atime);
-            if (!ret.ok()) return ret;
+        auto json_buf = lite3cpp::lite3_json::from_json_string(_json_input);
+        if (json_buf.size() >= sizeof(lite3cpp::PackedNodeLayout) && json_buf.get_type(0, "access_time_updates") == lite3cpp::Type::Array) {
+            size_t updates_ofs = json_buf.get_arr(0, "access_time_updates");
+            lite3cpp::NodeView unv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(json_buf.data() + updates_ofs));
+            for (uint32_t i = 0; i < unv.size(); ++i) {
+                if (json_buf.arr_get_type(updates_ofs, i) != lite3cpp::Type::Object) continue;
+                size_t u_ofs = json_buf.arr_get_obj(updates_ofs, i);
+                uint64_t data_id = 0;
+                if (json_buf.get_type(u_ofs, "data_id") == lite3cpp::Type::Int64) data_id = static_cast<uint64_t>(json_buf.get_i64(u_ofs, "data_id"));
+                else if (json_buf.get_type(u_ofs, "data_id") == lite3cpp::Type::String) data_id = std::stoull(std::string(json_buf.get_str(u_ofs, "data_id")));
+
+                uint32_t repl_num = 0;
+                if (json_buf.get_type(u_ofs, "replica_number") == lite3cpp::Type::Int64) repl_num = static_cast<uint32_t>(json_buf.get_i64(u_ofs, "replica_number"));
+                else if (json_buf.get_type(u_ofs, "replica_number") == lite3cpp::Type::String) repl_num = std::stoul(std::string(json_buf.get_str(u_ofs, "replica_number")));
+
+                std::string atime = (json_buf.get_type(u_ofs, "atime") == lite3cpp::Type::String) ? std::string(json_buf.get_str(u_ofs, "atime")) : "";
+                
+                auto ret = g_catalog->update_replica_access_time(data_id, repl_num, atime);
+                if (!ret.ok()) return ret;
+            }
         }
         
         rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_update_replica_access_time SUCCESS");
@@ -2282,31 +2300,54 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
         
         if (json_str.empty()) return SUCCESS();
 
-        auto j = nlohmann::json::parse(json_str);
-        if (j.contains("replicas") && j["replicas"].is_array()) {
-            for (auto& r : j["replicas"]) {
-                if (r.contains("after")) {
-                    auto& after = r["after"];
-                    uint64_t data_id = std::stoull(after.value("data_id", "0"));
-                    uint32_t repl_num = std::stoul(after.value("data_repl_num", "0"));
-                    uint64_t resc_id = std::stoull(after.value("resc_id", "0"));
-                    uint64_t data_size = std::stoull(after.value("data_size", "0"));
-                    std::string checksum = after.value("data_checksum", "");
-                    std::string modify_ts = after.value("modify_ts", "");
+        auto j = lite3cpp::lite3_json::from_json_string(json_str);
+        if (j.size() >= sizeof(lite3cpp::PackedNodeLayout) && j.get_type(0, "replicas") == lite3cpp::Type::Array) {
+            size_t repls_ofs = j.get_arr(0, "replicas");
+            lite3cpp::NodeView rnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(j.data() + repls_ofs));
+            for (uint32_t ri = 0; ri < rnv.size(); ++ri) {
+                if (j.arr_get_type(repls_ofs, ri) != lite3cpp::Type::Object) continue;
+                size_t r_ofs = j.arr_get_obj(repls_ofs, ri);
+                if (j.get_type(r_ofs, "after") == lite3cpp::Type::Object) {
+                    size_t after_ofs = j.get_obj(r_ofs, "after");
+                    
+                    auto get_after_u64 = [&](std::string_view key) -> uint64_t {
+                        auto t = j.get_type(after_ofs, key);
+                        if (t == lite3cpp::Type::Int64) return static_cast<uint64_t>(j.get_i64(after_ofs, key));
+                        if (t == lite3cpp::Type::String) {
+                            try { return std::stoull(std::string(j.get_str(after_ofs, key))); } catch (...) {}
+                        }
+                        return 0;
+                    };
+                    auto get_after_str = [&](std::string_view key, std::string_view def = "") -> std::string {
+                        auto t = j.get_type(after_ofs, key);
+                        if (t == lite3cpp::Type::String) return std::string(j.get_str(after_ofs, key));
+                        if (t == lite3cpp::Type::Int64) return std::to_string(j.get_i64(after_ofs, key));
+                        return std::string(def);
+                    };
+
+                    uint64_t data_id = get_after_u64("data_id");
+                    uint32_t repl_num = static_cast<uint32_t>(get_after_u64("data_repl_num"));
+                    uint64_t resc_id = get_after_u64("resc_id");
+                    uint64_t data_size = get_after_u64("data_size");
+                    std::string checksum = get_after_str("data_checksum");
+                    std::string modify_ts = get_after_str("modify_ts");
 
                     irods::catalog::replica repl;
                     repl.data_id = data_id;
                     repl.replica_number = repl_num;
                     repl.resource_id = resc_id;
-                    repl.physical_path = after.value("data_path", "");
-                    repl.resc_hier = after.value("resc_hier", "");
+                    repl.physical_path = get_after_str("data_path");
+                    repl.resc_hier = get_after_str("resc_hier");
                     if (repl.resc_hier.empty()) {
-                        repl.resc_hier = after.value("data_resc_hier", "");
+                        repl.resc_hier = get_after_str("data_resc_hier");
                     }
-                    if (repl.resc_hier.empty() && r.contains("file_modified")) {
-                        repl.resc_hier = r["file_modified"].value("resc_hier", "");
-                        if (repl.resc_hier.empty()) {
-                            repl.resc_hier = r["file_modified"].value("dest_resc_hier", "");
+                    if (repl.resc_hier.empty() && j.get_type(r_ofs, "file_modified") == lite3cpp::Type::Object) {
+                        size_t fm_ofs = j.get_obj(r_ofs, "file_modified");
+                        if (j.get_type(fm_ofs, "resc_hier") == lite3cpp::Type::String) {
+                            repl.resc_hier = std::string(j.get_str(fm_ofs, "resc_hier"));
+                        }
+                        if (repl.resc_hier.empty() && j.get_type(fm_ofs, "dest_resc_hier") == lite3cpp::Type::String) {
+                            repl.resc_hier = std::string(j.get_str(fm_ofs, "dest_resc_hier"));
                         }
                     }
                     if (repl.resc_hier.empty() && resc_id > 0) {
@@ -2317,7 +2358,7 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
                             try { repl.resc_hier = rbuf.get_str(0, "n"); } catch (...) {}
                         }
                     }
-                    repl.status = after.value("data_is_dirty", "1");
+                    repl.status = get_after_str("data_is_dirty", "1");
                     repl.checksum = checksum;
                     repl.modify_ts = get_timestamp(modify_ts);
                     repl.size = data_size;
@@ -2328,11 +2369,9 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
                     // Update data object size
                     g_catalog->modify_data_object(data_id, "DATA_SIZE", std::to_string(data_size));
 
-                    if (after.contains("data_expiry_ts")) {
-                        std::string expiry = after.value("data_expiry_ts", "");
-                        if (!expiry.empty()) {
-                            g_catalog->modify_data_object(data_id, "ex", get_timestamp(expiry));
-                        }
+                    std::string expiry = get_after_str("data_expiry_ts");
+                    if (!expiry.empty()) {
+                        g_catalog->modify_data_object(data_id, "ex", get_timestamp(expiry));
                     }
                 }
             }
@@ -2386,12 +2425,21 @@ irods::error db_delay_rule_unlock_op(irods::plugin_context& _ctx, const char* _r
     rodsLog(LOG_NOTICE, "L3_PLUGIN: ENTERING db_delay_rule_unlock_op [%s]", safe_string(_rule_ids).c_str());
     if (!_rule_ids) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "null pointers");
     try {
-        auto j = nlohmann::json::parse(_rule_ids);
-        for (const auto& item : j) {
-            uint64_t id = 0;
-            if (item.is_string()) id = std::stoull(item.get<std::string>());
-            else if (item.is_number()) id = item.get<uint64_t>();
-            if (id) g_catalog->unlock_rule_execution(id);
+        auto j = lite3cpp::lite3_json::from_json_string(_rule_ids);
+        if (j.size() >= sizeof(lite3cpp::PackedNodeLayout)) {
+            lite3cpp::NodeView nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(j.data()));
+            if (nv.type() == lite3cpp::Type::Array) {
+                for (uint32_t i = 0; i < nv.size(); ++i) {
+                    uint64_t id = 0;
+                    auto t = j.arr_get_type(0, i);
+                    if (t == lite3cpp::Type::String) {
+                        try { id = std::stoull(std::string(j.arr_get_str(0, i))); } catch (...) {}
+                    } else if (t == lite3cpp::Type::Int64) {
+                        id = static_cast<uint64_t>(j.arr_get_i64(0, i));
+                    }
+                    if (id) g_catalog->unlock_rule_execution(id);
+                }
+            }
         }
     } catch (...) {}
     rodsLog(LOG_NOTICE, "L3_PLUGIN: EXITING db_delay_rule_unlock_op SUCCESS");
@@ -3096,16 +3144,27 @@ irods::error db_execute_genquery2_op(
                 return ret;
             }
 
-            nlohmann::json json_array = nlohmann::json::array();
+            std::stringstream ss;
+            ss << "[";
             for (size_t r = 0; r < results.rows.size(); ++r) {
-                nlohmann::json json_row = nlohmann::json::array();
+                if (r > 0) ss << ",";
+                ss << "[";
                 for (size_t c = 0; c < sel->projections.size(); ++c) {
-                    json_row.push_back(std::string(results.get_field(r, c)));
+                    if (c > 0) ss << ",";
+                    std::string_view val = results.get_field(r, c);
+                    ss << "\"";
+                    for (char ch : val) {
+                        if (ch == '"' || ch == '\\') ss << '\\';
+                        ss << ch;
+                    }
+                    ss << "\"";
                 }
-                json_array.push_back(json_row);
+                ss << "]";
             }
+            ss << "]";
 
-            *_output = strdup(json_array.dump().c_str());
+            std::string out_str = ss.str();
+            *_output = strdup(out_str.c_str());
             if (!*_output) {
                 return ERROR(SYS_MALLOC_ERR, "Failed to allocate memory for GenQuery2 output.");
             }
@@ -3115,13 +3174,14 @@ irods::error db_execute_genquery2_op(
         // Handle DML Mutations
         irods::catalog::compiler::Gq2ToL3kvgCompiler compiler;
         auto plan = compiler.compile(*_stmt);
-        nlohmann::json dml_result;
+        lite3cpp::Buffer dml_result;
         auto ret = g_catalog->execute_dml(plan, dml_result);
         if (!ret.ok()) {
             return ret;
         }
 
-        *_output = strdup(dml_result.dump().c_str());
+        std::string out_str = lite3cpp::lite3_json::to_json_string(dml_result, 0);
+        *_output = strdup(out_str.c_str());
         if (!*_output) {
             return ERROR(SYS_MALLOC_ERR, "Failed to allocate memory for GenQuery2 output.");
         }

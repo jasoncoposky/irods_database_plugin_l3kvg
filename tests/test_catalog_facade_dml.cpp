@@ -2,7 +2,7 @@
 #include "irods/catalog/catalog_facade.hpp"
 #include "irods/catalog/gq2_compiler.hpp"
 #include "mock_l3kvg.hpp"
-#include <nlohmann/json.hpp>
+#include "buffer.hpp"
 #include <random>
 
 using namespace irods::catalog;
@@ -48,11 +48,11 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     insert_plan.properties["n"] = "test_file.dat";
     insert_plan.properties["s"] = "1024";
 
-    nlohmann::json insert_res;
+    lite3cpp::Buffer insert_res;
     auto insert_err = facade_.execute_dml(insert_plan, insert_res);
     ASSERT_TRUE(insert_err.ok()) << insert_err.result();
-    EXPECT_EQ(insert_res["rows_affected"], 1);
-    EXPECT_EQ(insert_res["status"], "SUCCESS");
+    EXPECT_EQ(insert_res.get_i64(0, "rows_affected"), 1);
+    EXPECT_EQ(insert_res.get_str(0, "status"), "SUCCESS");
 
     // 2. Test Secondary Condition Mismatch: update with correct "n" but mismatched "s" (9999 != 1024)
     DmlPlan mismatch_update;
@@ -62,10 +62,10 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     mismatch_update.conditions.push_back(DmlCondition{"n", 0, "test_file.dat"});
     mismatch_update.conditions.push_back(DmlCondition{"s", 0, "9999"});
 
-    nlohmann::json mismatch_res;
+    lite3cpp::Buffer mismatch_res;
     auto mismatch_err = facade_.execute_dml(mismatch_update, mismatch_res);
     ASSERT_TRUE(mismatch_err.ok()) << mismatch_err.result();
-    EXPECT_EQ(mismatch_res["rows_affected"], 0);
+    EXPECT_EQ(mismatch_res.get_i64(0, "rows_affected"), 0);
 
     // 2b. Test Inequality Operator: s < 500 fails (actual is 1024)
     DmlPlan ineq_fail;
@@ -75,9 +75,9 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     ineq_fail.conditions.push_back(DmlCondition{"n", 0, "test_file.dat"});
     ineq_fail.conditions.push_back(DmlCondition{"s", 4, "500"}); // op 4 is '<'
 
-    nlohmann::json ineq_fail_res;
+    lite3cpp::Buffer ineq_fail_res;
     ASSERT_TRUE(facade_.execute_dml(ineq_fail, ineq_fail_res).ok());
-    EXPECT_EQ(ineq_fail_res["rows_affected"], 0);
+    EXPECT_EQ(ineq_fail_res.get_i64(0, "rows_affected"), 0);
 
     // 2c. Test Inequality Operator: s > 500 succeeds (actual is 1024)
     DmlPlan ineq_pass;
@@ -87,9 +87,9 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     ineq_pass.conditions.push_back(DmlCondition{"n", 0, "test_file.dat"});
     ineq_pass.conditions.push_back(DmlCondition{"s", 2, "500"}); // op 2 is '>'
 
-    nlohmann::json ineq_pass_res;
+    lite3cpp::Buffer ineq_pass_res;
     ASSERT_TRUE(facade_.execute_dml(ineq_pass, ineq_pass_res).ok());
-    EXPECT_EQ(ineq_pass_res["rows_affected"], 1);
+    EXPECT_EQ(ineq_pass_res.get_i64(0, "rows_affected"), 1);
 
     // 3. Test Update with "name" attribute and rename: change "name" -> "test_file_renamed.dat" and "s" -> "2048"
     DmlPlan update_plan;
@@ -99,11 +99,11 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     update_plan.properties["s"] = "2048";
     update_plan.conditions.push_back(DmlCondition{"n", 0, "test_file.dat"});
 
-    nlohmann::json update_res;
+    lite3cpp::Buffer update_res;
     auto update_err = facade_.execute_dml(update_plan, update_res);
     ASSERT_TRUE(update_err.ok()) << update_err.result();
-    EXPECT_EQ(update_res["rows_affected"], 1);
-    EXPECT_EQ(update_res["status"], "SUCCESS");
+    EXPECT_EQ(update_res.get_i64(0, "rows_affected"), 1);
+    EXPECT_EQ(update_res.get_str(0, "status"), "SUCCESS");
 
     // 4. Test Update targeting new name index:
     DmlPlan update2_plan;
@@ -112,10 +112,10 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     update2_plan.properties["s"] = "4096";
     update2_plan.conditions.push_back(DmlCondition{"name", 0, "test_file_renamed.dat"});
 
-    nlohmann::json update2_res;
+    lite3cpp::Buffer update2_res;
     auto update2_err = facade_.execute_dml(update2_plan, update2_res);
     ASSERT_TRUE(update2_err.ok()) << update2_err.result();
-    EXPECT_EQ(update2_res["rows_affected"], 1);
+    EXPECT_EQ(update2_res.get_i64(0, "rows_affected"), 1);
 
     // 5. Test Secondary Condition Mismatch on Remove:
     DmlPlan mismatch_remove;
@@ -124,10 +124,10 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     mismatch_remove.conditions.push_back(DmlCondition{"n", 0, "test_file_renamed.dat"});
     mismatch_remove.conditions.push_back(DmlCondition{"s", 0, "9999"});
 
-    nlohmann::json mismatch_rem_res;
+    lite3cpp::Buffer mismatch_rem_res;
     auto mismatch_rem_err = facade_.execute_dml(mismatch_remove, mismatch_rem_res);
     ASSERT_TRUE(mismatch_rem_err.ok()) << mismatch_rem_err.result();
-    EXPECT_EQ(mismatch_rem_res["rows_affected"], 0);
+    EXPECT_EQ(mismatch_rem_res.get_i64(0, "rows_affected"), 0);
 
     // 6. Test Remove: plan with action Remove, entity_type "DataObject", condition on "name" == "test_file_renamed.dat".
     DmlPlan remove_plan;
@@ -135,17 +135,17 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlLifecycle) {
     remove_plan.entity_type = "DataObject";
     remove_plan.conditions.push_back(DmlCondition{"name", 0, "test_file_renamed.dat"});
 
-    nlohmann::json remove_res;
+    lite3cpp::Buffer remove_res;
     auto remove_err = facade_.execute_dml(remove_plan, remove_res);
     ASSERT_TRUE(remove_err.ok()) << remove_err.result();
-    EXPECT_EQ(remove_res["rows_affected"], 1);
-    EXPECT_EQ(remove_res["status"], "SUCCESS");
+    EXPECT_EQ(remove_res.get_i64(0, "rows_affected"), 1);
+    EXPECT_EQ(remove_res.get_str(0, "status"), "SUCCESS");
 
     // 7. Test Repeated Remove: asserting rows_affected == 0 confirming complete deletion
-    nlohmann::json repeat_res;
+    lite3cpp::Buffer repeat_res;
     auto repeat_err = facade_.execute_dml(remove_plan, repeat_res);
     ASSERT_TRUE(repeat_err.ok()) << repeat_err.result();
-    EXPECT_EQ(repeat_res["rows_affected"], 0);
+    EXPECT_EQ(repeat_res.get_i64(0, "rows_affected"), 0);
 }
 
 TEST_F(CatalogFacadeDmlTest, ExecuteDmlInsertWithParentCollAndPath) {
@@ -164,10 +164,10 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlInsertWithParentCollAndPath) {
     insert_plan.properties["owner"] = "rods";
     insert_plan.properties["s"] = "4096";
 
-    nlohmann::json insert_res;
+    lite3cpp::Buffer insert_res;
     auto insert_err = facade_.execute_dml(insert_plan, insert_res);
     ASSERT_TRUE(insert_err.ok()) << insert_err.result();
-    EXPECT_EQ(insert_res["rows_affected"], 1);
+    EXPECT_EQ(insert_res.get_i64(0, "rows_affected"), 1);
 
     // Update using path condition and rename basename without explicit path
     DmlPlan update_plan;
@@ -177,10 +177,10 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlInsertWithParentCollAndPath) {
     update_plan.properties["s"] = "8192";
     update_plan.conditions.push_back(DmlCondition{"path", 0, "/tempZone/home/rods/sub_file.txt"});
 
-    nlohmann::json update_res;
+    lite3cpp::Buffer update_res;
     auto update_err = facade_.execute_dml(update_plan, update_res);
     ASSERT_TRUE(update_err.ok()) << update_err.result();
-    EXPECT_EQ(update_res["rows_affected"], 1);
+    EXPECT_EQ(update_res.get_i64(0, "rows_affected"), 1);
 
     // Remove using recomputed path condition
     DmlPlan remove_plan;
@@ -188,16 +188,16 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlInsertWithParentCollAndPath) {
     remove_plan.entity_type = "DataObject";
     remove_plan.conditions.push_back(DmlCondition{"path", 0, "/tempZone/home/rods/sub_file_renamed.txt"});
 
-    nlohmann::json remove_res;
+    lite3cpp::Buffer remove_res;
     auto remove_err = facade_.execute_dml(remove_plan, remove_res);
     ASSERT_TRUE(remove_err.ok()) << remove_err.result();
-    EXPECT_EQ(remove_res["rows_affected"], 1);
+    EXPECT_EQ(remove_res.get_i64(0, "rows_affected"), 1);
 
     // Repeated remove on newly removed path yields 0
-    nlohmann::json repeat_res;
+    lite3cpp::Buffer repeat_res;
     auto repeat_err = facade_.execute_dml(remove_plan, repeat_res);
     ASSERT_TRUE(repeat_err.ok()) << repeat_err.result();
-    EXPECT_EQ(repeat_res["rows_affected"], 0);
+    EXPECT_EQ(repeat_res.get_i64(0, "rows_affected"), 0);
 }
 
 TEST_F(CatalogFacadeDmlTest, ExecuteDmlUnknownEntityType) {
@@ -206,7 +206,7 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlUnknownEntityType) {
     plan.entity_type = "InvalidUnknownType";
     plan.properties["n"] = "file.dat";
 
-    nlohmann::json res;
+    lite3cpp::Buffer res;
     auto err = facade_.execute_dml(plan, res);
     EXPECT_FALSE(err.ok());
 }

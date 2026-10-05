@@ -14,7 +14,7 @@
 #include "irods/atomic_apply_database_operations.hpp"
 #include "L3KVG/Query.hpp"
 #include "L3KVG/Settings.hpp"
-#include <nlohmann/json.hpp>
+#include "buffer.hpp"
 
 namespace irods::catalog {
 
@@ -181,7 +181,7 @@ namespace irods::catalog {
 
         // Query Operations
         irods::error execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes = {}, std::string_view root_type = "", const irods::experimental::genquery2::options* opts = nullptr);
-        irods::error execute_dml(const compiler::DmlPlan& plan, nlohmann::json& result);
+        irods::error execute_dml(const compiler::DmlPlan& plan, lite3cpp::Buffer& result);
         irods::error apply_atomic_operations(const std::vector<irods::experimental::dml::operation_type>& ops);
         irods::error get_next_sequence_value(std::string_view seq_name, uint64_t& out_val);
         snowflake_id_t make_id(EntityType type, uint64_t irods_id);

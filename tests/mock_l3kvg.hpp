@@ -17,6 +17,7 @@
 #include <algorithm>
 #include "irods/catalog/binary_key.hpp"
 #include "buffer.hpp"
+#include "json.hpp"
 #include "L3KVG/MutationBatch.hpp"
 #include "L3KVG/KeyBuilder.hpp"
 
@@ -34,9 +35,23 @@ namespace irods::catalog::test {
                 if (payload.empty()) return T{};
                 lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
                 if constexpr (std::is_same_v<T, std::string>) {
-                    return std::string(buf.get_str(0, key));
+                    auto t = buf.get_type(0, key);
+                    if (t == lite3cpp::Type::String) {
+                        return std::string(buf.get_str(0, key));
+                    }
+                    if (t == lite3cpp::Type::Int64) {
+                        return std::to_string(buf.get_i64(0, key));
+                    }
+                    return "";
                 } else if constexpr (std::is_integral_v<T>) {
-                    return static_cast<T>(buf.get_i64(0, key));
+                    auto t = buf.get_type(0, key);
+                    if (t == lite3cpp::Type::Int64) {
+                        return static_cast<T>(buf.get_i64(0, key));
+                    }
+                    if (t == lite3cpp::Type::String) {
+                        try { return static_cast<T>(std::stoll(std::string(buf.get_str(0, key)))); } catch (...) {}
+                    }
+                    return T{};
                 }
                 return T{};
             }
@@ -299,15 +314,9 @@ namespace irods::catalog::test {
                                 }
                             }
                             
-                            nlohmann::json j = nlohmann::json::array();
-                            for (auto n : neighs) {
-                                char buf[17]; std::snprintf(buf, 17, "%016llx", (unsigned long long)n);
-                                j.push_back(std::string(buf));
-                            }
-                            
                             socket_.send(msgs[0], zmq::send_flags::sndmore);
                             socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
-                            socket_.send(zmq::message_t(j.dump()), zmq::send_flags::none);
+                            socket_.send(zmq::message_t(neighs.data(), neighs.size() * sizeof(uint64_t)), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "I") {
                             if (msgs.size() < data_idx + 2) {
@@ -330,15 +339,9 @@ namespace irods::catalog::test {
                                 }
                             }
                             
-                            nlohmann::json j = nlohmann::json::array();
-                            for (auto n : neighs) {
-                                char buf[17]; std::snprintf(buf, 17, "%016llx", (unsigned long long)n);
-                                j.push_back(std::string(buf));
-                            }
-                            
                             socket_.send(msgs[0], zmq::send_flags::sndmore);
                             socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
-                            socket_.send(zmq::message_t(j.dump()), zmq::send_flags::none);
+                            socket_.send(zmq::message_t(neighs.data(), neighs.size() * sizeof(uint64_t)), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "H") {
                              socket_.send(msgs[0], zmq::send_flags::sndmore);
@@ -352,29 +355,59 @@ namespace irods::catalog::test {
                                  socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
                                  continue;
                              }
-                             std::string query_json = msgs[data_idx + 1].to_string();
-                             nlohmann::json q = nlohmann::json::parse(query_json);
-                             
+                             lite3cpp::Buffer q;
+                             const auto& q_msg = msgs[data_idx + 1];
+                             const uint8_t* q_data = static_cast<const uint8_t*>(q_msg.data());
+                             if (q_msg.size() >= sizeof(lite3cpp::PackedNodeLayout) && (q_data[0] == 0x06 || q_data[0] == 0x07)) {
+                                 q = lite3cpp::Buffer(std::vector<uint8_t>(q_data, q_data + q_msg.size()));
+                             } else {
+                                 std::string raw = q_msg.to_string();
+                                 q = lite3cpp::lite3_json::from_json_string(raw.empty() ? "{}" : raw);
+                             }
+
                              std::vector<uint64_t> sn;
-                             try { sn = nlohmann::json::parse(msgs[data_idx].to_string()).get<std::vector<uint64_t>>(); } catch (...) {}
+                             const auto& sn_msg = msgs[data_idx];
+                             if (sn_msg.size() % sizeof(uint64_t) == 0 && sn_msg.size() > 0) {
+                                 sn.resize(sn_msg.size() / sizeof(uint64_t));
+                                 std::memcpy(sn.data(), sn_msg.data(), sn_msg.size());
+                             } else if (sn_msg.size() > 0) {
+                                 try {
+                                     lite3cpp::Buffer sbuf = lite3cpp::lite3_json::from_json_string(sn_msg.to_string());
+                                     if (sbuf.size() >= sizeof(lite3cpp::PackedNodeLayout)) {
+                                         lite3cpp::NodeView nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(sbuf.data()));
+                                         if (nv.type() == lite3cpp::Type::Array) {
+                                             for (uint32_t i = 0; i < nv.size(); ++i) {
+                                                 if (sbuf.arr_get_type(0, i) == lite3cpp::Type::Int64) {
+                                                     sn.push_back(static_cast<uint64_t>(sbuf.arr_get_i64(0, i)));
+                                                 }
+                                             }
+                                         }
+                                     }
+                                 } catch (...) {}
+                             }
                              std::unordered_set<uint64_t> sn_set(sn.begin(), sn.end());
 
-                             nlohmann::json results = nlohmann::json::array();
-                             std::string root_alias = q["root_alias"];
-                             
+                             lite3cpp::Buffer res_buf;
+                             res_buf.init_array();
+                             std::string root_alias = (q.size() >= sizeof(lite3cpp::PackedNodeLayout) && q.get_type(0, "root_alias") == lite3cpp::Type::String) 
+                                                      ? std::string(q.get_str(0, "root_alias")) : "";
+
                              std::lock_guard<std::mutex> lock(mu_);
                              for (const auto& [id, node] : nodes_) {
                                  if (!sn_set.empty() && !sn_set.count(id)) continue;
                                  bool match = true;
-                                 std::function<bool(const nlohmann::json&)> eval_filters = [&](const nlohmann::json& filter_list) -> bool {
-                                     for (const auto& f : filter_list) {
-                                         if (f.contains("filters") && f["filters"].is_array()) {
-                                             if (!eval_filters(f["filters"])) return false;
+                                 std::function<bool(size_t)> eval_filters = [&](size_t filter_arr_ofs) -> bool {
+                                     lite3cpp::NodeView arr_nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(q.data() + filter_arr_ofs));
+                                     for (uint32_t i = 0; i < arr_nv.size(); ++i) {
+                                         if (q.arr_get_type(filter_arr_ofs, i) != lite3cpp::Type::Object) continue;
+                                         size_t f_ofs = q.arr_get_obj(filter_arr_ofs, i);
+                                         if (q.get_type(f_ofs, "filters") == lite3cpp::Type::Array) {
+                                             if (!eval_filters(q.get_arr(f_ofs, "filters"))) return false;
                                              continue;
                                          }
-                                         if (!f.contains("alias") || f["alias"] != root_alias) continue;
-                                         std::string key = f.value("key", "");
-                                         std::string val = f.value("value", "");
+                                         if (q.get_type(f_ofs, "alias") != lite3cpp::Type::String || q.get_str(f_ofs, "alias") != root_alias) continue;
+                                         std::string key = (q.get_type(f_ofs, "key") == lite3cpp::Type::String) ? std::string(q.get_str(f_ofs, "key")) : "";
+                                         std::string val = (q.get_type(f_ofs, "value") == lite3cpp::Type::String) ? std::string(q.get_str(f_ofs, "value")) : "";
                                          if (key == "_access_user") {
                                              std::string owner = node.get_attribute<std::string>("o");
                                              std::string n = node.get_attribute<std::string>("n");
@@ -386,7 +419,7 @@ namespace irods::catalog::test {
                                              }
                                              continue;
                                          }
-                                         int op = f.value("op", 0);
+                                         int64_t op = (q.get_type(f_ofs, "op") == lite3cpp::Type::Int64) ? q.get_i64(f_ofs, "op") : 0;
                                          std::string attr = node.get_attribute<std::string>(key);
                                          if (op == 0) {
                                              if (attr != val) return false;
@@ -410,28 +443,32 @@ namespace irods::catalog::test {
                                      return true;
                                  };
 
-                                 if (q.contains("filters")) {
-                                     match = eval_filters(q["filters"]);
+                                 if (q.size() >= sizeof(lite3cpp::PackedNodeLayout) && q.get_type(0, "filters") == lite3cpp::Type::Array) {
+                                     match = eval_filters(q.get_arr(0, "filters"));
                                  }
-                                 
+
                                  if (match) {
-                                     nlohmann::json row;
-                                     if (q.contains("projections")) {
-                                         for (const auto& p : q["projections"]) {
-                                             if (p["alias"] == root_alias) {
-                                                 std::string prop = p["property"];
-                                                 std::string as = p["as"];
-                                                 row[as] = node.get_attribute<std::string>(prop);
+                                     size_t row_ofs = res_buf.arr_append_obj(0);
+                                     size_t fields_ofs = res_buf.set_obj(row_ofs, "fields");
+                                     if (q.size() >= sizeof(lite3cpp::PackedNodeLayout) && q.get_type(0, "projections") == lite3cpp::Type::Array) {
+                                         size_t projs_arr_ofs = q.get_arr(0, "projections");
+                                         lite3cpp::NodeView p_nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(q.data() + projs_arr_ofs));
+                                         for (uint32_t pi = 0; pi < p_nv.size(); ++pi) {
+                                             if (q.arr_get_type(projs_arr_ofs, pi) != lite3cpp::Type::Object) continue;
+                                             size_t p_ofs = q.arr_get_obj(projs_arr_ofs, pi);
+                                             if (q.get_type(p_ofs, "alias") == lite3cpp::Type::String && q.get_str(p_ofs, "alias") == root_alias) {
+                                                 std::string prop = (q.get_type(p_ofs, "property") == lite3cpp::Type::String) ? std::string(q.get_str(p_ofs, "property")) : "";
+                                                 std::string as = (q.get_type(p_ofs, "as") == lite3cpp::Type::String) ? std::string(q.get_str(p_ofs, "as")) : "";
+                                                 res_buf.set_str(fields_ofs, as, node.get_attribute<std::string>(prop));
                                              }
                                          }
                                      }
-                                     results.push_back(row);
                                  }
                              }
-                             
+
                              socket_.send(msgs[0], zmq::send_flags::sndmore);
                              socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
-                             socket_.send(zmq::message_t(results.dump()), zmq::send_flags::none);
+                             socket_.send(zmq::message_t(res_buf.data(), res_buf.size()), zmq::send_flags::none);
                              continue;
                         } else if (cmd == "+") {
                              if (msgs.size() < data_idx + 2) {

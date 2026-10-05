@@ -5,6 +5,8 @@
 #include "irods/private/genquery2_driver.hpp"
 #include "irods/private/genquery2_sql.hpp"
 #include "irods/private/genquery2_ast_types.hpp"
+#include "buffer.hpp"
+#include "json.hpp"
 #include <nlohmann/json.hpp>
 
 #include <string>
@@ -225,9 +227,9 @@ TEST_F(PluginGenQuery2Test, EndToEndGenQuery2Execution) {
         &output);
     ASSERT_TRUE(ret.ok()) << ret.result();
     ASSERT_NE(output, nullptr);
-    auto res = nlohmann::json::parse(output);
+    lite3cpp::Buffer res = lite3cpp::lite3_json::from_json_string(output);
     std::free(output);
-    EXPECT_EQ(res["rows_affected"], 1);
+    EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
 
     // 3. Test Update AST via driver.parse("update DATA set DATA_SIZE = 2048 where DATA_NAME = 'plugin_file.txt'") -> rows_affected == 1
     ASSERT_EQ(drv.parse("update DATA set DATA_SIZE = 2048 where DATA_NAME = 'plugin_file.txt'"), 0);
@@ -243,9 +245,9 @@ TEST_F(PluginGenQuery2Test, EndToEndGenQuery2Execution) {
         &output);
     ASSERT_TRUE(ret.ok()) << ret.result();
     ASSERT_NE(output, nullptr);
-    res = nlohmann::json::parse(output);
+    res = lite3cpp::lite3_json::from_json_string(output);
     std::free(output);
-    EXPECT_EQ(res["rows_affected"], 1);
+    EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
 
     // 3b. Test Select AST querying the updated record before deleting it
     ASSERT_EQ(drv.parse("select DATA_NAME where DATA_NAME = 'plugin_file.txt'"), 0);
@@ -261,11 +263,17 @@ TEST_F(PluginGenQuery2Test, EndToEndGenQuery2Execution) {
         &output);
     ASSERT_TRUE(ret.ok()) << ret.result();
     ASSERT_NE(output, nullptr);
-    res = nlohmann::json::parse(output);
+    res = lite3cpp::lite3_json::from_json_string(output);
     std::free(output);
-    ASSERT_TRUE(res.is_array());
-    ASSERT_EQ(res.size(), 1);
-    EXPECT_EQ(res[0][0], "plugin_file.txt");
+    EXPECT_GE(res.size(), sizeof(lite3cpp::PackedNodeLayout));
+    lite3cpp::NodeView nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(res.data()));
+    EXPECT_EQ(nv.type(), lite3cpp::Type::Array);
+    EXPECT_EQ(nv.size(), 1);
+    EXPECT_EQ(res.arr_get_type(0, 0), lite3cpp::Type::Array);
+    size_t row_arr_ofs = res.arr_get_arr(0, 0);
+    lite3cpp::NodeView row_nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(res.data() + row_arr_ofs));
+    EXPECT_EQ(row_nv.size(), 1);
+    EXPECT_EQ(res.arr_get_str(row_arr_ofs, 0), "plugin_file.txt");
 
     // 4. Test Remove AST via driver.parse("delete from DATA where DATA_NAME = 'plugin_file.txt'") -> rows_affected == 1
     ASSERT_EQ(drv.parse("delete from DATA where DATA_NAME = 'plugin_file.txt'"), 0);
@@ -281,9 +289,9 @@ TEST_F(PluginGenQuery2Test, EndToEndGenQuery2Execution) {
         &output);
     ASSERT_TRUE(ret.ok()) << ret.result();
     ASSERT_NE(output, nullptr);
-    res = nlohmann::json::parse(output);
+    res = lite3cpp::lite3_json::from_json_string(output);
     std::free(output);
-    EXPECT_EQ(res["rows_affected"], 1);
+    EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
 
     // 5. Test Repeated Remove -> rows_affected == 0
     output = nullptr;
@@ -298,9 +306,9 @@ TEST_F(PluginGenQuery2Test, EndToEndGenQuery2Execution) {
         &output);
     ASSERT_TRUE(ret.ok()) << ret.result();
     ASSERT_NE(output, nullptr);
-    res = nlohmann::json::parse(output);
+    res = lite3cpp::lite3_json::from_json_string(output);
     std::free(output);
-    EXPECT_EQ(res["rows_affected"], 0);
+    EXPECT_EQ(res.get_i64(0, "rows_affected"), 0);
 
     // 6. Test Select AST via driver.parse("select DATA_NAME where DATA_NAME = 'nonexistent.txt'") -> returns empty JSON array
     ASSERT_EQ(drv.parse("select DATA_NAME where DATA_NAME = 'nonexistent.txt'"), 0);
@@ -316,10 +324,12 @@ TEST_F(PluginGenQuery2Test, EndToEndGenQuery2Execution) {
         &output);
     ASSERT_TRUE(ret.ok()) << ret.result();
     ASSERT_NE(output, nullptr);
-    res = nlohmann::json::parse(output);
+    res = lite3cpp::lite3_json::from_json_string(output);
     std::free(output);
-    EXPECT_TRUE(res.is_array());
-    EXPECT_TRUE(res.empty());
+    EXPECT_GE(res.size(), sizeof(lite3cpp::PackedNodeLayout));
+    lite3cpp::NodeView empty_nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(res.data()));
+    EXPECT_EQ(empty_nv.type(), lite3cpp::Type::Array);
+    EXPECT_EQ(empty_nv.size(), 0);
 }
 
 TEST_F(PluginGenQuery2Test, NullInputHandling) {
