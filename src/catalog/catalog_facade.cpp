@@ -900,16 +900,28 @@ namespace irods::catalog {
             auto owners = f_owns.get();
             for (auto oid : owners) batch.del_edge(oid, "OWNS", 1.0, sid);
             auto accesses = f_access.get();
+            std::vector<std::pair<snowflake_id_t, std::future<std::vector<snowflake_id_t>>>> f_access_uids;
+            f_access_uids.reserve(accesses.size());
             for (auto aid : accesses) {
-                auto uids = client_->get_in_neighbors_async(local_cluster_id_, aid, "HAS_ACCESS").get();
+                f_access_uids.emplace_back(aid, client_->get_in_neighbors_async(local_cluster_id_, aid, "HAS_ACCESS"));
+            }
+
+            auto avus = f_avus.get();
+            std::vector<std::pair<snowflake_id_t, std::future<std::vector<snowflake_id_t>>>> f_avu_refs;
+            f_avu_refs.reserve(avus.size());
+            for (auto aid : avus) {
+                f_avu_refs.emplace_back(aid, client_->get_in_neighbors_async(local_cluster_id_, aid, "ANNOTATED_WITH"));
+            }
+
+            for (auto& [aid, fut] : f_access_uids) {
+                auto uids = fut.get();
                 for (auto uid : uids) batch.del_edge(uid, "HAS_ACCESS", 1.0, aid);
                 batch.del_edge(aid, "FOR_OBJECT", 1.0, sid);
                 batch.del_node(aid);
             }
-            auto avus = f_avus.get();
-            for (auto aid : avus) {
+            for (auto& [aid, fut] : f_avu_refs) {
                 batch.del_edge(sid, "ANNOTATED_WITH", 1.0, aid);
-                auto refs = client_->get_in_neighbors_async(local_cluster_id_, aid, "ANNOTATED_WITH").get();
+                auto refs = fut.get();
                 if (refs.size() <= 1) batch.del_node(aid);
             }
             batch.del_node(sid);
@@ -1792,18 +1804,30 @@ namespace irods::catalog {
                 batch.del_edge(oid, "OWNS", 1.0, sid);
             }
             auto accesses = f_access.get();
+            std::vector<std::pair<snowflake_id_t, std::future<std::vector<snowflake_id_t>>>> f_access_uids;
+            f_access_uids.reserve(accesses.size());
             for (auto aid : accesses) {
-                auto uids = client_->get_in_neighbors_async(local_cluster_id_, aid, "HAS_ACCESS").get();
+                f_access_uids.emplace_back(aid, client_->get_in_neighbors_async(local_cluster_id_, aid, "HAS_ACCESS"));
+            }
+
+            auto avus = f_avus.get();
+            std::vector<std::pair<snowflake_id_t, std::future<std::vector<snowflake_id_t>>>> f_avu_refs;
+            f_avu_refs.reserve(avus.size());
+            for (auto aid : avus) {
+                f_avu_refs.emplace_back(aid, client_->get_in_neighbors_async(local_cluster_id_, aid, "ANNOTATED_WITH"));
+            }
+
+            for (auto& [aid, fut] : f_access_uids) {
+                auto uids = fut.get();
                 for (auto uid : uids) {
                     batch.del_edge(uid, "HAS_ACCESS", 1.0, aid);
                 }
                 batch.del_edge(aid, "FOR_OBJECT", 1.0, sid);
                 batch.del_node(aid);
             }
-            auto avus = f_avus.get();
-            for (auto aid : avus) {
+            for (auto& [aid, fut] : f_avu_refs) {
                 batch.del_edge(sid, "ANNOTATED_WITH", 1.0, aid);
-                auto refs = client_->get_in_neighbors_async(local_cluster_id_, aid, "ANNOTATED_WITH").get();
+                auto refs = fut.get();
                 if (refs.size() <= 1) {
                     batch.del_node(aid);
                 }

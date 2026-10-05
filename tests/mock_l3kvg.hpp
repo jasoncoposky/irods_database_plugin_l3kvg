@@ -484,6 +484,7 @@ namespace irods::catalog::test {
                                  if (match) {
                                      size_t row_ofs = res_buf.arr_append_obj(0);
                                      size_t fields_ofs = res_buf.set_obj(row_ofs, "fields");
+                                     size_t proj_ofs = res_buf.set_arr(row_ofs, "proj");
                                      if (q.size() >= sizeof(lite3cpp::PackedNodeLayout) && q.get_type(0, "projections") == lite3cpp::Type::Array) {
                                          size_t projs_arr_ofs = q.get_arr(0, "projections");
                                          lite3cpp::NodeView p_nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(q.data() + projs_arr_ofs));
@@ -493,7 +494,9 @@ namespace irods::catalog::test {
                                              if (q.get_type(p_ofs, "alias") == lite3cpp::Type::String && q.get_str(p_ofs, "alias") == root_alias) {
                                                  std::string prop = (q.get_type(p_ofs, "property") == lite3cpp::Type::String) ? std::string(q.get_str(p_ofs, "property")) : "";
                                                  std::string as = (q.get_type(p_ofs, "as") == lite3cpp::Type::String) ? std::string(q.get_str(p_ofs, "as")) : "";
-                                                 res_buf.set_str(fields_ofs, as, node.get_attribute<std::string>(prop));
+                                                 std::string val = node.get_attribute<std::string>(prop);
+                                                 res_buf.set_str(fields_ofs, as, val);
+                                                 res_buf.arr_append_str(proj_ofs, val);
                                              }
                                          }
                                      }
