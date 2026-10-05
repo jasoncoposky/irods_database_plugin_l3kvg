@@ -203,10 +203,10 @@ namespace irods::catalog::test {
                                 continue;
                             }
                             const auto& payload_msg = msgs[data_idx];
-                            lite3cpp::Buffer buf(std::vector<uint8_t>(
+                            lite3cpp::Buffer buf(
                                 static_cast<const uint8_t*>(payload_msg.data()),
-                                static_cast<const uint8_t*>(payload_msg.data()) + payload_msg.size()
-                            ));
+                                payload_msg.size()
+                            );
                             size_t count = l3kvg::MutationBatch::item_count(buf);
                             std::lock_guard<std::mutex> lock(mu_);
                             for (size_t i = 0; i < count; ++i) {
@@ -359,7 +359,7 @@ namespace irods::catalog::test {
                              const auto& q_msg = msgs[data_idx + 1];
                              const uint8_t* q_data = static_cast<const uint8_t*>(q_msg.data());
                              if (q_msg.size() >= sizeof(lite3cpp::PackedNodeLayout) && (q_data[0] == 0x06 || q_data[0] == 0x07)) {
-                                 q = lite3cpp::Buffer(std::vector<uint8_t>(q_data, q_data + q_msg.size()));
+                                 q = lite3cpp::Buffer(q_data, q_msg.size());
                              } else {
                                  std::string raw = q_msg.to_string();
                                  q = lite3cpp::lite3_json::from_json_string(raw.empty() ? "{}" : raw);

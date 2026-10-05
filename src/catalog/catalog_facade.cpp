@@ -103,7 +103,7 @@ namespace irods::catalog {
                         client_->put_node_async(local_cluster_id_, uid, ubuf.move_to_string()).get();
                     } else {
                         try {
-                            lite3cpp::Buffer ubuf(std::vector<uint8_t>(upayload.begin(), upayload.end()));
+                            lite3cpp::Buffer ubuf(upayload);
                             if (safe_get_str(ubuf, 0, "ct").empty()) {
                                 ubuf.set_str(0, "ct", time_buf);
                                 ubuf.set_str(0, "mt", time_buf);
@@ -232,7 +232,7 @@ namespace irods::catalog {
                             needs_update = true;
                         } else {
                             try {
-                                lite3cpp::Buffer exist_buf(std::vector<uint8_t>(cpayload.begin(), cpayload.end()));
+                                lite3cpp::Buffer exist_buf(cpayload);
                                 std::string et = safe_get_str(exist_buf, 0, "entity_type");
                                 std::string t = safe_get_str(exist_buf, 0, "t");
                                 std::string ct = safe_get_str(exist_buf, 0, "ct");
@@ -725,7 +725,7 @@ namespace irods::catalog {
                 std::string cpayload = client_->get_node_payload_async(local_cluster_id_, csid).get();
                 if (!cpayload.empty()) {
                     try {
-                        lite3cpp::Buffer cbuf(std::vector<uint8_t>(cpayload.begin(), cpayload.end()));
+                        lite3cpp::Buffer cbuf(cpayload);
                         std::string cname = safe_get_str(cbuf, 0, "n");
                         if (!cname.empty()) {
                             if (cname.back() == '/') {
@@ -853,7 +853,7 @@ namespace irods::catalog {
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (!payload.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     std::string name = safe_get_str(buf, 0, "n");
                     del_index(EntityType::DataObject, "n", name, sid);
                     std::string id_str = safe_get_str(buf, 0, "id");
@@ -906,7 +906,7 @@ namespace irods::catalog {
             // Update node 'n' property
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (!payload.empty()) {
-                 lite3cpp::Buffer old_buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                 lite3cpp::Buffer old_buf(payload);
                  lite3cpp::Buffer new_buf; new_buf.init_object();
                  
                  std::string old_name = safe_get_str(old_buf, 0, "n");
@@ -973,8 +973,8 @@ namespace irods::catalog {
             std::string c_payload = client_->get_node_payload_async(local_cluster_id_, cid).get();
             if (c_payload.empty()) return ERROR(CAT_UNKNOWN_COLLECTION, "Target collection not found");
 
-            lite3cpp::Buffer dbuf(std::vector<uint8_t>(d_payload.begin(), d_payload.end()));
-            lite3cpp::Buffer cbuf(std::vector<uint8_t>(c_payload.begin(), c_payload.end()));
+            lite3cpp::Buffer dbuf(d_payload);
+            lite3cpp::Buffer cbuf(c_payload);
 
             std::string data_name = safe_get_str(dbuf, 0, "n");
             std::string old_path = safe_get_str(dbuf, 0, "p");
@@ -1008,7 +1008,7 @@ namespace irods::catalog {
             snowflake_id_t sid = make_id(EntityType::DataObject, obj_id);
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (!payload.empty()) {
-                 lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                 lite3cpp::Buffer buf(payload);
                  std::string k = std::string(prop);
                  if (prop == "dataSize" || prop == "data_size" || prop == "DATA_SIZE" || prop == "size" || prop == "s") k = "s";
                  else if (prop == "dataModify" || prop == "modify_ts" || prop == "DATA_MODIFY_TIME" || prop == "mt") k = "mt";
@@ -1041,7 +1041,7 @@ namespace irods::catalog {
             if (rh.empty()) {
                 std::string existing_payload = client_->get_node_payload_async(local_cluster_id_, rid).get();
                 if (!existing_payload.empty()) {
-                    lite3cpp::Buffer ebuf(std::vector<uint8_t>(existing_payload.begin(), existing_payload.end()));
+                    lite3cpp::Buffer ebuf(existing_payload);
                     rh = safe_get_str(ebuf, 0, "rh");
                 }
             }
@@ -1049,7 +1049,7 @@ namespace irods::catalog {
                 snowflake_id_t resc_sid = make_id(EntityType::Resource, repl.resource_id);
                 std::string rpayload = client_->get_node_payload_async(local_cluster_id_, resc_sid).get();
                 if (!rpayload.empty()) {
-                    lite3cpp::Buffer rbuf(std::vector<uint8_t>(rpayload.begin(), rpayload.end()));
+                    lite3cpp::Buffer rbuf(rpayload);
                     rh = safe_get_str(rbuf, 0, "n");
                 }
             }
@@ -1094,7 +1094,7 @@ namespace irods::catalog {
             std::string payload = client_->get_node_payload_async(local_cluster_id_, rid).get();
             if (!payload.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     uint64_t resc_id = buf.get_i64(0, "rid");
                     if (resc_id != 0) {
                         snowflake_id_t rsid = make_id(EntityType::Resource, resc_id);
@@ -1121,7 +1121,7 @@ namespace irods::catalog {
             snowflake_id_t rid = SnowflakeID::create(local_cluster_id_, local_uuid);
             std::string payload = client_->get_node_payload_async(local_cluster_id_, rid).get();
             if (!payload.empty()) {
-                 lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                 lite3cpp::Buffer buf(payload);
                  buf.set_str(0, "at", std::string(time));
                  client_->put_node_async(local_cluster_id_, rid, buf.move_to_string()).get();
             }
@@ -1134,7 +1134,7 @@ namespace irods::catalog {
             for (auto rid : replicas) {
                 std::string payload = client_->get_node_payload_async(local_cluster_id_, rid).get();
                 if (payload.empty()) continue;
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                lite3cpp::Buffer buf(payload);
                 try {
                     int64_t rn = buf.get_i64(0, "rn");
                     if (rn > max_rn) max_rn = rn;
@@ -1166,7 +1166,7 @@ namespace irods::catalog {
             for (auto rid : replicas) {
                 std::string payload = client_->get_node_payload_async(local_cluster_id_, rid).get();
                 if (payload.empty()) continue;
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                lite3cpp::Buffer buf(payload);
                 uint32_t rn = 0;
                 try { rn = static_cast<uint32_t>(buf.get_i64(0, "rn")); } catch (...) {}
                 std::string rh{safe_get_str(buf, 0, "rh")};
@@ -1187,7 +1187,7 @@ namespace irods::catalog {
                         auto rpayload = client_->get_node_payload_async(local_cluster_id_, resc_sid).get();
                         if (!rpayload.empty()) {
                             try {
-                                lite3cpp::Buffer rbuf(std::vector<uint8_t>(rpayload.begin(), rpayload.end()));
+                                lite3cpp::Buffer rbuf(rpayload);
                                 leaf_resc_id = rbuf.get_i64(0, "id");
                             } catch (...) {}
                         }
@@ -1200,7 +1200,7 @@ namespace irods::catalog {
                         auto rpayload = client_->get_node_payload_async(local_cluster_id_, resc_sid).get();
                         if (!rpayload.empty()) {
                             try {
-                                lite3cpp::Buffer rbuf(std::vector<uint8_t>(rpayload.begin(), rpayload.end()));
+                                lite3cpp::Buffer rbuf(rpayload);
                                 rh = safe_get_str(rbuf, 0, "n");
                                 buf.set_str(0, "rh", rh);
                                 modified = true;
@@ -1297,7 +1297,7 @@ namespace irods::catalog {
                             std::string payload = client_->get_node_payload_async(local_cluster_id_, cid).get();
                             if (!payload.empty()) {
                                 try {
-                                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                                    lite3cpp::Buffer buf(payload);
                                     std::string t = safe_get_str(buf, 0, "t");
                                     std::string name = safe_get_str(buf, 0, "n");
                                     std::string p = safe_get_str(buf, 0, "p");
@@ -1378,7 +1378,7 @@ namespace irods::catalog {
             snprintf(time_buf, sizeof(time_buf), "%011lld", (long long)time(nullptr));
 
             if (!payload.empty()) {
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                lite3cpp::Buffer buf(payload);
                 buf.set_str(0, "n", new_prefix);
                 buf.set_str(0, "pn", new_parent_path);
                 buf.set_str(0, "mt", std::string(time_buf));
@@ -1392,7 +1392,7 @@ namespace irods::catalog {
             for (snowflake_id_t child_sid : children) {
                 std::string ch_payload = client_->get_node_payload_async(local_cluster_id_, child_sid).get();
                 if (ch_payload.empty()) continue;
-                lite3cpp::Buffer ch_buf(std::vector<uint8_t>(ch_payload.begin(), ch_payload.end()));
+                lite3cpp::Buffer ch_buf(ch_payload);
                 std::string ch_type = safe_get_str(ch_buf, 0, "t");
                 std::string ch_entity_type = safe_get_str(ch_buf, 0, "entity_type");
                 bool is_coll = (ch_entity_type == "collection" || (ch_entity_type.empty() && ch_type == "collection"));
@@ -1471,6 +1471,51 @@ namespace irods::catalog {
             return SUCCESS();
         }
 
+        irods::error get_child_collection_ids(snowflake_id_t parent_sid, std::string_view parent_path, std::vector<snowflake_id_t>& out_ids) {
+            std::string path_str(parent_path);
+            if (path_str.empty()) {
+                std::string payload = client_->get_node_payload_async(local_cluster_id_, parent_sid).get();
+                if (!payload.empty()) {
+                    lite3cpp::Buffer buf(payload);
+                    path_str = safe_get_str(buf, 0, "n");
+                }
+            }
+            if (!path_str.empty()) {
+                try {
+                    std::string prefix = get_idx_key(EntityType::Collection, "n", path_str == "/" ? "/" : path_str + "/");
+                    size_t prefix_len = prefix.size();
+                    auto entries = client_->get_prefix_entries_async(local_cluster_id_, prefix).get();
+                    for (const auto& [k, v] : entries) {
+                        if (k.size() > prefix_len) {
+                            std::string_view remainder(k.data() + prefix_len, k.size() - prefix_len);
+                            if (remainder.find('/') == std::string_view::npos && !v.empty()) {
+                                try {
+                                    out_ids.push_back(std::stoull(v, nullptr, 16));
+                                } catch (...) {}
+                            }
+                        }
+                    }
+                    return SUCCESS();
+                } catch (...) {}
+            }
+
+            // Fallback path: graph traversal
+            try {
+                auto children = client_->get_neighbors_async(local_cluster_id_, parent_sid, "CONTAINS", 0.0).get();
+                for (snowflake_id_t child_sid : children) {
+                    std::string ch_payload = client_->get_node_payload_async(local_cluster_id_, child_sid).get();
+                    if (ch_payload.empty()) continue;
+                    lite3cpp::Buffer ch_buf(ch_payload);
+                    std::string ch_type = safe_get_str(ch_buf, 0, "t");
+                    std::string ch_entity_type = safe_get_str(ch_buf, 0, "entity_type");
+                    if (ch_entity_type == "collection" || (ch_entity_type.empty() && ch_type == "collection")) {
+                        out_ids.push_back(child_sid);
+                    }
+                }
+            } catch (...) {}
+            return SUCCESS();
+        }
+
         irods::error rename_collection(std::string_view old_name, std::string_view new_name) { 
             snowflake_id_t sid = resolve_id_from_index(EntityType::Collection, "n", old_name);
             if (!sid) return ERROR(CAT_UNKNOWN_COLLECTION, "Collection not found");
@@ -1500,7 +1545,7 @@ namespace irods::catalog {
             if (payload.empty()) {
                 return ERROR(CAT_UNKNOWN_COLLECTION, "Collection not found");
             }
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
             std::string old_coll_name = safe_get_str(buf, 0, "n");
             std::string parent_coll_name = safe_get_str(buf, 0, "pn");
 
@@ -1538,8 +1583,8 @@ namespace irods::catalog {
                 return ERROR(CAT_UNKNOWN_COLLECTION, "Target collection not found");
             }
 
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
-            lite3cpp::Buffer tbuf(std::vector<uint8_t>(target_payload.begin(), target_payload.end()));
+            lite3cpp::Buffer buf(payload);
+            lite3cpp::Buffer tbuf(target_payload);
 
             std::string old_coll_name = safe_get_str(buf, 0, "n");
             std::string old_parent_name = safe_get_str(buf, 0, "pn");
@@ -1571,8 +1616,8 @@ namespace irods::catalog {
             std::string d_payload = client_->get_node_payload_async(local_cluster_id_, did).get();
 
             if (!c_payload.empty() && !d_payload.empty()) {
-                lite3cpp::Buffer cbuf(std::vector<uint8_t>(c_payload.begin(), c_payload.end()));
-                lite3cpp::Buffer dbuf(std::vector<uint8_t>(d_payload.begin(), d_payload.end()));
+                lite3cpp::Buffer cbuf(c_payload);
+                lite3cpp::Buffer dbuf(d_payload);
                 std::string cname = safe_get_str(cbuf, 0, "n");
                 std::string dpath = safe_get_str(dbuf, 0, "p");
                 if (new_name.starts_with("/")) {
@@ -1601,12 +1646,12 @@ namespace irods::catalog {
             std::string d_payload = client_->get_node_payload_async(local_cluster_id_, did).get();
 
             if (!c_payload.empty() && !d_payload.empty()) {
-                lite3cpp::Buffer cbuf(std::vector<uint8_t>(c_payload.begin(), c_payload.end()));
-                lite3cpp::Buffer dbuf(std::vector<uint8_t>(d_payload.begin(), d_payload.end()));
+                lite3cpp::Buffer cbuf(c_payload);
+                lite3cpp::Buffer dbuf(d_payload);
                 snowflake_id_t target_cid = make_id(EntityType::Collection, target_coll_id);
                 std::string target_payload = client_->get_node_payload_async(local_cluster_id_, target_cid).get();
                 if (!target_payload.empty()) {
-                    lite3cpp::Buffer tbuf(std::vector<uint8_t>(target_payload.begin(), target_payload.end()));
+                    lite3cpp::Buffer tbuf(target_payload);
                     std::string tpath = safe_get_str(tbuf, 0, "n");
                     std::string cpath = safe_get_str(cbuf, 0, "n");
                     std::string dpath = safe_get_str(dbuf, 0, "p");
@@ -1680,7 +1725,7 @@ namespace irods::catalog {
             // Delete path index and edges
             if (!payload.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     std::string path = safe_get_str(buf, 0, "n");
                     del_index(EntityType::Collection, "n", path);
                     std::string id_str = safe_get_str(buf, 0, "id");
@@ -1738,7 +1783,7 @@ namespace irods::catalog {
                     return ERROR(-1, "Collection not found for modify");
                 }
             }
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
             
             std::string key(prop);
             if (prop == "inheritance") key = "i";
@@ -1783,7 +1828,7 @@ namespace irods::catalog {
         irods::error modify_resource(snowflake_id_t sid, std::string_view prop, std::string_view value) { 
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (!payload.empty()) {
-                 lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                 lite3cpp::Buffer buf(payload);
                  
                  std::string key(prop);
                  if (prop == "path" || prop == "resc_def_path") key = "v";
@@ -1813,7 +1858,7 @@ namespace irods::catalog {
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (!payload.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     std::string name = safe_get_str(buf, 0, "n");
                     del_index(EntityType::Resource, "n", name);
                     std::string id_str = safe_get_str(buf, 0, "id");
@@ -1852,7 +1897,7 @@ namespace irods::catalog {
                 std::string p_payload = client_->get_node_payload_async(local_cluster_id_, current).get();
                 if (!p_payload.empty()) {
                     try {
-                        lite3cpp::Buffer buf(std::vector<uint8_t>(p_payload.begin(), p_payload.end()));
+                        lite3cpp::Buffer buf(p_payload);
                         parts.insert(parts.begin(), safe_get_str(buf, 0, "n"));
                     } catch (...) { break; }
                 } else break;
@@ -1875,7 +1920,7 @@ namespace irods::catalog {
             std::string parent_id_str;
             std::string p_payload = client_->get_node_payload_async(local_cluster_id_, pid).get();
             if (!p_payload.empty()) {
-                lite3cpp::Buffer p_buf(std::vector<uint8_t>(p_payload.begin(), p_payload.end()));
+                lite3cpp::Buffer p_buf(p_payload);
                 parent_id_str = safe_get_str(p_buf, 0, "id");
                 
                 std::string cur_children = safe_get_str(p_buf, 0, "ch");
@@ -1892,7 +1937,7 @@ namespace irods::catalog {
 
             std::string c_payload = client_->get_node_payload_async(local_cluster_id_, cid).get();
             if (!c_payload.empty()) {
-                lite3cpp::Buffer c_buf(std::vector<uint8_t>(c_payload.begin(), c_payload.end()));
+                lite3cpp::Buffer c_buf(c_payload);
                 if (!parent_id_str.empty()) {
                     c_buf.set_str(0, "p", parent_id_str);
                 }
@@ -1912,7 +1957,7 @@ namespace irods::catalog {
 
             std::string p_payload = client_->get_node_payload_async(local_cluster_id_, pid).get();
             if (!p_payload.empty()) {
-                lite3cpp::Buffer p_buf(std::vector<uint8_t>(p_payload.begin(), p_payload.end()));
+                lite3cpp::Buffer p_buf(p_payload);
                 std::string cur_children = safe_get_str(p_buf, 0, "ch");
                 irods::children_parser parser;
                 if (!cur_children.empty()) {
@@ -1927,7 +1972,7 @@ namespace irods::catalog {
 
             std::string c_payload = client_->get_node_payload_async(local_cluster_id_, cid).get();
             if (!c_payload.empty()) {
-                lite3cpp::Buffer c_buf(std::vector<uint8_t>(c_payload.begin(), c_payload.end()));
+                lite3cpp::Buffer c_buf(c_payload);
                 c_buf.set_str(0, "p", "");
                 c_buf.set_str(0, "pc", "");
                 client_->put_node_async(local_cluster_id_, cid, c_buf.move_to_string()).get();
@@ -1939,7 +1984,7 @@ namespace irods::catalog {
             snowflake_id_t sid = make_id(EntityType::Resource, resc_id);
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (!payload.empty()) {
-                 lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                 lite3cpp::Buffer buf(payload);
                  int64_t count = 0;
                  if (buf.get_type(0, "c") != lite3cpp::Type::Invalid) {
                      count = buf.get_i64(0, "c");
@@ -2038,7 +2083,7 @@ namespace irods::catalog {
             std::string payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
             if (!payload.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     std::string id_str = safe_get_str(buf, 0, "id");
                     if (!id_str.empty()) del_index(EntityType::User, "id", id_str);
                 } catch (...) {}
@@ -2057,7 +2102,7 @@ namespace irods::catalog {
                 std::string aid_payload = client_->get_node_payload_async(local_cluster_id_, aid).get();
                 if (!aid_payload.empty()) {
                     try {
-                        lite3cpp::Buffer abuf(std::vector<uint8_t>(aid_payload.begin(), aid_payload.end()));
+                        lite3cpp::Buffer abuf(aid_payload);
                         int64_t owner_uid = abuf.get_i64(0, "uid");
                         if (static_cast<uint64_t>(owner_uid) == uid) {
                             for (auto m : members) {
@@ -2081,7 +2126,7 @@ namespace irods::catalog {
             
             std::string payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
             if (!payload.empty()) {
-                 lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                 lite3cpp::Buffer buf(payload);
                  if (prop == "type") {
                      buf.set_i64(0, "p", (value == "rodsadmin" ? 5 : 1));
                      buf.set_str(0, "t", std::string(value));
@@ -2107,7 +2152,7 @@ namespace irods::catalog {
             std::string payload = fut.get();
             if (payload.empty()) return ERROR(-1, "User node missing");
             try {
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                lite3cpp::Buffer buf(payload);
                 user_priv = static_cast<int>(buf.get_i64(0, "p"));
                 #ifdef IRODS_SERVER
                 rodsLog(LOG_NOTICE, "L3_CATALOG: check_auth user=[%s] priv=[%d]", user_name.data(), user_priv);
@@ -2122,7 +2167,7 @@ namespace irods::catalog {
             std::string payload = fut.get();
             if (payload.empty()) return ERROR(-1, "User node missing");
             try {
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                lite3cpp::Buffer buf(payload);
                 out_priv = static_cast<int>(buf.get_i64(0, "p"));
                 if (buf.get_type(0, "pw") != lite3cpp::Type::Invalid) {
                     out_pw = safe_get_str(buf, 0, "pw");
@@ -2142,7 +2187,7 @@ namespace irods::catalog {
             std::string payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
             if (!payload.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     if (buf.get_type(0, "pw") != lite3cpp::Type::Invalid) {
                         std::string stored_pw = safe_get_str(buf, 0, "pw");
                         correct = (stored_pw == password);
@@ -2241,7 +2286,7 @@ namespace irods::catalog {
                             apply_node_access(child_sid);
                             std::string ch_payload = client_->get_node_payload_async(local_cluster_id_, child_sid).get();
                             if (!ch_payload.empty()) {
-                                lite3cpp::Buffer ch_buf(std::vector<uint8_t>(ch_payload.begin(), ch_payload.end()));
+                                lite3cpp::Buffer ch_buf(ch_payload);
                                 std::string ch_type = safe_get_str(ch_buf, 0, "t");
                                 std::string ch_entity_type = safe_get_str(ch_buf, 0, "entity_type");
                                 bool is_coll = (ch_entity_type == "collection" || (ch_entity_type.empty() && ch_type == "collection"));
@@ -2288,7 +2333,7 @@ namespace irods::catalog {
                 std::string user_payload = client_->get_node_payload_async(local_cluster_id_, user_sid).get();
                 if (!user_payload.empty()) {
                     try {
-                        lite3cpp::Buffer buf(std::vector<uint8_t>(user_payload.begin(), user_payload.end()));
+                        lite3cpp::Buffer buf(user_payload);
                         user_name = safe_get_str(buf, 0, "n");
                     } catch (...) {}
                 }
@@ -2297,7 +2342,7 @@ namespace irods::catalog {
             // Direct check on owner
             if (!user_name.empty()) {
                 try {
-                    lite3cpp::Buffer tbuf(std::vector<uint8_t>(t_payload.begin(), t_payload.end()));
+                    lite3cpp::Buffer tbuf(t_payload);
                     std::string owner = safe_get_str(tbuf, 0, "o");
                     if (owner == user_name) {
                         allowed = true;
@@ -2344,7 +2389,7 @@ namespace irods::catalog {
                     std::string payload = client_->get_node_payload_async(local_cluster_id_, aid).get();
                     if (!payload.empty()) {
                         try {
-                            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                            lite3cpp::Buffer buf(payload);
                             std::string actual_level = safe_get_str(buf, 0, "l");
                             if (perm_rank(actual_level) >= perm_rank(level)) return true;
                         } catch (...) {}
@@ -2372,7 +2417,7 @@ namespace irods::catalog {
                         std::string p_payload = client_->get_node_payload_async(local_cluster_id_, curr).get();
                         if (!p_payload.empty()) {
                             try {
-                                lite3cpp::Buffer pbuf(std::vector<uint8_t>(p_payload.begin(), p_payload.end()));
+                                lite3cpp::Buffer pbuf(p_payload);
                                 std::string p_owner = safe_get_str(pbuf, 0, "o");
                                 if (p_owner == user_name) {
                                     allowed = true;
@@ -2578,7 +2623,7 @@ namespace irods::catalog {
                 std::string payload = client_->get_node_payload_async(local_cluster_id_, aid).get();
                 if (payload.empty()) continue;
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     std::string_view a = buf.get_str(0, "a");
                     if (a == metadata.attribute) {
                         del_edge(target_sid, "ANNOTATED_WITH", 1.0, aid);
@@ -2627,7 +2672,7 @@ namespace irods::catalog {
             // For now, we don't have patch_str_async in RemoteL3KVClient, so we do full put
             std::string payload = client_->get_node_payload_async(local_cluster_id_, zid).get();
             if (!payload.empty()) {
-                 lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                 lite3cpp::Buffer buf(payload);
                  buf.set_str(0, std::string(prop), std::string(value));
                  client_->put_node_async(local_cluster_id_, zid, buf.move_to_string()).get();
             }
@@ -2644,7 +2689,7 @@ namespace irods::catalog {
                 std::string payload = client_->get_node_payload_async(local_cluster_id_, zid).get();
                 if (!payload.empty()) {
                     try {
-                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        lite3cpp::Buffer buf(payload);
                         std::string id_str = safe_get_str(buf, 0, "id");
                         if (!id_str.empty()) del_index(EntityType::Zone, "id", id_str);
                         std::string type_str = safe_get_str(buf, 0, "t");
@@ -2732,7 +2777,7 @@ namespace irods::catalog {
             if (target_sid) {
                 std::string tpayload = client_->get_node_payload_async(local_cluster_id_, target_sid).get();
                 if (!tpayload.empty()) {
-                    lite3cpp::Buffer tbuf(std::vector<uint8_t>(tpayload.begin(), tpayload.end()));
+                    lite3cpp::Buffer tbuf(tpayload);
                     if (tpath.empty()) {
                         tpath = safe_get_str(tbuf, 0, "p");
                         if (tpath.empty()) tpath = safe_get_str(tbuf, 0, "n");
@@ -2761,7 +2806,7 @@ namespace irods::catalog {
             if (user_sid) {
                 std::string upayload = client_->get_node_payload_async(local_cluster_id_, user_sid).get();
                 if (!upayload.empty()) {
-                    lite3cpp::Buffer ubuf(std::vector<uint8_t>(upayload.begin(), upayload.end()));
+                    lite3cpp::Buffer ubuf(upayload);
                     actual_uid = ubuf.get_i64(0, "id");
                 }
             }
@@ -2799,7 +2844,7 @@ namespace irods::catalog {
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (payload.empty()) return CODE(CAT_SUCCESS_BUT_WITH_NO_INFO);
 
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
             std::string owner = safe_get_str(buf, 0, "own");
             std::string clean_user(calling_user);
             auto hpos = clean_user.find('#');
@@ -2841,7 +2886,7 @@ namespace irods::catalog {
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (payload.empty()) return ERROR(CAT_TICKET_INVALID, "Empty ticket payload");
 
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
 
             std::string owner = safe_get_str(buf, 0, "own");
             std::string clean_user(calling_user);
@@ -2932,7 +2977,7 @@ namespace irods::catalog {
             auto process_ticket_node = [&](snowflake_id_t sid) {
                 std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
                 if (payload.empty()) return;
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                lite3cpp::Buffer buf(payload);
                 std::string tid = std::to_string(buf.get_i64(0, "id"));
                 std::string raw = safe_get_str(buf, 0, field_name);
                 auto items = split_csv(raw);
@@ -2968,7 +3013,7 @@ namespace irods::catalog {
 
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (payload.empty()) return ERROR(CAT_TICKET_INVALID, "Empty ticket payload");
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
 
             // Expiration
             std::string ex_str = safe_get_str(buf, 0, "ex");
@@ -3040,7 +3085,7 @@ namespace irods::catalog {
                         for (auto gid : mem_edges) {
                             std::string gpayload = client_->get_node_payload_async(local_cluster_id_, gid).get();
                             if (!gpayload.empty()) {
-                                lite3cpp::Buffer gbuf(std::vector<uint8_t>(gpayload.begin(), gpayload.end()));
+                                lite3cpp::Buffer gbuf(gpayload);
                                 std::string gname = safe_get_str(gbuf, 0, "n");
                                 for (const auto& g : groups) {
                                     if (g == gname || g.starts_with(gname + "#") || gname.starts_with(g + "#")) {
@@ -3068,7 +3113,7 @@ namespace irods::catalog {
                     snowflake_id_t tsid = make_id((ot == "data" ? EntityType::DataObject : EntityType::Collection), oid);
                     std::string tpayload = client_->get_node_payload_async(local_cluster_id_, tsid).get();
                     if (!tpayload.empty()) {
-                        lite3cpp::Buffer tbuf(std::vector<uint8_t>(tpayload.begin(), tpayload.end()));
+                        lite3cpp::Buffer tbuf(tpayload);
                         if (ot == "data") {
                             *out_target_path = safe_get_str(tbuf, 0, "p");
                         } else {
@@ -3092,7 +3137,7 @@ namespace irods::catalog {
             if (!sid) return ERROR(CAT_TICKET_INVALID, "Ticket not found");
 
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
 
             if (target_path.empty()) {
                 target_path = safe_get_str(buf, 0, "target_path");
@@ -3101,7 +3146,7 @@ namespace irods::catalog {
             // Target object check
             std::string obj_payload = client_->get_node_payload_async(local_cluster_id_, obj_sid).get();
             if (obj_payload.empty()) return ERROR(CAT_TICKET_INVALID, "Object not found");
-            lite3cpp::Buffer obj_buf(std::vector<uint8_t>(obj_payload.begin(), obj_payload.end()));
+            lite3cpp::Buffer obj_buf(obj_payload);
 
             bool obj_match = false;
             std::string obj_p = safe_get_str(obj_buf, 0, "p");
@@ -3199,7 +3244,7 @@ namespace irods::catalog {
             if (!sid) return ERROR(CAT_TICKET_INVALID, "Ticket not found");
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (payload.empty()) return ERROR(CAT_TICKET_INVALID, "Empty ticket payload");
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
             int64_t wbc = buf.get_i64(0, "wbc");
             buf.set_i64(0, "wbc", wbc + bytes);
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
@@ -3221,7 +3266,7 @@ namespace irods::catalog {
 
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (payload.empty()) return ERROR(CAT_TICKET_INVALID, "Empty ticket payload");
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
 
             int64_t ul = buf.get_i64(0, "ul");
             int64_t uc = buf.get_i64(0, "uc");
@@ -3271,7 +3316,7 @@ namespace irods::catalog {
             std::string payload = client_->get_node_payload_async(local_cluster_id_, qid).get();
             if (!payload.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     limit = buf.get_i64(0, "limit");
                 } catch (...) {}
             }
@@ -3302,7 +3347,7 @@ namespace irods::catalog {
                     std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
                     if (!payload.empty()) {
                         try {
-                            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                            lite3cpp::Buffer buf(payload);
                             usage += buf.get_i64(0, "s");
                         } catch (...) {}
                     }
@@ -3345,7 +3390,7 @@ namespace irods::catalog {
             if (payload.empty()) {
                 return ERROR(CAT_NO_ROWS_FOUND, "Rule execution not found");
             }
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
             out_re.id = id;
             out_re.name = safe_get_str(buf, 0, "n");
             out_re.rei_file_path = safe_get_str(buf, 0, "rei");
@@ -3372,7 +3417,7 @@ namespace irods::catalog {
             if (payload.empty()) {
                 return ERROR(CAT_NO_ROWS_UPDATED, "Rule execution not found");
             }
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
             std::string current_lh = safe_get_str(buf, 0, "lh");
             if (!current_lh.empty()) {
                 return ERROR(CAT_NO_ROWS_UPDATED, "Rule already locked");
@@ -3390,7 +3435,7 @@ namespace irods::catalog {
             if (payload.empty()) {
                 return SUCCESS();
             }
-            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+            lite3cpp::Buffer buf(payload);
             buf.set_str(0, "lh", "");
             buf.set_str(0, "lp", "");
             buf.set_str(0, "lt", "");
@@ -3457,7 +3502,7 @@ namespace irods::catalog {
                 std::string payload = client_->get_node_payload_async(local_cluster_id_, aid).get();
                 if (payload.empty()) continue;
 
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                lite3cpp::Buffer buf(payload);
                 std::string level = safe_get_str(buf, 0, "l");
                 std::string uname = safe_get_str(buf, 0, "u");
                 std::string uzone = safe_get_str(buf, 0, "z");
@@ -3469,7 +3514,7 @@ namespace irods::catalog {
                     snowflake_id_t uid = static_cast<snowflake_id_t>(uid_val);
                     std::string u_payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
                     if (!u_payload.empty()) {
-                        lite3cpp::Buffer ubuf(std::vector<uint8_t>(u_payload.begin(), u_payload.end()));
+                        lite3cpp::Buffer ubuf(u_payload);
                         std::string t = safe_get_str(ubuf, 0, "t");
                         if (!t.empty()) utype = t;
                         if (uname.empty()) uname = safe_get_str(ubuf, 0, "n");
@@ -3484,7 +3529,7 @@ namespace irods::catalog {
                     for (snowflake_id_t uid : uids) {
                         std::string u_payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
                         if (u_payload.empty()) continue;
-                        lite3cpp::Buffer ubuf(std::vector<uint8_t>(u_payload.begin(), u_payload.end()));
+                        lite3cpp::Buffer ubuf(u_payload);
                         std::string t = safe_get_str(ubuf, 0, "t");
                         if (t == "rodsgroup") {
                             group_uid = uid;
@@ -3504,7 +3549,7 @@ namespace irods::catalog {
                         for (snowflake_id_t uid : uids) {
                             std::string u_payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
                             if (u_payload.empty()) continue;
-                            lite3cpp::Buffer ubuf(std::vector<uint8_t>(u_payload.begin(), u_payload.end()));
+                            lite3cpp::Buffer ubuf(u_payload);
                             std::string t = safe_get_str(ubuf, 0, "t");
                             std::string n = safe_get_str(ubuf, 0, "n");
                             std::string z = safe_get_str(ubuf, 0, "z");
@@ -3556,7 +3601,7 @@ namespace irods::catalog {
             std::string payload = client_->get_node_payload_async(local_cluster_id_, qid).get();
             if (!payload.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     limit = buf.get_i64(0, "limit");
                 } catch (...) {}
             }
@@ -3577,7 +3622,7 @@ namespace irods::catalog {
                     std::string payload = client_->get_node_payload_async(local_cluster_id_, id).get();
                     if (!payload.empty()) {
                         try {
-                            lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                            lite3cpp::Buffer buf(payload);
                             if (buf.get_type(0, "s") != lite3cpp::Type::Invalid) {
                                 usage += buf.get_i64(0, "s");
                             } else {
@@ -3632,7 +3677,7 @@ namespace irods::catalog {
                 return ERROR(CAT_NO_ROWS_FOUND, "Grid configuration value not found");
             }
             try {
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                lite3cpp::Buffer buf(payload);
                 out_value = safe_get_str(buf, 0, "v");
             } catch (...) { return ERROR(-1, "Failed to parse grid config"); }
             return SUCCESS();
@@ -3967,7 +4012,7 @@ namespace irods::catalog {
                                 snowflake_id_t psid = make_id(EntityType::Collection, std::stoull(cid_it->second));
                                 std::string payload = client_->get_node_payload_async(local_cluster_id_, psid).get();
                                 if (!payload.empty()) {
-                                    lite3cpp::Buffer pbuf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                                    lite3cpp::Buffer pbuf(payload);
                                     parent_coll = safe_get_str(pbuf, 0, "n");
                                 }
                             } catch (...) {}
@@ -4102,7 +4147,7 @@ namespace irods::catalog {
                         return SUCCESS();
                     }
 
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
 
                     // Secondary filter verification against buf
                     for (const auto& cond : plan.conditions) {
@@ -4180,7 +4225,7 @@ namespace irods::catalog {
                         return SUCCESS();
                     }
 
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
 
                     // Secondary filter verification against buf
                     for (const auto& cond : plan.conditions) {
@@ -4345,6 +4390,7 @@ namespace irods::catalog {
 
     irods::error CatalogFacade::resolve_path(std::string_view path, snowflake_id_t& out_id, EntityType& out_type) { return pImpl_->resolve_path(path, out_id, out_type); }
     irods::error CatalogFacade::get_collection_subtree_ids(snowflake_id_t coll_sid, std::vector<snowflake_id_t>& out_ids) { return pImpl_->get_collection_subtree_ids(coll_sid, out_ids); }
+    irods::error CatalogFacade::get_child_collection_ids(snowflake_id_t parent_sid, std::string_view parent_path, std::vector<snowflake_id_t>& out_ids) { return pImpl_->get_child_collection_ids(parent_sid, parent_path, out_ids); }
     irods::error CatalogFacade::execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes, std::string_view root_type, const irods::experimental::genquery2::options* opts) { return pImpl_->execute_query(ast, results, starting_nodes, root_type, opts); }
     irods::error CatalogFacade::execute_dml(const compiler::DmlPlan& plan, lite3cpp::Buffer& result) { return pImpl_->execute_dml(plan, result); }
     irods::error CatalogFacade::apply_atomic_operations(const std::vector<irods::experimental::dml::operation_type>& ops) { return pImpl_->apply_atomic_operations(ops); }

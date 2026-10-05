@@ -505,8 +505,17 @@ namespace irods::catalog::bridge {
                     if (_catalog != nullptr && best_start_priority < 2) {
                         snowflake_id_t parent_sid = 0; EntityType type;
                         if (_catalog->resolve_path(literal, parent_sid, type).ok()) {
-                            auto child_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), parent_sid, "CONTAINS", 0.0).get();
-                            _starting_nodes = std::move(child_nodes);
+                            if (likely_root == "Collection") {
+                                std::vector<snowflake_id_t> child_colls;
+                                _catalog->get_child_collection_ids(parent_sid, literal, child_colls);
+                                if (child_colls.empty()) {
+                                    child_colls.push_back(0xFFFFFFFFFFFFFFFFULL);
+                                }
+                                _starting_nodes = std::move(child_colls);
+                            } else {
+                                auto child_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), parent_sid, "CONTAINS", 0.0).get();
+                                _starting_nodes = std::move(child_nodes);
+                            }
                             resolved_start = true;
                             best_start_priority = 2;
                         }

@@ -29,7 +29,7 @@ TEST_F(DataPluginTest, DataObjectLifecycle) {
     collInfo_t coll;
     std::memset(&coll, 0, sizeof(coll));
     coll.collId = 100;
-    std::strncpy(coll.collName, "/tempZone/home/rods", NAME_LEN);
+    std::strncpy(coll.collName, "/tempZone/home/rods/datacoll", NAME_LEN);
     std::strncpy(coll.collOwnerName, "rods", NAME_LEN);
     std::strncpy(coll.collOwnerZone, "tempZone", NAME_LEN);
     ASSERT_TRUE(plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_REG_COLL, nullptr, &coll).ok());
@@ -39,7 +39,7 @@ TEST_F(DataPluginTest, DataObjectLifecycle) {
     std::memset(&obj, 0, sizeof(obj));
     obj.dataId = 1001;
     obj.collId = 100;
-    std::strncpy(obj.objPath, "/tempZone/home/rods/test.txt", MAX_NAME_LEN);
+    std::strncpy(obj.objPath, "/tempZone/home/rods/datacoll/test.txt", MAX_NAME_LEN);
     std::strncpy(obj.dataOwnerName, "rods", NAME_LEN);
     std::strncpy(obj.dataOwnerZone, "tempZone", NAME_LEN);
     ASSERT_TRUE(plugin()->call<dataObjInfo_t*>(nullptr, irods::DATABASE_OP_REG_DATA_OBJ, nullptr, &obj).ok());
@@ -63,19 +63,20 @@ TEST_F(DataPluginTest, DataObjectLifecycle) {
 
     // 4. Rename Object
     ASSERT_TRUE((plugin()->call<rodsLong_t, const char*>(
-        nullptr, irods::DATABASE_OP_RENAME_OBJECT, nullptr, 1001, "/tempZone/home/rods/new_name.txt").ok()));
+        nullptr, irods::DATABASE_OP_RENAME_OBJECT, nullptr, 1001, "/tempZone/home/rods/datacoll/new_name.txt").ok()));
     
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     
     // Verify name updated in node
-    ASSERT_EQ(server()->get_node(sid).get_attribute<std::string>("n"), "/tempZone/home/rods/new_name.txt");
+    ASSERT_EQ(server()->get_node(sid).get_attribute<std::string>("n"), "new_name.txt");
+    ASSERT_EQ(server()->get_node(sid).get_attribute<std::string>("p"), "/tempZone/home/rods/datacoll/new_name.txt");
 
     // 5. Move Object
     // Create new collection
     collInfo_t coll2;
     std::memset(&coll2, 0, sizeof(coll2));
     coll2.collId = 200;
-    std::strncpy(coll2.collName, "/tempZone/home/rods/sub", NAME_LEN);
+    std::strncpy(coll2.collName, "/tempZone/home/rods/datacoll/sub", NAME_LEN);
     ASSERT_TRUE((plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_REG_COLL, nullptr, &coll2).ok()));
     
     ASSERT_TRUE((plugin()->call<rodsLong_t, rodsLong_t>(

@@ -270,7 +270,7 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
         if (obj.coll_id == 0) {
             auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), parent_sid).get();
             if (!payload.empty()) {
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                lite3cpp::Buffer buf(payload);
                 obj.coll_id = buf.get_i64(0, "id");
             }
         }
@@ -401,7 +401,7 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
                 if (g_catalog->resolve_resource_name(_info->rescName, rsid).ok()) {
                     auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
                     if (!payload.empty()) {
-                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        lite3cpp::Buffer buf(payload);
                         repl.resource_id = buf.get_i64(0, "id");
                     }
                 }
@@ -432,7 +432,7 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
             if (g_catalog->resolve_path(_info->objPath, sid, type).ok() && type == irods::catalog::EntityType::DataObject) {
                 auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
                 if (!payload.empty()) {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     try {
                         data_id = (uint64_t)buf.get_i64(0, "id");
                         _info->dataId = data_id;
@@ -631,7 +631,7 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
             if (g_catalog->resolve_resource_name(_dst->rescName, rsid).ok()) {
                 auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
                 if (!payload.empty()) {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     resc_id = buf.get_i64(0, "id");
                     _dst->rescId = resc_id;
                 }
@@ -678,8 +678,8 @@ irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _in
             }
         }
 
-        if (adminMode == 0) {
-            std::string user_name = _ctx.comm() ? safe_string(_ctx.comm()->clientUser.userName) : "";
+        if (adminMode == 0 && _ctx.comm()) {
+            std::string user_name = safe_string(_ctx.comm()->clientUser.userName);
             irods::catalog::snowflake_id_t usid = 0;
             if (!user_name.empty()) {
                 g_catalog->resolve_user_name(user_name, usid);
@@ -707,7 +707,7 @@ irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _in
                         user_name.c_str(), (long long)_info->dataId);
                 return ERROR(CAT_NO_ACCESS_PERMISSION, "check_data_object_only failed");
             }
-        } else {
+        } else if (adminMode != 0) {
             if (_ctx.comm() && _ctx.comm()->clientUser.authInfo.authFlag != LOCAL_PRIV_USER_AUTH) {
                 return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "insufficient privilege");
             }
@@ -836,7 +836,7 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
                 // Fetch the node to get the sequential ID
                 auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
                 if (!payload.empty()) {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     coll.parent_id = buf.get_i64(0, "id");
                 }
             }
@@ -895,7 +895,7 @@ irods::error db_reg_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _i
             auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
             if (!payload.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     _info->collId = buf.get_i64(0, "id");
                     rodsLog(LOG_NOTICE, "L3_PLUGIN: db_reg_coll_by_admin_op: collection [%s] already exists (id %d), returning SUCCESS", coll_name.c_str(), _info->collId);
                     return SUCCESS();
@@ -926,7 +926,7 @@ irods::error db_mod_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
                 auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
                 if (!payload.empty()) {
                     try {
-                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        lite3cpp::Buffer buf(payload);
                         coll_id = buf.get_i64(0, "id");
                     } catch (...) {}
                 }
@@ -995,7 +995,7 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
                 auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
                 if (!payload.empty()) {
                     try {
-                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        lite3cpp::Buffer buf(payload);
                         coll_id = buf.get_i64(0, "id");
                     } catch (...) {}
                 }
@@ -1014,7 +1014,7 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
             }
             if (!payload.empty() && coll_name.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     coll_name = safe_string(buf.get_str(0, "n"));
                 } catch (...) {}
             }
@@ -1119,7 +1119,7 @@ irods::error db_del_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _i
                 auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
                 if (!payload.empty()) {
                     try {
-                        lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                        lite3cpp::Buffer buf(payload);
                         coll_id = buf.get_i64(0, "id");
                     } catch (...) {}
                 }
@@ -1138,7 +1138,7 @@ irods::error db_del_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _i
             }
             if (!payload.empty() && coll_name.empty()) {
                 try {
-                    lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                    lite3cpp::Buffer buf(payload);
                     coll_name = safe_string(buf.get_str(0, "n"));
                 } catch (...) {}
             }
@@ -2363,7 +2363,7 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
                         irods::catalog::snowflake_id_t rsid = g_catalog->make_id(irods::catalog::EntityType::Resource, resc_id);
                         auto rpayload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
                         if (!rpayload.empty()) {
-                            lite3cpp::Buffer rbuf(std::vector<uint8_t>(rpayload.begin(), rpayload.end()));
+                            lite3cpp::Buffer rbuf(rpayload);
                             try { repl.resc_hier = rbuf.get_str(0, "n"); } catch (...) {}
                         }
                     }
