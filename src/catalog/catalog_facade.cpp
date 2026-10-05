@@ -1196,13 +1196,13 @@ namespace irods::catalog {
                         (leaf_resc_id > 0 && replica_rid == leaf_resc_id)) {
                         target_matched = true;
                     }
-                    rodsLog(LOG_NOTICE, "L3_CATALOG: Checking replica rn=%u rh='%s' rid=%lld vs target resc_hier='%.*s' leaf='%s' leaf_id=%lld -> target_matched=%d",
+                    rodsLog(LOG_DEBUG, "L3_CATALOG: Checking replica rn=%u rh='%s' rid=%lld vs target resc_hier='%.*s' leaf='%s' leaf_id=%lld -> target_matched=%d",
                             rn, rh.c_str(), (long long)replica_rid, (int)resc_hier.size(), resc_hier.data(), leaf_name.c_str(), (long long)leaf_resc_id, target_matched ? 1 : 0);
                 } else {
                     if (rn == repl_num || replicas.size() == 1) {
                         target_matched = true;
                     }
-                    rodsLog(LOG_NOTICE, "L3_CATALOG: Checking replica rn=%u vs target repl_num=%u (total replicas=%zu) -> target_matched=%d",
+                    rodsLog(LOG_DEBUG, "L3_CATALOG: Checking replica rn=%u vs target repl_num=%u (total replicas=%zu) -> target_matched=%d",
                             rn, repl_num, replicas.size(), target_matched ? 1 : 0);
                 }
 
@@ -1217,7 +1217,7 @@ namespace irods::catalog {
 
                 if (target_matched) {
                     for (const auto& [kw, val] : updates) {
-                        rodsLog(LOG_NOTICE, "L3_CATALOG: Applying update to replica rn=%u: kw='%s' val='%s'", rn, kw.c_str(), val.c_str());
+                        rodsLog(LOG_DEBUG, "L3_CATALOG: Applying update to replica rn=%u: kw='%s' val='%s'", rn, kw.c_str(), val.c_str());
                         if (kw == "dataModify" || kw == "modify_ts" || kw == "DATA_MODIFY_TIME") {
                             buf.set_str(0, "mt", val);
                             modified = true;
@@ -1249,7 +1249,7 @@ namespace irods::catalog {
                     }
                 }
                 if (modified) {
-                    rodsLog(LOG_NOTICE, "L3_CATALOG: Putting modified node for replica rn=%u (SID: %016llx)", rn, (unsigned long long)rid);
+                    rodsLog(LOG_DEBUG, "L3_CATALOG: Putting modified node for replica rn=%u (SID: %016llx)", rn, (unsigned long long)rid);
                     client_->put_node_async(local_cluster_id_, rid, buf.move_to_string()).get();
                 }
             }
@@ -2354,13 +2354,13 @@ namespace irods::catalog {
             if (t_payload.empty()) {
                 if (!check_parents) {
                     #ifdef IRODS_SERVER
-                    rodsLog(LOG_NOTICE, "L3_CATALOG: check_permission target %016llx NOT FOUND", (unsigned long long)target_sid);
+                    rodsLog(LOG_DEBUG, "L3_CATALOG: check_permission target %016llx NOT FOUND", (unsigned long long)target_sid);
                     #endif
                     allowed = false;
                     return ERROR(CAT_UNKNOWN_FILE, "Target not found");
                 }
                 #ifdef IRODS_SERVER
-                rodsLog(LOG_NOTICE, "L3_CATALOG: check_permission target %016llx NOT FOUND - allowing for now", (unsigned long long)target_sid);
+                rodsLog(LOG_DEBUG, "L3_CATALOG: check_permission target %016llx NOT FOUND - allowing for now", (unsigned long long)target_sid);
                 #endif
                 allowed = true;
                 return SUCCESS(); // Target not found, let it proceed for creation
