@@ -28,6 +28,22 @@ namespace irods::catalog {
             return it->second;
         }
         std::string_view get_field(size_t row, size_t col_idx) const {
+            if (col_idx < 64) {
+                static const std::string idx_keys[] = {
+                    "idx_0", "idx_1", "idx_2", "idx_3", "idx_4", "idx_5", "idx_6", "idx_7",
+                    "idx_8", "idx_9", "idx_10", "idx_11", "idx_12", "idx_13", "idx_14", "idx_15",
+                    "idx_16", "idx_17", "idx_18", "idx_19", "idx_20", "idx_21", "idx_22", "idx_23",
+                    "idx_24", "idx_25", "idx_26", "idx_27", "idx_28", "idx_29", "idx_30", "idx_31",
+                    "idx_32", "idx_33", "idx_34", "idx_35", "idx_36", "idx_37", "idx_38", "idx_39",
+                    "idx_40", "idx_41", "idx_42", "idx_43", "idx_44", "idx_45", "idx_46", "idx_47",
+                    "idx_48", "idx_49", "idx_50", "idx_51", "idx_52", "idx_53", "idx_54", "idx_55",
+                    "idx_56", "idx_57", "idx_58", "idx_59", "idx_60", "idx_61", "idx_62", "idx_63"
+                };
+                if (row >= rows.size()) return "";
+                auto it = rows[row].fields.find(idx_keys[col_idx]);
+                if (it == rows[row].fields.end()) return "";
+                return it->second;
+            }
             std::string key = "idx_" + std::to_string(col_idx);
             return get_field(row, key);
         }

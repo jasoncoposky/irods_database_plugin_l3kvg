@@ -384,19 +384,19 @@ namespace irods::catalog::bridge {
             return "";
         };
 
-        std::regex eq_regex(R"(^\s*=\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
-        std::regex ne_regex(R"(^\s*(?:!=|<>)\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
-        std::regex le_regex(R"(^\s*<=\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
-        std::regex ge_regex(R"(^\s*>=\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
-        std::regex lt_regex(R"(^\s*<\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
-        std::regex gt_regex(R"(^\s*>\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
-        std::regex like_regex(R"(^\s*like\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)", std::regex_constants::icase);
-        std::regex not_like_regex(R"(^\s*not\s+like\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)", std::regex_constants::icase);
-        std::regex eq_or_like_regex(R"(^\s*=\s*'(.*?)'\s*\|\|\s*like\s*'(.*)'\s*$)", std::regex_constants::icase);
-        std::regex like_or_eq_regex(R"(^\s*like\s*'(.*?)'\s*\|\|\s*=\s*'(.*)'\s*$)", std::regex_constants::icase);
-        std::regex parent_regex(R"(^\s*parent_of\s*'(.*)'\s*$)");
-        std::regex in_clause_regex(R"(IN\s*\()", std::regex_constants::icase);
-        std::regex quoted_literal_regex(R"('((?:[^'\\]|\\.|'')*)')");
+        static const std::regex eq_regex(R"(^\s*=\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
+        static const std::regex ne_regex(R"(^\s*(?:!=|<>)\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
+        static const std::regex le_regex(R"(^\s*<=\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
+        static const std::regex ge_regex(R"(^\s*>=\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
+        static const std::regex lt_regex(R"(^\s*<\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
+        static const std::regex gt_regex(R"(^\s*>\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)");
+        static const std::regex like_regex(R"(^\s*like\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)", std::regex_constants::icase);
+        static const std::regex not_like_regex(R"(^\s*not\s+like\s*(?:'((?:[^'\\]|\\.|'')*)'|'(.*)'|(\S+))\s*$)", std::regex_constants::icase);
+        static const std::regex eq_or_like_regex(R"(^\s*=\s*'(.*?)'\s*\|\|\s*like\s*'(.*)'\s*$)", std::regex_constants::icase);
+        static const std::regex like_or_eq_regex(R"(^\s*like\s*'(.*?)'\s*\|\|\s*=\s*'(.*)'\s*$)", std::regex_constants::icase);
+        static const std::regex parent_regex(R"(^\s*parent_of\s*'(.*)'\s*$)");
+        static const std::regex in_clause_regex(R"(IN\s*\()", std::regex_constants::icase);
+        static const std::regex quoted_literal_regex(R"('((?:[^'\\]|\\.|'')*)')");
 
         // Pass 0: Combined COLL_NAME and DATA_NAME resolution (highest priority)
         std::string target_coll_name;
@@ -980,59 +980,62 @@ namespace irods::catalog::bridge {
             if (!_out->sqlResult[i].value) throw std::runtime_error("Failed to allocate result buffer");
             memset(_out->sqlResult[i].value, 0, _out->rowCnt * col_len);
 
-            for (int r = 0; r < _out->rowCnt; ++r) {
-                std::string val{_results.get_field(r, (size_t)i)};
+            // Hoist column type check out of row loop
+            const bool is_string_col = (pure_inx == COL_DATA_NAME || pure_inx == COL_COLL_NAME || 
+                                 pure_inx == COL_USER_NAME || pure_inx == COL_R_RESC_NAME || 
+                                 pure_inx == COL_D_DATA_PATH || pure_inx == COL_D_RESC_HIER ||
+                                 pure_inx == COL_D_DATA_CHECKSUM || pure_inx == COL_D_OWNER_NAME || 
+                                 pure_inx == COL_D_OWNER_ZONE || pure_inx == COL_COLL_OWNER_NAME || 
+                                 pure_inx == COL_COLL_OWNER_ZONE || pure_inx == COL_D_RESC_NAME ||
+                                 pure_inx == COL_ZONE_NAME || pure_inx == COL_R_ZONE_NAME || pure_inx == COL_DATA_ACCESS_NAME ||
+                                 pure_inx == COL_DATA_TOKEN_NAMESPACE || pure_inx == COL_COLL_ACCESS_NAME ||
+                                 pure_inx == COL_COLL_TOKEN_NAMESPACE || pure_inx == COL_COLL_PARENT_NAME ||
+                                 pure_inx == COL_D_COMMENTS || pure_inx == COL_DATA_TYPE_NAME ||
+                                 pure_inx == COL_D_EXPIRY || pure_inx == COL_D_DATA_STATUS ||
+                                 pure_inx == COL_DATA_VERSION || pure_inx == COL_D_MAP_ID ||
+                                 pure_inx == COL_COLL_INFO1 || pure_inx == COL_COLL_INFO2 ||
+                                 pure_inx == COL_USER_TYPE || pure_inx == COL_ZONE_TYPE ||
+                                 pure_inx == COL_R_TYPE_NAME || pure_inx == COL_R_CLASS_NAME ||
+                                 pure_inx == COL_R_LOC || pure_inx == COL_R_VAULT_PATH ||
+                                 pure_inx == COL_COLL_TYPE || pure_inx == COL_DATA_ACCESS_TYPE ||
+                                 pure_inx == COL_COLL_ACCESS_TYPE || pure_inx == COL_TICKET_STRING ||
+                                 pure_inx == COL_TICKET_TYPE || pure_inx == COL_TICKET_DATA_NAME ||
+                                 pure_inx == COL_TICKET_COLL_NAME || pure_inx == COL_TICKET_OWNER_NAME ||
+                                 pure_inx == COL_TICKET_OBJECT_TYPE || pure_inx == COL_TICKET_DATA_COLL_NAME ||
+                                 pure_inx == COL_TICKET_OWNER_ZONE || pure_inx == COL_TICKET_ALLOWED_HOST ||
+                                 pure_inx == COL_TICKET_ALLOWED_USER_NAME || pure_inx == COL_TICKET_ALLOWED_GROUP_NAME ||
+                                 pure_inx == COL_META_DATA_ATTR_NAME || pure_inx == COL_META_DATA_ATTR_VALUE ||
+                                 pure_inx == COL_META_DATA_ATTR_UNITS || pure_inx == COL_META_COLL_ATTR_NAME ||
+                                 pure_inx == COL_META_COLL_ATTR_VALUE || pure_inx == COL_META_COLL_ATTR_UNITS ||
+                                 pure_inx == COL_META_RESC_ATTR_NAME || pure_inx == COL_META_RESC_ATTR_VALUE ||
+                                 pure_inx == COL_META_RESC_ATTR_UNITS || pure_inx == COL_META_USER_ATTR_NAME ||
+                                 pure_inx == COL_META_USER_ATTR_VALUE || pure_inx == COL_META_USER_ATTR_UNITS ||
+                                 pure_inx == COL_USER_GROUP_NAME || pure_inx == COL_R_RESC_INFO ||
+                                 pure_inx == COL_R_RESC_COMMENT || pure_inx == COL_R_RESC_CHILDREN ||
+                                 pure_inx == COL_R_RESC_CONTEXT || pure_inx == COL_R_RESC_PARENT ||
+                                 pure_inx == COL_R_RESC_PARENT_CONTEXT || pure_inx == COL_R_RESC_STATUS ||
+                                 pure_inx == COL_RULE_NAME || pure_inx == COL_RULE_BODY ||
+                                 pure_inx == COL_RULE_OWNER_NAME || pure_inx == COL_DVM_BASE_NAME ||
+                                 pure_inx == COL_DVM_EXT_VAR_NAME || pure_inx == COL_DVM_INT_MAP_PATH ||
+                                 pure_inx == COL_FNM_BASE_NAME || pure_inx == COL_FNM_EXT_FUNC_NAME ||
+                                 pure_inx == COL_FNM_INT_FUNC_NAME || pure_inx == COL_AUDIT_COMMENT ||
+                                 pure_inx == COL_SL_HOST_NAME || pure_inx == COL_SL_RESC_NAME ||
+                                 pure_inx == COL_COLL_USER_NAME || pure_inx == COL_COLL_USER_ZONE ||
+                                 pure_inx == COL_DATA_USER_NAME || pure_inx == COL_DATA_USER_ZONE ||
+                                 pure_inx == COL_RESC_USER_NAME || pure_inx == COL_RESC_USER_ZONE ||
+                                 pure_inx == COL_RULE_EXEC_NAME || pure_inx == COL_RULE_EXEC_REI_FILE_PATH ||
+                                 pure_inx == COL_RULE_EXEC_USER_NAME || pure_inx == COL_RULE_EXEC_ADDRESS ||
+                                 pure_inx == COL_RULE_EXEC_TIME || pure_inx == COL_RULE_EXEC_FREQUENCY ||
+                                 pure_inx == COL_RULE_EXEC_ESTIMATED_EXE_TIME || pure_inx == COL_RULE_EXEC_NOTIFICATION_ADDR ||
+                                 pure_inx == COL_RULE_EXEC_LAST_EXE_TIME || pure_inx == COL_RULE_EXEC_STATUS ||
+                                 pure_inx == COL_RULE_EXEC_CONTEXT || pure_inx == COL_RULE_EXEC_LOCK_HOST ||
+                                 pure_inx == COL_RULE_EXEC_LOCK_HOST_PID || pure_inx == COL_RULE_EXEC_LOCK_TIME);
 
-                // Detect if the column is likely numeric to avoid std::stoll crashes
-                bool is_string_col = (pure_inx == COL_DATA_NAME || pure_inx == COL_COLL_NAME || 
-                                     pure_inx == COL_USER_NAME || pure_inx == COL_R_RESC_NAME || 
-                                     pure_inx == COL_D_DATA_PATH || pure_inx == COL_D_RESC_HIER ||
-                                     pure_inx == COL_D_DATA_CHECKSUM || pure_inx == COL_D_OWNER_NAME || 
-                                     pure_inx == COL_D_OWNER_ZONE || pure_inx == COL_COLL_OWNER_NAME || 
-                                     pure_inx == COL_COLL_OWNER_ZONE || pure_inx == COL_D_RESC_NAME ||
-                                     pure_inx == COL_ZONE_NAME || pure_inx == COL_R_ZONE_NAME || pure_inx == COL_DATA_ACCESS_NAME ||
-                                     pure_inx == COL_DATA_TOKEN_NAMESPACE || pure_inx == COL_COLL_ACCESS_NAME ||
-                                     pure_inx == COL_COLL_TOKEN_NAMESPACE || pure_inx == COL_COLL_PARENT_NAME ||
-                                     pure_inx == COL_D_COMMENTS || pure_inx == COL_DATA_TYPE_NAME ||
-                                     pure_inx == COL_D_EXPIRY || pure_inx == COL_D_DATA_STATUS ||
-                                     pure_inx == COL_DATA_VERSION || pure_inx == COL_D_MAP_ID ||
-                                     pure_inx == COL_COLL_INFO1 || pure_inx == COL_COLL_INFO2 ||
-                                     pure_inx == COL_USER_TYPE || pure_inx == COL_ZONE_TYPE ||
-                                     pure_inx == COL_R_TYPE_NAME || pure_inx == COL_R_CLASS_NAME ||
-                                     pure_inx == COL_R_LOC || pure_inx == COL_R_VAULT_PATH ||
-                                     pure_inx == COL_COLL_TYPE || pure_inx == COL_DATA_ACCESS_TYPE ||
-                                     pure_inx == COL_COLL_ACCESS_TYPE || pure_inx == COL_TICKET_STRING ||
-                                     pure_inx == COL_TICKET_TYPE || pure_inx == COL_TICKET_DATA_NAME ||
-                                     pure_inx == COL_TICKET_COLL_NAME || pure_inx == COL_TICKET_OWNER_NAME ||
-                                     pure_inx == COL_TICKET_OBJECT_TYPE || pure_inx == COL_TICKET_DATA_COLL_NAME ||
-                                     pure_inx == COL_TICKET_OWNER_ZONE || pure_inx == COL_TICKET_ALLOWED_HOST ||
-                                     pure_inx == COL_TICKET_ALLOWED_USER_NAME || pure_inx == COL_TICKET_ALLOWED_GROUP_NAME ||
-                                     pure_inx == COL_META_DATA_ATTR_NAME || pure_inx == COL_META_DATA_ATTR_VALUE ||
-                                     pure_inx == COL_META_DATA_ATTR_UNITS || pure_inx == COL_META_COLL_ATTR_NAME ||
-                                     pure_inx == COL_META_COLL_ATTR_VALUE || pure_inx == COL_META_COLL_ATTR_UNITS ||
-                                     pure_inx == COL_META_RESC_ATTR_NAME || pure_inx == COL_META_RESC_ATTR_VALUE ||
-                                     pure_inx == COL_META_RESC_ATTR_UNITS || pure_inx == COL_META_USER_ATTR_NAME ||
-                                     pure_inx == COL_META_USER_ATTR_VALUE || pure_inx == COL_META_USER_ATTR_UNITS ||
-                                     pure_inx == COL_USER_GROUP_NAME || pure_inx == COL_R_RESC_INFO ||
-                                     pure_inx == COL_R_RESC_COMMENT || pure_inx == COL_R_RESC_CHILDREN ||
-                                     pure_inx == COL_R_RESC_CONTEXT || pure_inx == COL_R_RESC_PARENT ||
-                                     pure_inx == COL_R_RESC_PARENT_CONTEXT || pure_inx == COL_R_RESC_STATUS ||
-                                     pure_inx == COL_RULE_NAME || pure_inx == COL_RULE_BODY ||
-                                     pure_inx == COL_RULE_OWNER_NAME || pure_inx == COL_DVM_BASE_NAME ||
-                                     pure_inx == COL_DVM_EXT_VAR_NAME || pure_inx == COL_DVM_INT_MAP_PATH ||
-                                     pure_inx == COL_FNM_BASE_NAME || pure_inx == COL_FNM_EXT_FUNC_NAME ||
-                                     pure_inx == COL_FNM_INT_FUNC_NAME || pure_inx == COL_AUDIT_COMMENT ||
-                                     pure_inx == COL_SL_HOST_NAME || pure_inx == COL_SL_RESC_NAME ||
-                                     pure_inx == COL_COLL_USER_NAME || pure_inx == COL_COLL_USER_ZONE ||
-                                     pure_inx == COL_DATA_USER_NAME || pure_inx == COL_DATA_USER_ZONE ||
-                                     pure_inx == COL_RESC_USER_NAME || pure_inx == COL_RESC_USER_ZONE ||
-                                     pure_inx == COL_RULE_EXEC_NAME || pure_inx == COL_RULE_EXEC_REI_FILE_PATH ||
-                                     pure_inx == COL_RULE_EXEC_USER_NAME || pure_inx == COL_RULE_EXEC_ADDRESS ||
-                                     pure_inx == COL_RULE_EXEC_TIME || pure_inx == COL_RULE_EXEC_FREQUENCY ||
-                                     pure_inx == COL_RULE_EXEC_ESTIMATED_EXE_TIME || pure_inx == COL_RULE_EXEC_NOTIFICATION_ADDR ||
-                                     pure_inx == COL_RULE_EXEC_LAST_EXE_TIME || pure_inx == COL_RULE_EXEC_STATUS ||
-                                     pure_inx == COL_RULE_EXEC_CONTEXT || pure_inx == COL_RULE_EXEC_LOCK_HOST ||
-                                     pure_inx == COL_RULE_EXEC_LOCK_HOST_PID || pure_inx == COL_RULE_EXEC_LOCK_TIME);
+            const bool is_perm_col = (pure_inx == COL_DATA_ACCESS_TYPE || pure_inx == COL_COLL_ACCESS_TYPE || 
+                                      pure_inx == COL_DATA_ACCESS_NAME || pure_inx == COL_COLL_ACCESS_NAME);
+
+            for (int r = 0; r < _out->rowCnt; ++r) {
+                std::string_view val = _results.get_field(r, (size_t)i);
 
                 if (val.empty() && pure_inx == COL_COLL_TYPE) {
                     val = "";
@@ -1053,12 +1056,10 @@ namespace irods::catalog::bridge {
                 }
 
                 // Map L3KVG permission labels to numeric strings
-                if (pure_inx == COL_DATA_ACCESS_TYPE || pure_inx == COL_COLL_ACCESS_TYPE || pure_inx == COL_DATA_ACCESS_NAME || pure_inx == COL_COLL_ACCESS_NAME) {
-                    rodsLog(LOG_NOTICE, "L3_BRIDGE: Mapping permission column %d value [%s]", pure_inx, val.c_str());
-                    
+                if (is_perm_col) {
                     // Handle admin: prefix
                     if (val.starts_with("admin:")) {
-                        val = val.substr(6);
+                        val.remove_prefix(6);
                     }
 
                     if (val == "own") {
@@ -1078,10 +1079,12 @@ namespace irods::catalog::bridge {
                     }
                 }
 
-                if (r < 5) {
-                    rodsLog(LOG_NOTICE, "L3_BRIDGE: Packing Col %d (pure: %d) Row %d: [%s]", inx, pure_inx, r, val.c_str());
+                char* dst = &_out->sqlResult[i].value[r * col_len];
+                size_t copy_len = std::min(val.size(), static_cast<size_t>(col_len - 1));
+                if (copy_len > 0) {
+                    std::memcpy(dst, val.data(), copy_len);
                 }
-                strncpy(&_out->sqlResult[i].value[r * col_len], val.c_str(), col_len - 1);
+                dst[copy_len] = '\0';
             }
         }
     }
