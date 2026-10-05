@@ -522,6 +522,30 @@ namespace irods::catalog::test {
                              std::string val_str = std::to_string(val);
                              socket_.send(zmq::message_t(val_str.data(), val_str.size()), zmq::send_flags::none);
                              continue;
+                        } else if (cmd == "K") {
+                             if (msgs.size() < data_idx + 1) {
+                                 socket_.send(msgs[0], zmq::send_flags::sndmore);
+                                 socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                                 socket_.send(zmq::message_t("ERR_MALFORMED", 13), zmq::send_flags::none);
+                                 continue;
+                             }
+                             std::string prefix = msgs[data_idx].to_string();
+                             lite3cpp::Buffer kbuf;
+                             kbuf.init_array();
+                             {
+                                 std::lock_guard<std::mutex> lock(mu_);
+                                 for (const auto& [k, v] : generic_store_) {
+                                     if (k.starts_with(prefix)) {
+                                         size_t e = kbuf.arr_append_obj(0);
+                                         kbuf.set_str(e, "k", k);
+                                         kbuf.set_str(e, "v", v);
+                                     }
+                                 }
+                             }
+                             socket_.send(msgs[0], zmq::send_flags::sndmore);
+                             socket_.send(zmq::message_t(0), zmq::send_flags::sndmore);
+                             socket_.send(zmq::message_t(kbuf.data(), kbuf.size()), zmq::send_flags::none);
+                             continue;
                         }
 
                         // Unknown command, send dummy ack to avoid hanging

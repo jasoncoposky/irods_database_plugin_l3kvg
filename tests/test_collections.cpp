@@ -61,6 +61,80 @@ TEST_F(CollectionTest, Lifecycle) {
     ASSERT_TRUE(catalog.delete_collection(200).ok());
 }
 
+TEST_F(CollectionTest, SubtreeHierarchyScan) {
+    nlohmann::json config;
+    config["zone_name"] = "tempZone";
+    config["zone_user"] = "rods";
+    config["plugin_configuration"]["database"]["l3kvg"]["plugin_specific_configuration"] = {
+        {"db_path", "test_subtree.l3kvg"},
+        {"node_id", 1},
+        {"zmq_endpoint", endpoint()}
+    };
+    irods::server_properties::instance().set_configuration(config);
+
+    CatalogFacade catalog;
+    Config cfg;
+    cfg.node_id = 1;
+    cfg.zmq_endpoint = endpoint();
+    ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
+
+    coll_id_t dummy_id;
+
+    collection c100;
+    c100.id = 100;
+    c100.name = "/tempZone/home/testcoll";
+    c100.owner_name = "rods";
+    c100.owner_zone = "tempZone";
+    ASSERT_TRUE(catalog.register_collection(c100, dummy_id).ok());
+
+    collection c101;
+    c101.id = 101;
+    c101.parent_id = 100;
+    c101.name = "/tempZone/home/testcoll/sub1";
+    c101.owner_name = "rods";
+    c101.owner_zone = "tempZone";
+    ASSERT_TRUE(catalog.register_collection(c101, dummy_id).ok());
+
+    collection c102;
+    c102.id = 102;
+    c102.parent_id = 101;
+    c102.name = "/tempZone/home/testcoll/sub1/deep";
+    c102.owner_name = "rods";
+    c102.owner_zone = "tempZone";
+    ASSERT_TRUE(catalog.register_collection(c102, dummy_id).ok());
+
+    collection c103;
+    c103.id = 103;
+    c103.parent_id = 100;
+    c103.name = "/tempZone/home/testcoll/sub2";
+    c103.owner_name = "rods";
+    c103.owner_zone = "tempZone";
+    ASSERT_TRUE(catalog.register_collection(c103, dummy_id).ok());
+
+    collection c200;
+    c200.id = 200;
+    c200.name = "/tempZone/home/other";
+    c200.owner_name = "rods";
+    c200.owner_zone = "tempZone";
+    ASSERT_TRUE(catalog.register_collection(c200, dummy_id).ok());
+
+    snowflake_id_t sid_100 = catalog.make_id(EntityType::Collection, 100);
+    snowflake_id_t sid_101 = catalog.make_id(EntityType::Collection, 101);
+    snowflake_id_t sid_102 = catalog.make_id(EntityType::Collection, 102);
+    snowflake_id_t sid_103 = catalog.make_id(EntityType::Collection, 103);
+    snowflake_id_t sid_200 = catalog.make_id(EntityType::Collection, 200);
+
+    std::vector<snowflake_id_t> out_ids;
+    ASSERT_TRUE(catalog.get_collection_subtree_ids(sid_100, out_ids).ok());
+
+    EXPECT_EQ(out_ids.size(), 4);
+    EXPECT_NE(std::find(out_ids.begin(), out_ids.end(), sid_100), out_ids.end());
+    EXPECT_NE(std::find(out_ids.begin(), out_ids.end(), sid_101), out_ids.end());
+    EXPECT_NE(std::find(out_ids.begin(), out_ids.end(), sid_102), out_ids.end());
+    EXPECT_NE(std::find(out_ids.begin(), out_ids.end(), sid_103), out_ids.end());
+    EXPECT_EQ(std::find(out_ids.begin(), out_ids.end(), sid_200), out_ids.end());
+}
+
 class MetadataTest : public PluginTestFixture {};
 
 TEST_F(MetadataTest, AvuLifecycle) {

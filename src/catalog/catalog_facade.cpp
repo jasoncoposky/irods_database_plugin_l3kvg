@@ -1421,6 +1421,32 @@ namespace irods::catalog {
         void get_collection_subtree_ids(snowflake_id_t coll_sid, std::vector<snowflake_id_t>& out_ids, std::unordered_set<snowflake_id_t>& visited) {
             if (!visited.insert(coll_sid).second) return;
             out_ids.push_back(coll_sid);
+
+            // Fast path: prefix scan over collection name index
+            std::string payload = client_->get_node_payload_async(local_cluster_id_, coll_sid).get();
+            if (!payload.empty()) {
+                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
+                std::string coll_name = safe_get_str(buf, 0, "n");
+                if (!coll_name.empty()) {
+                    std::string prefix = get_idx_key(EntityType::Collection, "n", coll_name == "/" ? "/" : coll_name + "/");
+                    auto entries = client_->get_prefix_entries_async(local_cluster_id_, prefix).get();
+                    if (!entries.empty()) {
+                        for (const auto& [k, v] : entries) {
+                            if (!v.empty()) {
+                                try {
+                                    snowflake_id_t child_sid = std::stoull(v, nullptr, 16);
+                                    if (visited.insert(child_sid).second) {
+                                        out_ids.push_back(child_sid);
+                                    }
+                                } catch (...) {}
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+
+            // Fallback path: graph traversal
             auto children = client_->get_neighbors_async(local_cluster_id_, coll_sid, "CONTAINS", 0.0).get();
             for (snowflake_id_t child_sid : children) {
                 std::string ch_payload = client_->get_node_payload_async(local_cluster_id_, child_sid).get();
