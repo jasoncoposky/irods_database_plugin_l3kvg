@@ -48,8 +48,12 @@ namespace irods::catalog {
     static std::unordered_map<std::string, snowflake_id_t> s_user_id_cache;
     static std::mutex s_path_cache_mu;
     static std::unordered_map<std::string, snowflake_id_t> s_coll_name_cache;
+    struct UserMembersCacheEntry {
+        std::vector<snowflake_id_t> members;
+        std::chrono::steady_clock::time_point expires_at;
+    };
     static std::mutex s_user_members_mu;
-    static std::unordered_map<snowflake_id_t, std::vector<snowflake_id_t>> s_user_members_cache;
+    static std::unordered_map<snowflake_id_t, UserMembersCacheEntry> s_user_members_cache;
 
     static void invalidate_user_cache(snowflake_id_t uid) {
         if (uid != 0) {
@@ -861,17 +865,20 @@ namespace irods::catalog {
                 batch.add_edge(uid, "HAS_ACCESS", 1.0, aid, "{}");
 
                 std::vector<snowflake_id_t> members;
+                bool cache_hit = false;
+                auto now = std::chrono::steady_clock::now();
                 {
                     std::lock_guard<std::mutex> lock(s_user_members_mu);
                     auto it = s_user_members_cache.find(uid);
-                    if (it != s_user_members_cache.end()) {
-                        members = it->second;
+                    if (it != s_user_members_cache.end() && now < it->second.expires_at) {
+                        members = it->second.members;
+                        cache_hit = true;
                     }
                 }
-                if (members.empty()) {
+                if (!cache_hit) {
                     members = client_->get_in_neighbors_async(local_cluster_id_, uid, "MEMBER_OF").get();
                     std::lock_guard<std::mutex> lock(s_user_members_mu);
-                    s_user_members_cache[uid] = members;
+                    s_user_members_cache[uid] = {members, now + std::chrono::seconds(30)};
                 }
                 for (auto mid : members) {
                     batch.add_edge(mid, "HAS_ACCESS", 1.0, aid, "{}");
@@ -987,6 +994,11 @@ namespace irods::catalog {
                  try { size = old_buf.get_i64(0, "s"); } catch(...) {}
                  std::string type = safe_get_str(old_buf, 0, "t");
                  std::string old_path = safe_get_str(old_buf, 0, "p");
+                 std::string old_parent_coll = safe_get_str(old_buf, 0, "pn");
+                 if (old_parent_coll.empty() && !old_path.empty()) {
+                     size_t old_slash = old_path.find_last_of('/');
+                     old_parent_coll = (old_slash == 0) ? "/" : (old_slash != std::string::npos ? old_path.substr(0, old_slash) : "");
+                 }
                  std::string ct = safe_get_str(old_buf, 0, "ct");
                  char time_buf[50];
                  snprintf(time_buf, sizeof(time_buf), "%011lld", (long long)time(nullptr));
@@ -1021,8 +1033,9 @@ namespace irods::catalog {
                  old_buf.set_str(0, "n", base_name);
                  old_buf.set_str(0, "p", new_path);
                  size_t slash_pos = new_path.find_last_of('/');
+                 std::string new_parent_coll = (slash_pos != std::string::npos) ? (slash_pos == 0 ? "/" : new_path.substr(0, slash_pos)) : "";
                  if (slash_pos != std::string::npos) {
-                     old_buf.set_str(0, "pn", (slash_pos == 0 ? "/" : new_path.substr(0, slash_pos)));
+                     old_buf.set_str(0, "pn", new_parent_coll);
                  }
                  old_buf.set_str(0, "mt", mt);
 
@@ -1032,6 +1045,15 @@ namespace irods::catalog {
                  if (!old_path.empty()) del_index(EntityType::DataObject, "path", old_path);
                  add_index(EntityType::DataObject, "n", base_name, sid);
                  add_index(EntityType::DataObject, "path", new_path, sid);
+
+                 if (old_parent_coll != new_parent_coll) {
+                     char id_hex[17];
+                     std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
+                     if (!old_parent_coll.empty()) {
+                         client_->del_raw_async(local_cluster_id_, get_idx_key(EntityType::DataObject, "pn", old_parent_coll) + ":" + id_hex);
+                     }
+                     client_->put_raw_async(local_cluster_id_, get_idx_key(EntityType::DataObject, "pn", new_parent_coll) + ":" + id_hex, id_hex);
+                 }
             }
             return SUCCESS(); 
         }
@@ -1050,6 +1072,11 @@ namespace irods::catalog {
 
             std::string data_name = safe_get_str(dbuf, 0, "n");
             std::string old_path = safe_get_str(dbuf, 0, "p");
+            std::string old_parent_path = safe_get_str(dbuf, 0, "pn");
+            if (old_parent_path.empty() && !old_path.empty()) {
+                size_t old_slash = old_path.find_last_of('/');
+                old_parent_path = (old_slash == 0) ? "/" : (old_slash != std::string::npos ? old_path.substr(0, old_slash) : "");
+            }
             std::string target_coll_path = safe_get_str(cbuf, 0, "n");
             std::string new_path = (target_coll_path == "/" ? "/" : target_coll_path + "/") + data_name;
 
@@ -1066,6 +1093,7 @@ namespace irods::catalog {
             char time_buf[50];
             snprintf(time_buf, sizeof(time_buf), "%011lld", (long long)time(nullptr));
             dbuf.set_str(0, "p", new_path);
+            dbuf.set_str(0, "pn", target_coll_path);
             dbuf.set_str(0, "mt", std::string(time_buf));
             client_->put_node_async(local_cluster_id_, sid, dbuf.move_to_string()).get();
 
@@ -1073,6 +1101,15 @@ namespace irods::catalog {
                 del_index(EntityType::DataObject, "path", old_path);
             }
             add_index(EntityType::DataObject, "path", new_path, sid);
+
+            if (!old_parent_path.empty()) {
+                char id_hex[17];
+                std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
+                client_->del_raw_async(local_cluster_id_, get_idx_key(EntityType::DataObject, "pn", old_parent_path) + ":" + id_hex);
+            }
+            char id_hex[17];
+            std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
+            client_->put_raw_async(local_cluster_id_, get_idx_key(EntityType::DataObject, "pn", target_coll_path) + ":" + id_hex, id_hex);
 
             return SUCCESS(); 
         }
@@ -1163,6 +1200,24 @@ namespace irods::catalog {
             // Multiple replicas remain, remove only this replica in a single batch:
             l3kvg::MutationBatch batch;
             batch.del_edge(sid, "HAS_REPLICA", 1.0, rid);
+            auto staying_at = client_->get_neighbors_async(local_cluster_id_, rid, "STAYING_AT", 0.0).get();
+            for (auto resc_sid : staying_at) {
+                batch.del_edge(resc_sid, "HOSTS_REPLICA", 1.0, rid);
+                batch.del_edge(rid, "STAYING_AT", 1.0, resc_sid);
+            }
+            if (staying_at.empty()) {
+                std::string r_payload = client_->get_node_payload_async(local_cluster_id_, rid).get();
+                if (!r_payload.empty()) {
+                    try {
+                        lite3cpp::Buffer r_buf(r_payload);
+                        int64_t resc_id = r_buf.get_i64(0, "rid");
+                        if (resc_id > 0) {
+                            snowflake_id_t resc_sid = make_id(EntityType::Resource, resc_id);
+                            batch.del_edge(resc_sid, "HOSTS_REPLICA", 1.0, rid);
+                        }
+                    } catch (...) {}
+                }
+            }
             batch.del_node(rid);
             client_->execute_batch_async(local_cluster_id_, batch).get();
             return SUCCESS();
@@ -1469,8 +1524,13 @@ namespace irods::catalog {
                     std::string old_do_path = safe_get_str(ch_buf, 0, "p");
                     std::string do_name = safe_get_str(ch_buf, 0, "n");
                     std::string new_do_path = (new_prefix == "/" ? "/" : new_prefix + "/") + do_name;
+                    std::string old_pn = safe_get_str(ch_buf, 0, "pn");
+                    if (old_pn.empty()) {
+                        old_pn = old_prefix;
+                    }
                     
                     ch_buf.set_str(0, "p", new_do_path);
+                    ch_buf.set_str(0, "pn", new_prefix);
                     ch_buf.set_str(0, "mt", std::string(time_buf));
                     
                     client_->put_node_async(local_cluster_id_, child_sid, ch_buf.move_to_string()).get();
@@ -1478,6 +1538,13 @@ namespace irods::catalog {
                         del_index(EntityType::DataObject, "path", old_do_path);
                     }
                     add_index(EntityType::DataObject, "path", new_do_path, child_sid);
+
+                    char id_hex[17];
+                    std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)child_sid);
+                    if (!old_pn.empty()) {
+                        client_->del_raw_async(local_cluster_id_, get_idx_key(EntityType::DataObject, "pn", old_pn) + ":" + id_hex);
+                    }
+                    client_->put_raw_async(local_cluster_id_, get_idx_key(EntityType::DataObject, "pn", new_prefix) + ":" + id_hex, id_hex);
                 }
             }
         }
@@ -1686,6 +1753,10 @@ namespace irods::catalog {
 
             add_edge(target_cid, "CONTAINS", 1.0, cid);
             update_collection_subtree(cid, old_coll_name, new_coll_name, target_parent_name);
+            {
+                std::lock_guard<std::mutex> lock(s_reg_cache_mu);
+                s_coll_path_cache.clear();
+            }
             return SUCCESS();
         }
 
@@ -2325,6 +2396,7 @@ namespace irods::catalog {
             }
             if (!uid || !gid) return ERROR(-1, "User or group not found");
             invalidate_user_cache(uid);
+            invalidate_user_cache(gid);
             add_edge(uid, "MEMBER_OF", 1.0, gid);
             auto aids = client_->get_neighbors_async(local_cluster_id_, gid, "HAS_ACCESS", 0.0).get();
             for (auto aid : aids) {
@@ -2340,6 +2412,7 @@ namespace irods::catalog {
             }
             if (!uid || !gid) return ERROR(-1, "User or group not found");
             invalidate_user_cache(uid);
+            invalidate_user_cache(gid);
             
             del_edge(uid, "MEMBER_OF", 1.0, gid);
             auto aids = client_->get_neighbors_async(local_cluster_id_, gid, "HAS_ACCESS", 0.0).get();

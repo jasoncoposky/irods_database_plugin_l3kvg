@@ -1265,6 +1265,10 @@ irods::error db_reg_resc_op(irods::plugin_context& _ctx, std::map<std::string, s
 irods::error db_mod_resc_op(irods::plugin_context& _ctx, const char* _resc, const char* _prop, const char* _val) {
     try {
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_resc_op");
+        if (_resc) {
+            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+            s_rid_cache.erase(safe_string(_resc));
+        }
         irods::catalog::resc_id_t rid = 0;
         if (_resc && g_catalog->resolve_resource_name(_resc, rid).ok()) {
             auto ret = g_catalog->modify_resource(rid, safe_string(_prop), safe_string(_val));
@@ -1282,6 +1286,10 @@ irods::error db_mod_resc_op(irods::plugin_context& _ctx, const char* _resc, cons
 irods::error db_del_resc_op(irods::plugin_context& _ctx, const char* _resc, int _unused) {
     try {
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_resc_op");
+        if (_resc) {
+            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+            s_rid_cache.erase(safe_string(_resc));
+        }
         irods::catalog::resc_id_t rid = 0;
         if (_resc && g_catalog->resolve_resource_name(_resc, rid).ok()) {
             auto ret = g_catalog->delete_resource(rid);
