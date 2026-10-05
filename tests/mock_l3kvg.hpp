@@ -234,6 +234,9 @@ namespace irods::catalog::test {
                                     }
                                     case l3kvg::MutationOp::DelNode: {
                                         nodes_.erase(item.src);
+                                        char hex_buf[32];
+                                        std::snprintf(hex_buf, sizeof(hex_buf), "n:{%016llx}", (unsigned long long)item.src);
+                                        generic_store_.erase(hex_buf);
                                         break;
                                     }
                                     case l3kvg::MutationOp::DelRaw: {
@@ -248,6 +251,10 @@ namespace irods::catalog::test {
                                                 return e.first == item.label && e.second == item.dst;
                                             }), edges.end());
                                         }
+                                        std::string in_key = std::string(l3kvg::KeyBuilder::edge_in_key(item.dst, item.label, item.src));
+                                        generic_store_.erase(in_key);
+                                        std::string out_key = std::string(l3kvg::KeyBuilder::edge_out_key(item.src, item.label, item.weight, item.dst));
+                                        generic_store_.erase(out_key);
                                         break;
                                     }
                                 }

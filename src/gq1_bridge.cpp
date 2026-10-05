@@ -734,17 +734,40 @@ namespace irods::catalog::bridge {
                 if (inx == COL_COLL_NAME && _catalog != nullptr && best_start_priority < 3) {
                     snowflake_id_t sid = 0; EntityType type;
                     if (_catalog->resolve_path(target_coll, sid, type).ok() && type == EntityType::Collection) {
-                        std::vector<snowflake_id_t> coll_ids;
-                        _catalog->get_collection_subtree_ids(sid, coll_ids);
-                        if (!coll_ids.empty()) {
-                            if (likely_root == "DataObject") {
-                                likely_root = "Collection";
-                                ast.from_entity = "Collection";
+                        if (likely_root == "DataObject") {
+                            std::string do_prefix = "idx:DataObject:path:" + (target_coll == "/" ? "/" : target_coll + "/");
+                            auto do_entries = _catalog->get_client()->get_prefix_entries_async(_catalog->get_cluster_id(), do_prefix).get();
+                            if (!do_entries.empty()) {
+                                std::vector<snowflake_id_t> data_ids;
+                                data_ids.reserve(do_entries.size());
+                                for (const auto& [k, v] : do_entries) {
+                                    if (!v.empty()) {
+                                        try {
+                                            data_ids.push_back(std::stoull(v, nullptr, 16));
+                                        } catch (...) {}
+                                    }
+                                }
+                                if (!data_ids.empty()) {
+                                    _starting_nodes = std::move(data_ids);
+                                    resolved_start = true;
+                                    best_start_priority = 3;
+                                    rodsLog(LOG_NOTICE, "L3_BRIDGE: resolved %zu DataObject starting nodes for '%s'", _starting_nodes.size(), target_coll.c_str());
+                                }
                             }
-                            _starting_nodes = std::move(coll_ids);
-                            resolved_start = true;
-                            best_start_priority = 3;
-                            rodsLog(LOG_NOTICE, "L3_BRIDGE: eq_or_like resolved %zu collection starting nodes for '%s'", _starting_nodes.size(), target_coll.c_str());
+                        }
+                        if (!resolved_start) {
+                            std::vector<snowflake_id_t> coll_ids;
+                            _catalog->get_collection_subtree_ids(sid, coll_ids);
+                            if (!coll_ids.empty()) {
+                                if (likely_root == "DataObject") {
+                                    likely_root = "Collection";
+                                    ast.from_entity = "Collection";
+                                }
+                                _starting_nodes = std::move(coll_ids);
+                                resolved_start = true;
+                                best_start_priority = 3;
+                                rodsLog(LOG_NOTICE, "L3_BRIDGE: eq_or_like resolved %zu collection starting nodes for '%s'", _starting_nodes.size(), target_coll.c_str());
+                            }
                         }
                     }
                 }

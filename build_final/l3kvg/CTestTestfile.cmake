@@ -44,4 +44,6 @@ add_test([=[test_ultimate_mesh]=] "/home/darkfell/dev/irods_database_plugin_l3kv
 set_tests_properties([=[test_ultimate_mesh]=] PROPERTIES  _BACKTRACE_TRIPLES "/home/darkfell/dev/l3kvg/CMakeLists.txt;140;add_test;/home/darkfell/dev/l3kvg/CMakeLists.txt;0;")
 add_test([=[test_secure_mesh]=] "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/l3kvg/test_secure_mesh")
 set_tests_properties([=[test_secure_mesh]=] PROPERTIES  _BACKTRACE_TRIPLES "/home/darkfell/dev/l3kvg/CMakeLists.txt;144;add_test;/home/darkfell/dev/l3kvg/CMakeLists.txt;0;")
+add_test([=[test_server_concurrency]=] "/home/darkfell/dev/irods_database_plugin_l3kvg/build_final/l3kvg/test_server_concurrency")
+set_tests_properties([=[test_server_concurrency]=] PROPERTIES  _BACKTRACE_TRIPLES "/home/darkfell/dev/l3kvg/CMakeLists.txt;148;add_test;/home/darkfell/dev/l3kvg/CMakeLists.txt;0;")
 subdirs("L3KV")
