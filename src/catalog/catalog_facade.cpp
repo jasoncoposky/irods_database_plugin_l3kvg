@@ -48,6 +48,8 @@ namespace irods::catalog {
     static std::unordered_map<std::string, snowflake_id_t> s_user_id_cache;
     static std::mutex s_path_cache_mu;
     static std::unordered_map<std::string, snowflake_id_t> s_coll_name_cache;
+    static std::mutex s_user_members_mu;
+    static std::unordered_map<snowflake_id_t, std::vector<snowflake_id_t>> s_user_members_cache;
 
     static void invalidate_user_cache(snowflake_id_t uid) {
         if (uid != 0) {
@@ -57,6 +59,14 @@ namespace irods::catalog {
         {
             std::lock_guard<std::mutex> lock(s_reg_cache_mu);
             s_user_id_cache.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lock(s_user_members_mu);
+            if (uid != 0) {
+                s_user_members_cache.erase(uid);
+            } else {
+                s_user_members_cache.clear();
+            }
         }
     }
 
@@ -748,6 +758,16 @@ namespace irods::catalog {
 
             // Check if collection exists with this path
             if (!full_path.empty()) {
+                bool coll_exists = false;
+                {
+                    std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                    if (s_coll_name_cache.find(full_path) != s_coll_name_cache.end()) {
+                        coll_exists = true;
+                    }
+                }
+                if (coll_exists) {
+                    return ERROR(CAT_NAME_EXISTS_AS_COLLECTION, "Collection already exists with data object name: " + full_path);
+                }
                 snowflake_id_t existing_coll = resolve_id_from_index(EntityType::Collection, "n", full_path);
                 if (existing_coll) {
                     return ERROR(CAT_NAME_EXISTS_AS_COLLECTION, "Collection already exists with data object name: " + full_path);
@@ -792,6 +812,9 @@ namespace irods::catalog {
                 std::string idx_path = get_idx_key(EntityType::DataObject, "path", full_path);
                 batch.put_raw(idx_path, id_hex);
             }
+
+            std::string idx_pn = get_idx_key(EntityType::DataObject, "pn", (parent_coll.empty() ? "/" : parent_coll));
+            batch.put_raw(idx_pn + ":" + std::string(id_hex), id_hex);
             
             snowflake_id_t cid = make_id(EntityType::Collection, obj.coll_id);
             #ifdef IRODS_SERVER
@@ -837,7 +860,19 @@ namespace irods::catalog {
                 batch.put_node(aid, abuf.move_to_string());
                 batch.add_edge(uid, "HAS_ACCESS", 1.0, aid, "{}");
 
-                auto members = client_->get_in_neighbors_async(local_cluster_id_, uid, "MEMBER_OF").get();
+                std::vector<snowflake_id_t> members;
+                {
+                    std::lock_guard<std::mutex> lock(s_user_members_mu);
+                    auto it = s_user_members_cache.find(uid);
+                    if (it != s_user_members_cache.end()) {
+                        members = it->second;
+                    }
+                }
+                if (members.empty()) {
+                    members = client_->get_in_neighbors_async(local_cluster_id_, uid, "MEMBER_OF").get();
+                    std::lock_guard<std::mutex> lock(s_user_members_mu);
+                    s_user_members_cache[uid] = members;
+                }
                 for (auto mid : members) {
                     batch.add_edge(mid, "HAS_ACCESS", 1.0, aid, "{}");
                 }
@@ -893,6 +928,13 @@ namespace irods::catalog {
                     std::string path = safe_get_str(buf, 0, "p");
                     if (!path.empty()) {
                         batch.del_raw(get_idx_key(EntityType::DataObject, "path", path));
+                    }
+
+                    std::string pn = safe_get_str(buf, 0, "pn");
+                    if (!pn.empty()) {
+                        char id_hex[17];
+                        std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
+                        batch.del_raw(get_idx_key(EntityType::DataObject, "pn", pn) + ":" + std::string(id_hex));
                     }
                 } catch (...) {}
             }
@@ -1111,36 +1153,19 @@ namespace irods::catalog {
             snowflake_id_t sid = make_id(EntityType::DataObject, data_id);
 
             #ifdef IRODS_SERVER
-            rodsLog(LOG_NOTICE, "L3_CATALOG: Unregistering Replica [DataID: %llu, Num: %u] (SID: %016llx)", (unsigned long long)data_id, repl_num, (unsigned long long)rid);
+            rodsLog(LOG_DEBUG, "L3_CATALOG: Unregistering Replica [DataID: %llu, Num: %u] (SID: %016llx)", (unsigned long long)data_id, repl_num, (unsigned long long)rid);
             #endif
 
-            // Delete Edges first
-            del_edge(sid, "HAS_REPLICA", 1.0, rid);
-
-            std::string payload = client_->get_node_payload_async(local_cluster_id_, rid).get();
-            if (!payload.empty()) {
-                try {
-                    lite3cpp::Buffer buf(payload);
-                    uint64_t resc_id = buf.get_i64(0, "rid");
-                    if (resc_id != 0) {
-                        snowflake_id_t rsid = make_id(EntityType::Resource, resc_id);
-                        del_edge(rid, "STAYING_AT", 1.0, rsid);
-                    }
-                } catch (...) {}
-            }
-
-            client_->del_node_async(local_cluster_id_, rid).get();
-
-            // Check if any replicas remain for this DataObject
             auto replicas = client_->get_neighbors_async(local_cluster_id_, sid, "HAS_REPLICA", 0.0).get();
-            if (replicas.empty()) {
-                #ifdef IRODS_SERVER
-                rodsLog(LOG_NOTICE, "L3_CATALOG: Last replica removed, deleting DataObject %llu", (unsigned long long)data_id);
-                #endif
+            if (replicas.empty() || (replicas.size() == 1 && (replicas[0] == rid || repl_num == 0))) {
                 return delete_data_object(data_id);
             }
-
-            return SUCCESS(); 
+            // Multiple replicas remain, remove only this replica in a single batch:
+            l3kvg::MutationBatch batch;
+            batch.del_edge(sid, "HAS_REPLICA", 1.0, rid);
+            batch.del_node(rid);
+            client_->execute_batch_async(local_cluster_id_, batch).get();
+            return SUCCESS();
         }
         irods::error update_replica_access_time(data_id_t data_id, uint32_t repl_num, std::string_view time) { 
             std::string local_uuid = std::to_string(data_id) + ":" + std::to_string(repl_num);

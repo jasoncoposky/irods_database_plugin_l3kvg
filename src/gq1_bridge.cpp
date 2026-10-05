@@ -512,21 +512,42 @@ namespace irods::catalog::bridge {
                         }
                     }
                 } else if (inx == COL_COLL_NAME) {
-                    if (_catalog != nullptr && best_start_priority < 3) {
+                    if (_catalog != nullptr && best_start_priority < 4) {
                         snowflake_id_t sid = 0; EntityType type;
                         if (_catalog->resolve_path(literal, sid, type).ok()) {
                             if (likely_root == "DataObject") {
-                                auto child_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), sid, "CONTAINS", 0.0).get();
-                                _starting_nodes = std::move(child_nodes);
-                                if (_starting_nodes.empty()) {
-                                    _starting_nodes.push_back(0xFFFFFFFFFFFFFFFFULL);
+                                bool found_pn = false;
+                                std::string pn_prefix = "idx:DataObject:pn:" + literal + ":";
+                                auto pn_entries = _catalog->get_client()->get_prefix_entries_async(_catalog->get_cluster_id(), pn_prefix).get();
+                                if (!pn_entries.empty()) {
+                                    _starting_nodes.clear();
+                                    _starting_nodes.reserve(pn_entries.size());
+                                    for (const auto& [k, v] : pn_entries) {
+                                        if (!v.empty()) {
+                                            try { _starting_nodes.push_back(std::stoull(v, nullptr, 16)); } catch (...) {}
+                                        }
+                                    }
+                                    if (!_starting_nodes.empty()) {
+                                        resolved_start = true;
+                                        best_start_priority = 4;
+                                        found_pn = true;
+                                    }
+                                }
+                                if (!found_pn) {
+                                    auto child_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), sid, "CONTAINS", 0.0).get();
+                                    _starting_nodes = std::move(child_nodes);
+                                    if (_starting_nodes.empty()) {
+                                        _starting_nodes.push_back(0xFFFFFFFFFFFFFFFFULL);
+                                    }
+                                    resolved_start = true;
+                                    best_start_priority = 3;
                                 }
                             } else {
                                 _starting_nodes.clear();
                                 _starting_nodes.push_back(sid);
+                                resolved_start = true;
+                                best_start_priority = 3;
                             }
-                            resolved_start = true;
-                            best_start_priority = 3;
                         } else if (likely_root == "DataObject") {
                             _starting_nodes.clear();
                             _starting_nodes.push_back(0xFFFFFFFFFFFFFFFFULL);

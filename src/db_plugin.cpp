@@ -133,6 +133,9 @@ static char g_session_client_addr[NAME_LEN]{};
 static char g_session_client_user[NAME_LEN]{};
 static char g_session_client_zone[NAME_LEN]{};
 
+static std::mutex s_rid_cache_mu;
+static std::unordered_map<std::string, uint64_t> s_rid_cache;
+
 irods::error init_l3kvg_catalog();
 
 static void atfork_child() {
@@ -410,12 +413,24 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
             }
 
             if (repl.resource_id == 0 && _info->rescName && _info->rescName[0] != '\0') {
-                irods::catalog::snowflake_id_t rsid;
-                if (g_catalog->resolve_resource_name(_info->rescName, rsid).ok()) {
-                    auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
-                    if (!payload.empty()) {
-                        lite3cpp::Buffer buf(payload);
-                        repl.resource_id = buf.get_i64(0, "id");
+                std::string rname(_info->rescName);
+                {
+                    std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+                    auto it = s_rid_cache.find(rname);
+                    if (it != s_rid_cache.end()) {
+                        repl.resource_id = it->second;
+                    }
+                }
+                if (repl.resource_id == 0) {
+                    irods::catalog::snowflake_id_t rsid;
+                    if (g_catalog->resolve_resource_name(_info->rescName, rsid).ok()) {
+                        auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
+                        if (!payload.empty()) {
+                            lite3cpp::Buffer buf(payload);
+                            repl.resource_id = buf.get_i64(0, "id");
+                            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+                            s_rid_cache[rname] = repl.resource_id;
+                        }
                     }
                 }
             }
@@ -638,8 +653,6 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
             rstrcpy(_dst->rescHier, _dst->rescName, MAX_NAME_LEN);
         }
 
-        static std::mutex s_rid_cache_mu;
-        static std::unordered_map<std::string, uint64_t> s_rid_cache;
         uint64_t resc_id = (uint64_t)_dst->rescId;
         if (resc_id == 0 && _dst->rescName[0] != '\0') {
             std::string rname(_dst->rescName);
