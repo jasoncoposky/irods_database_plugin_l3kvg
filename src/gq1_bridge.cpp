@@ -426,6 +426,39 @@ namespace irods::catalog::bridge {
             }
         }
 
+        // Pass 0b: Fast-Path AVU Indexing & Resolution
+        std::string meta_attr, meta_val;
+        for (int i = 0; i < _inp->sqlCondInp.len; ++i) {
+            int inx = _inp->sqlCondInp.inx[i];
+            int pure_inx = get_pure_inx(inx);
+            std::string cond(_inp->sqlCondInp.value[i]);
+            std::smatch match;
+            if (cond.find("||") == std::string::npos && std::regex_match(cond, match, eq_regex)) {
+                std::string literal = extract_literal(match);
+                if (inx == COL_META_DATA_ATTR_NAME || pure_inx == COL_META_DATA_ATTR_NAME) meta_attr = literal;
+                else if (inx == COL_META_DATA_ATTR_VALUE || pure_inx == COL_META_DATA_ATTR_VALUE) meta_val = literal;
+            }
+        }
+        if (!meta_attr.empty() && !meta_val.empty() && _catalog != nullptr && best_start_priority < 10) {
+            std::string av_prefix = "idx:Metadata:av:" + meta_attr + ":" + meta_val + ":";
+            auto entries = _catalog->get_client()->get_prefix_entries_async(_catalog->get_cluster_id(), av_prefix).get();
+            if (!entries.empty()) {
+                std::vector<snowflake_id_t> target_sids;
+                target_sids.reserve(entries.size());
+                for (const auto& [k, v] : entries) {
+                    if (!v.empty()) {
+                        try { target_sids.push_back(std::stoull(v, nullptr, 16)); } catch (...) {}
+                    }
+                }
+                if (!target_sids.empty()) {
+                    _starting_nodes = std::move(target_sids);
+                    resolved_start = true;
+                    best_start_priority = 10;
+                    rodsLog(LOG_DEBUG, "L3_BRIDGE: resolved %zu target nodes from AVU index for %s=%s", _starting_nodes.size(), meta_attr.c_str(), meta_val.c_str());
+                }
+            }
+        }
+
         // Pass 1: Find best starting node
         for (int i = 0; i < _inp->sqlCondInp.len; ++i) {
             int inx = _inp->sqlCondInp.inx[i];

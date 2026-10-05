@@ -2,6 +2,7 @@
 #include "irods/irods_server_properties.hpp"
 #include "irods/irods_configuration_keywords.hpp"
 #include "irods/irods_database_constants.hpp"
+#include <irods/rodsGenQuery.h>
 
 using namespace irods::catalog;
 using namespace irods::catalog::test;
@@ -95,6 +96,41 @@ TEST_F(MetadataPluginTest, AvuLifecycle) {
         }
     }
     ASSERT_TRUE(copy_found);
+
+    // 7. GenQuery AVU lookup via Fast-Path index
+    genQueryInp_t gq_inp{};
+    memset(&gq_inp, 0, sizeof(genQueryInp_t));
+    gq_inp.maxRows = 10;
+    gq_inp.selectInp.len = 1;
+    gq_inp.selectInp.inx = (int*)malloc(sizeof(int));
+    gq_inp.selectInp.inx[0] = COL_D_DATA_ID;
+    gq_inp.selectInp.value = (int*)malloc(sizeof(int));
+    gq_inp.selectInp.value[0] = 1;
+
+    gq_inp.sqlCondInp.len = 2;
+    gq_inp.sqlCondInp.inx = (int*)malloc(2 * sizeof(int));
+    gq_inp.sqlCondInp.inx[0] = COL_META_DATA_ATTR_NAME;
+    gq_inp.sqlCondInp.inx[1] = COL_META_DATA_ATTR_VALUE;
+    gq_inp.sqlCondInp.value = (char**)malloc(2 * sizeof(char*));
+    gq_inp.sqlCondInp.value[0] = strdup("= 'size'");
+    gq_inp.sqlCondInp.value[1] = strdup("= 'large'");
+
+    genQueryOut_t gq_out{};
+    memset(&gq_out, 0, sizeof(genQueryOut_t));
+
+    ret = plugin()->call<genQueryInp_t*, genQueryOut_t*>(
+        nullptr, irods::DATABASE_OP_GEN_QUERY, nullptr, &gq_inp, &gq_out);
+    ASSERT_TRUE(ret.ok());
+
+    free(gq_inp.selectInp.inx);
+    free(gq_inp.selectInp.value);
+    free(gq_inp.sqlCondInp.inx);
+    free(gq_inp.sqlCondInp.value[0]);
+    free(gq_inp.sqlCondInp.value[1]);
+    free(gq_inp.sqlCondInp.value);
+    if (gq_out.sqlResult && gq_out.sqlResult[0].value) {
+        free(gq_out.sqlResult[0].value);
+    }
 }
 
 int main(int argc, char **argv) {
