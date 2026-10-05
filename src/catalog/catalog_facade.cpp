@@ -1466,12 +1466,12 @@ namespace irods::catalog {
                 psid = resolve_id_from_index(EntityType::Collection, "n", parent_name);
             }
 
-            if (psid != 0) {
+            if (psid != 0 && psid != sid) {
                 #ifdef IRODS_SERVER
                 rodsLog(LOG_NOTICE, "L3_CATALOG: Creating CONTAINS edge (Coll-to-Coll): %016llx -- CONTAINS --> %016llx", (unsigned long long)psid, (unsigned long long)sid);
                 #endif
                 add_edge(psid, "CONTAINS", 1.0, sid);
-            } else {
+            } else if (psid == 0) {
                 snowflake_id_t zid = get_zone_id(coll.owner_zone);
                 add_edge(zid, "HAS_ROOT_COLL", 1.0, sid);
             }
@@ -1840,6 +1840,7 @@ namespace irods::catalog {
             }
             auto children = client_->get_neighbors_async(local_cluster_id_, sid, "CONTAINS", 0.0).get();
             for (auto cid : children) {
+                if (cid == sid) continue;
                 std::string cpayload = client_->get_node_payload_async(local_cluster_id_, cid).get();
                 if (!cpayload.empty()) {
                     is_empty = false;
