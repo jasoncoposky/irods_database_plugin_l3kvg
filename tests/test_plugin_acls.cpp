@@ -1,4 +1,6 @@
 #include "plugin_test_fixture.hpp"
+#include "irods/catalog/catalog_facade.hpp"
+#include "buffer.hpp"
 #include "irods/irods_server_properties.hpp"
 #include "irods/irods_configuration_keywords.hpp"
 #include "irods/irods_database_constants.hpp"
@@ -125,6 +127,86 @@ TEST_F(AclPluginTest, GroupAccessModel) {
         }
     }
     ASSERT_FALSE(removed_member_found);
+}
+
+TEST_F(AclPluginTest, GroupDeletionCacheInvalidationAndExplicitString) {
+    // 1. Explicit std::string(buf) conversion test
+    lite3cpp::Buffer buf;
+    buf.init_object();
+    buf.set_str(0, "group", "test_group");
+    buf.set_i64(0, "id", 12345);
+    std::string buf_str(buf);
+    EXPECT_FALSE(buf_str.empty());
+    EXPECT_NE(buf_str.find("test_group"), std::string::npos);
+    EXPECT_NE(buf_str.find("12345"), std::string::npos);
+
+    // 2. Setup config
+    nlohmann::json config;
+    config["zone_name"] = "tempZone";
+    config["zone_user"] = "rods";
+    config["plugin_configuration"]["database"]["l3kvg"]["plugin_specific_configuration"] = {
+        {"db_path", "test_acl_cache.l3kvg"},
+        {"node_id", 1},
+        {"zmq_endpoint", endpoint()}
+    };
+    irods::server_properties::instance().set_configuration(config);
+
+    CatalogFacade catalog;
+    Config cfg;
+    cfg.node_id = 1;
+    cfg.zmq_endpoint = endpoint();
+    ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
+
+    // Register user Bob
+    user u_bob;
+    u_bob.id = 301;
+    u_bob.name = "bob";
+    u_bob.zone = "tempZone";
+    u_bob.type = "rodsuser";
+    user_id_t bob_id;
+    ASSERT_TRUE(catalog.register_user(u_bob, bob_id).ok());
+
+    // Register group Devs
+    user g_devs;
+    g_devs.id = 302;
+    g_devs.name = "devs";
+    g_devs.zone = "tempZone";
+    g_devs.type = "rodsgroup";
+    user_id_t devs_id;
+    ASSERT_TRUE(catalog.register_user(g_devs, devs_id).ok());
+
+    // Add Bob to Devs
+    ASSERT_TRUE(catalog.add_user_to_group("bob", "tempZone", "devs").ok());
+
+    // Register Collection /tempZone/home/dev_project
+    collection col;
+    col.id = 401;
+    col.name = "/tempZone/home/dev_project";
+    col.owner_name = "rods";
+    col.owner_zone = "tempZone";
+    coll_id_t col_id;
+    ASSERT_TRUE(catalog.register_collection(col, col_id).ok());
+
+    // Grant Devs group write access
+    ASSERT_TRUE(catalog.set_access("devs", "tempZone", "/tempZone/home/dev_project", "write", false).ok());
+
+    snowflake_id_t bob_sid = catalog.make_id(EntityType::User, bob_id);
+    snowflake_id_t col_sid = catalog.make_id(EntityType::Collection, col_id);
+
+    // Initial permission check for Bob (should succeed via group Devs membership)
+    // This populates s_user_cache for bob_sid with a 30s TTL
+    bool allowed = false;
+    ASSERT_TRUE(catalog.check_permission(bob_sid, col_sid, "write", allowed).ok());
+    EXPECT_TRUE(allowed);
+
+    // Delete group Devs
+    // delete_user removes MEMBER_OF edges and calls invalidate_user_cache for all member users (Bob)
+    ASSERT_TRUE(catalog.delete_user("devs", "tempZone").ok());
+
+    // Now permission check for Bob should immediately fail without waiting for TTL
+    bool allowed_after = false;
+    ASSERT_TRUE(catalog.check_permission(bob_sid, col_sid, "write", allowed_after).ok());
+    EXPECT_FALSE(allowed_after);
 }
 
 int main(int argc, char **argv) {

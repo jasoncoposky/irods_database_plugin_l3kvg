@@ -20,6 +20,7 @@
 #include <set>
 #include <tuple>
 #include <ctime>
+#include <chrono>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -37,6 +38,7 @@ namespace irods::catalog {
         std::string name;
         std::string type;
         std::vector<snowflake_id_t> principals;
+        std::chrono::steady_clock::time_point expires_at;
     };
     static std::mutex s_user_cache_mu;
     static std::unordered_map<snowflake_id_t, UserInfoCache> s_user_cache;
@@ -2083,6 +2085,7 @@ namespace irods::catalog {
             auto members = client_->get_in_neighbors_async(local_cluster_id_, uid, "MEMBER_OF").get();
             for (auto m : members) {
                 del_edge(m, "MEMBER_OF", 1.0, uid);
+                invalidate_user_cache(m);
             }
             auto aids = client_->get_neighbors_async(local_cluster_id_, uid, "HAS_ACCESS", 0.0).get();
             for (auto aid : aids) {
@@ -2297,7 +2300,7 @@ namespace irods::catalog {
             allowed = false;
             
             #ifdef IRODS_SERVER
-            rodsLog(LOG_NOTICE, "L3_CATALOG: check_permission user_sid=%016llx target_sid=%016llx level=%s check_parents=%d",
+            rodsLog(LOG_DEBUG, "L3_CATALOG: check_permission user_sid=%016llx target_sid=%016llx level=%s check_parents=%d",
                     (unsigned long long)user_sid, (unsigned long long)target_sid, level.c_str(), check_parents ? 1 : 0);
             #endif
 
@@ -2308,14 +2311,17 @@ namespace irods::catalog {
 
             if (user_sid != 0) {
                 bool found = false;
+                auto now = std::chrono::steady_clock::now();
                 {
                     std::lock_guard<std::mutex> lock(s_user_cache_mu);
                     auto it = s_user_cache.find(user_sid);
                     if (it != s_user_cache.end()) {
-                        user_name = it->second.name;
-                        user_type = it->second.type;
-                        principals = it->second.principals;
-                        found = true;
+                        if (now < it->second.expires_at) {
+                            user_name = it->second.name;
+                            user_type = it->second.type;
+                            principals = it->second.principals;
+                            found = true;
+                        }
                     }
                 }
                 if (!found) {
@@ -2332,7 +2338,7 @@ namespace irods::catalog {
                     principals.insert(principals.end(), groups.begin(), groups.end());
 
                     std::lock_guard<std::mutex> lock(s_user_cache_mu);
-                    s_user_cache[user_sid] = {user_name, user_type, principals};
+                    s_user_cache[user_sid] = {user_name, user_type, principals, std::chrono::steady_clock::now() + std::chrono::seconds(30)};
                 }
             }
 

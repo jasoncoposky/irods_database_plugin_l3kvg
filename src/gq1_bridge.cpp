@@ -252,7 +252,7 @@ namespace irods::catalog::bridge {
      * Synthesizes a GenQuery2 AST from a legacy GenQuery1 input.
      */
     irods::experimental::genquery2::select synthesize_gq2_ast(genQueryInp_t* _inp, CatalogFacade* _catalog, std::vector<uint64_t>& _starting_nodes) {
-        rodsLog(LOG_NOTICE, "L3_BRIDGE: Synthesizing GQ2 AST from GQ1 Input. Projections: %d, Conditions: %d", _inp->selectInp.len, _inp->sqlCondInp.len);
+        rodsLog(LOG_DEBUG, "L3_BRIDGE: Synthesizing GQ2 AST from GQ1 Input. Projections: %d, Conditions: %d", _inp->selectInp.len, _inp->sqlCondInp.len);
         
         namespace gq2 = irods::experimental::genquery2;
         gq2::select ast;
@@ -677,7 +677,7 @@ namespace irods::catalog::bridge {
                                 _starting_nodes = std::move(t_nodes);
                                 resolved_start = true;
                                 best_start_priority = 4;
-                                rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu Ticket starting nodes from DataObject '%s' via FOR_OBJECT", _starting_nodes.size(), literal.c_str());
+                                rodsLog(LOG_DEBUG, "L3_BRIDGE: Resolved %zu Ticket starting nodes from DataObject '%s' via FOR_OBJECT", _starting_nodes.size(), literal.c_str());
                             }
                         }
                     }
@@ -694,7 +694,7 @@ namespace irods::catalog::bridge {
                                 _starting_nodes = std::move(t_nodes);
                                 resolved_start = true;
                                 best_start_priority = 4;
-                                rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu Ticket starting nodes from Collection '%s' via FOR_OBJECT", _starting_nodes.size(), literal.c_str());
+                                rodsLog(LOG_DEBUG, "L3_BRIDGE: Resolved %zu Ticket starting nodes from Collection '%s' via FOR_OBJECT", _starting_nodes.size(), literal.c_str());
                             }
                         }
                     }
@@ -766,7 +766,7 @@ namespace irods::catalog::bridge {
                                 _starting_nodes = std::move(coll_ids);
                                 resolved_start = true;
                                 best_start_priority = 3;
-                                rodsLog(LOG_NOTICE, "L3_BRIDGE: eq_or_like resolved %zu collection starting nodes for '%s'", _starting_nodes.size(), target_coll.c_str());
+                                rodsLog(LOG_DEBUG, "L3_BRIDGE: eq_or_like resolved %zu collection starting nodes for '%s'", _starting_nodes.size(), target_coll.c_str());
                             }
                         }
                     }
@@ -801,7 +801,7 @@ namespace irods::catalog::bridge {
                         _starting_nodes = std::move(candidate_nodes);
                         resolved_start = true;
                         best_start_priority = priority;
-                        rodsLog(LOG_NOTICE, "L3_BRIDGE: parent_of resolved %zu candidate collection starting nodes for '%s'", _starting_nodes.size(), target_path.c_str());
+                        rodsLog(LOG_DEBUG, "L3_BRIDGE: parent_of resolved %zu candidate collection starting nodes for '%s'", _starting_nodes.size(), target_path.c_str());
                     }
                 }
             }
@@ -817,13 +817,13 @@ namespace irods::catalog::bridge {
                 }
             }
             resolved_start = true;
-            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu Zone starting nodes (local + HAS_ZONE)", _starting_nodes.size());
+            rodsLog(LOG_DEBUG, "L3_BRIDGE: Resolved %zu Zone starting nodes (local + HAS_ZONE)", _starting_nodes.size());
         } else if (!resolved_start && likely_root == "Resource" && _starting_nodes.empty() && _catalog != nullptr) {
             snowflake_id_t zid = _catalog->get_zone_id();
             auto resc_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), zid, "HAS_RESC", 0.0).get();
             _starting_nodes = std::move(resc_nodes);
             resolved_start = true;
-            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu Resource starting nodes from Zone HAS_RESC", _starting_nodes.size());
+            rodsLog(LOG_DEBUG, "L3_BRIDGE: Resolved %zu Resource starting nodes from Zone HAS_RESC", _starting_nodes.size());
         } else if (!resolved_start && (likely_root == "User" || likely_root == "Group") && _starting_nodes.empty() && _catalog != nullptr) {
             snowflake_id_t zid = _catalog->get_zone_id();
             std::vector<snowflake_id_t> all_user_nodes;
@@ -843,7 +843,7 @@ namespace irods::catalog::bridge {
             }
             _starting_nodes = std::move(all_user_nodes);
             resolved_start = true;
-            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu %s starting nodes from Zone HAS_USER", _starting_nodes.size(), likely_root.c_str());
+            rodsLog(LOG_DEBUG, "L3_BRIDGE: Resolved %zu %s starting nodes from Zone HAS_USER", _starting_nodes.size(), likely_root.c_str());
         } else if (!resolved_start && likely_root == "Rule" && _starting_nodes.empty() && _catalog != nullptr) {
             snowflake_id_t zid = _catalog->get_zone_id();
             auto rule_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), zid, "HAS_RULE", 0.0).get();
@@ -854,7 +854,7 @@ namespace irods::catalog::bridge {
             auto ticket_nodes = _catalog->get_client()->get_neighbors_async(_catalog->get_cluster_id(), zid, "HAS_TICKET", 0.0).get();
             _starting_nodes = std::move(ticket_nodes);
             resolved_start = true;
-            rodsLog(LOG_NOTICE, "L3_BRIDGE: Resolved %zu Ticket starting nodes from Zone HAS_TICKET", _starting_nodes.size());
+            rodsLog(LOG_DEBUG, "L3_BRIDGE: Resolved %zu Ticket starting nodes from Zone HAS_TICKET", _starting_nodes.size());
         }
 
         // Pass 2: Build conditions
@@ -864,7 +864,7 @@ namespace irods::catalog::bridge {
             std::string cond(_inp->sqlCondInp.value[i]);
             std::string name = get_col_name(pure_inx);
             
-            rodsLog(LOG_NOTICE, "L3_BRIDGE: Raw Condition Received: index=%d (%s), value='%s'", inx, name.c_str(), cond.c_str());
+            rodsLog(LOG_DEBUG, "L3_BRIDGE: Raw Condition Received: index=%d (%s), value='%s'", inx, name.c_str(), cond.c_str());
 
             if (!name.empty()) {
                 gq2::column col(name);
@@ -976,7 +976,7 @@ namespace irods::catalog::bridge {
      * Packs L3KVG ResultSet back into legacy genQueryOut_t.
      */
     void pack_gq1_results(const ResultSet& _results, genQueryInp_t* _inp, genQueryOut_t* _out) {
-        rodsLog(LOG_NOTICE, "L3_BRIDGE: Packing %zu rows into GQ1 output", _results.row_count());
+        rodsLog(LOG_DEBUG, "L3_BRIDGE: Packing %zu rows into GQ1 output", _results.row_count());
         _out->rowCnt = _results.row_count();
         _out->attriCnt = _inp->selectInp.len;
 
