@@ -33,6 +33,21 @@
 
 namespace irods::catalog {
 
+    struct UserInfoCache {
+        std::string name;
+        std::string type;
+        std::vector<snowflake_id_t> principals;
+    };
+    static std::mutex s_user_cache_mu;
+    static std::unordered_map<snowflake_id_t, UserInfoCache> s_user_cache;
+
+    static void invalidate_user_cache(snowflake_id_t uid) {
+        if (uid != 0) {
+            std::lock_guard<std::mutex> lock(s_user_cache_mu);
+            s_user_cache.erase(uid);
+        }
+    }
+
     class CatalogImpl {
     public:
         CatalogImpl() {}
@@ -2023,6 +2038,7 @@ namespace irods::catalog {
                 if (!gid_pub) gid_pub = make_id(EntityType::User, 2);
                 add_edge(sid, "MEMBER_OF", 1.0, gid_pub);
             }
+            invalidate_user_cache(sid);
             out_id = usr.id; return SUCCESS();
         }
         irods::error delete_user(std::string_view user_name, std::string_view zone = "") { 
@@ -2041,6 +2057,7 @@ namespace irods::catalog {
             if (!uid) {
                 return ERROR(CAT_INVALID_USER, "User not found");
             }
+            invalidate_user_cache(uid);
             snowflake_id_t zid = get_zone_id(clean_zone);
             if (zid) {
                 del_edge(zid, "HAS_USER", 1.0, uid);
@@ -2094,6 +2111,7 @@ namespace irods::catalog {
         irods::error modify_user(std::string_view user_name, std::string_view prop, std::string_view value, std::string_view zone = "") { 
             snowflake_id_t uid = resolve_user(user_name, zone);
             if (!uid) return ERROR(CAT_INVALID_USER, "User not found");
+            invalidate_user_cache(uid);
             
             std::string payload = client_->get_node_payload_async(local_cluster_id_, uid).get();
             if (!payload.empty()) {
@@ -2176,6 +2194,7 @@ namespace irods::catalog {
                 gid = resolve_user(group_name, local_zone_name_);
             }
             if (!uid || !gid) return ERROR(-1, "User or group not found");
+            invalidate_user_cache(uid);
             add_edge(uid, "MEMBER_OF", 1.0, gid);
             auto aids = client_->get_neighbors_async(local_cluster_id_, gid, "HAS_ACCESS", 0.0).get();
             for (auto aid : aids) {
@@ -2190,6 +2209,7 @@ namespace irods::catalog {
                 gid = resolve_user(group_name, local_zone_name_);
             }
             if (!uid || !gid) return ERROR(-1, "User or group not found");
+            invalidate_user_cache(uid);
             
             del_edge(uid, "MEMBER_OF", 1.0, gid);
             auto aids = client_->get_neighbors_async(local_cluster_id_, gid, "HAS_ACCESS", 0.0).get();
@@ -2281,6 +2301,48 @@ namespace irods::catalog {
                     (unsigned long long)user_sid, (unsigned long long)target_sid, level.c_str(), check_parents ? 1 : 0);
             #endif
 
+            // User Info & Principals Cache
+            std::string user_name;
+            std::string user_type;
+            std::vector<snowflake_id_t> principals;
+
+            if (user_sid != 0) {
+                bool found = false;
+                {
+                    std::lock_guard<std::mutex> lock(s_user_cache_mu);
+                    auto it = s_user_cache.find(user_sid);
+                    if (it != s_user_cache.end()) {
+                        user_name = it->second.name;
+                        user_type = it->second.type;
+                        principals = it->second.principals;
+                        found = true;
+                    }
+                }
+                if (!found) {
+                    std::string user_payload = client_->get_node_payload_async(local_cluster_id_, user_sid).get();
+                    if (!user_payload.empty()) {
+                        try {
+                            lite3cpp::Buffer buf(reinterpret_cast<const uint8_t*>(user_payload.data()), user_payload.size());
+                            user_name = safe_get_str(buf, 0, "n");
+                            user_type = safe_get_str(buf, 0, "t");
+                        } catch (...) {}
+                    }
+                    principals.push_back(user_sid);
+                    auto groups = client_->get_neighbors_async(local_cluster_id_, user_sid, "MEMBER_OF", 0.0).get();
+                    principals.insert(principals.end(), groups.begin(), groups.end());
+
+                    std::lock_guard<std::mutex> lock(s_user_cache_mu);
+                    s_user_cache[user_sid] = {user_name, user_type, principals};
+                }
+            }
+
+            // CRUCIAL: If user_type == "rodsadmin", return allowed = true immediately!
+            // With the cache in place, rodsadmin checks cost 0 network roundtrips!
+            if (user_type == "rodsadmin") {
+                allowed = true;
+                return SUCCESS();
+            }
+
             // Check if target exists
             std::string t_payload = client_->get_node_payload_async(local_cluster_id_, target_sid).get();
             if (t_payload.empty()) {
@@ -2296,25 +2358,6 @@ namespace irods::catalog {
                 #endif
                 allowed = true;
                 return SUCCESS(); // Target not found, let it proceed for creation
-            }
-
-            // Extract username and user type
-            std::string user_name;
-            std::string user_type;
-            if (user_sid != 0) {
-                std::string user_payload = client_->get_node_payload_async(local_cluster_id_, user_sid).get();
-                if (!user_payload.empty()) {
-                    try {
-                        lite3cpp::Buffer buf(reinterpret_cast<const uint8_t*>(user_payload.data()), user_payload.size());
-                        user_name = safe_get_str(buf, 0, "n");
-                        user_type = safe_get_str(buf, 0, "t");
-                    } catch (...) {}
-                }
-            }
-
-            if (user_type == "rodsadmin") {
-                allowed = true;
-                return SUCCESS();
             }
 
             // Direct check on owner
@@ -2352,14 +2395,6 @@ namespace irods::catalog {
                 return 0;
             };
 
-            // Gather all principals (user + groups)
-            std::vector<snowflake_id_t> principals;
-            if (user_sid != 0) {
-                principals.push_back(user_sid);
-                auto groups = client_->get_neighbors_async(local_cluster_id_, user_sid, "MEMBER_OF", 0.0).get();
-                principals.insert(principals.end(), groups.begin(), groups.end());
-            }
-
             auto check_principal_access = [&](snowflake_id_t tid) -> bool {
                 for (auto pid : principals) {
                     std::string aid_uuid = std::to_string(pid) + ":" + std::to_string(tid);
@@ -2367,7 +2402,7 @@ namespace irods::catalog {
                     std::string payload = client_->get_node_payload_async(local_cluster_id_, aid).get();
                     if (!payload.empty()) {
                         try {
-                            lite3cpp::Buffer buf(payload);
+                            lite3cpp::Buffer buf(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
                             std::string actual_level = safe_get_str(buf, 0, "l");
                             if (perm_rank(actual_level) >= perm_rank(level)) return true;
                         } catch (...) {}

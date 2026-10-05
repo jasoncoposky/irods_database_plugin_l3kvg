@@ -11,7 +11,7 @@ TEST(MultiHopQueryTest, CollectionToResource) {
     ast.conditions.push_back(gq::condition{gq::column{"COLL_NAME"}, gq::condition_equal{"/tempZone/home/alice"}});
 
     compiler::Gq2ToL3kvgCompiler compiler;
-    std::string cypher = compiler.compile(ast);
+    std::string cypher = std::string(compiler.compile(ast));
 
     std::cerr << "COMPILED CYPHER: " << cypher << std::endl;
     EXPECT_TRUE(cypher.find("tempZone") != std::string::npos || cypher.find("Resource") != std::string::npos);

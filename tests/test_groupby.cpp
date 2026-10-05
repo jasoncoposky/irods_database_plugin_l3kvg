@@ -15,7 +15,7 @@ TEST(GroupByTest, CountPerCollection) {
     ast.projections.push_back(count_func);
 
     compiler::Gq2ToL3kvgCompiler compiler;
-    std::string cypher = compiler.compile(ast);
+    std::string cypher = std::string(compiler.compile(ast));
 
     std::cerr << "COMPILED CYPHER: " << cypher << std::endl;
     EXPECT_TRUE(cypher.find("\"agg\":") != std::string::npos || cypher.find("COUNT") != std::string::npos);

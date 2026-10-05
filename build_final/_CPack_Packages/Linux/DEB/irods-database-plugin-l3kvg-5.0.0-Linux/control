@@ -6,5 +6,5 @@ Package: irods-database-plugin-l3kvg
 Priority: optional
 Section: contrib/science
 Version: 5.0.0
-Installed-Size: 13359
+Installed-Size: 13353
 

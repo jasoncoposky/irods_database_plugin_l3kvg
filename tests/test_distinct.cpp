@@ -11,7 +11,7 @@ TEST(DistinctTest, DeduplicateResults) {
     ast.distinct = true;
 
     compiler::Gq2ToL3kvgCompiler compiler;
-    std::string cypher = compiler.compile(ast);
+    std::string cypher = std::string(compiler.compile(ast));
 
     std::cerr << "COMPILED CYPHER: " << cypher << std::endl;
     EXPECT_TRUE(cypher.find("\"distinct\":true") != std::string::npos || cypher.find("DISTINCT") != std::string::npos);

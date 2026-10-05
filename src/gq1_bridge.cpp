@@ -306,7 +306,7 @@ namespace irods::catalog::bridge {
             int inx = _inp->selectInp.inx[i];
             int pure_inx = get_pure_inx(inx);
             std::string name = get_col_name(pure_inx);
-            rodsLog(LOG_NOTICE, "L3_BRIDGE: Select Column %d: inx=%d, pure_inx=%d, name='%s'", i, inx, pure_inx, name.c_str());
+            rodsLog(LOG_DEBUG, "L3_BRIDGE: Select Column %d: inx=%d, pure_inx=%d, name='%s'", i, inx, pure_inx, name.c_str());
             
             if (name.empty()) {
                 gq2::column dummy("DATA_ID"); 
@@ -751,7 +751,7 @@ namespace irods::catalog::bridge {
                                     _starting_nodes = std::move(data_ids);
                                     resolved_start = true;
                                     best_start_priority = 3;
-                                    rodsLog(LOG_NOTICE, "L3_BRIDGE: resolved %zu DataObject starting nodes for '%s'", _starting_nodes.size(), target_coll.c_str());
+                                    rodsLog(LOG_DEBUG, "L3_BRIDGE: resolved %zu DataObject starting nodes for '%s'", _starting_nodes.size(), target_coll.c_str());
                                 }
                             }
                         }

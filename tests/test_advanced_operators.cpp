@@ -12,7 +12,7 @@ TEST(AdvancedQueryTest, LikeAndComparison) {
     ast.conditions.push_back(gq::condition{gq::column{"DATA_NAME"}, gq::condition_like{"report%"}});
 
     compiler::Gq2ToL3kvgCompiler compiler;
-    std::string cypher = compiler.compile(ast);
+    std::string cypher = std::string(compiler.compile(ast));
     std::cerr << "COMPILED CYPHER: " << cypher << std::endl;
     
     EXPECT_TRUE(cypher.find("\"op\":2") != std::string::npos);

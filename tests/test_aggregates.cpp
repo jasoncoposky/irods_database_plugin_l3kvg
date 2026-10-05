@@ -16,7 +16,7 @@ TEST(AggregateTest, CountAndSum) {
     ast.conditions.push_back(gq::condition{gq::column{"COLL_ID"}, gq::condition_equal{"10"}});
 
     compiler::Gq2ToL3kvgCompiler compiler;
-    std::string cypher = compiler.compile(ast);
+    std::string cypher = std::string(compiler.compile(ast));
     std::cerr << "COMPILED CYPHER: " << cypher << std::endl;
     
     EXPECT_TRUE(cypher.find("\"agg\":1") != std::string::npos || cypher.find("COUNT") != std::string::npos);

@@ -14,7 +14,7 @@ TEST(SortingTest, BasicOrdering) {
     // We mock this by checking if compiler produces ORDER BY
 
     compiler::Gq2ToL3kvgCompiler compiler;
-    std::string cypher = compiler.compile(ast);
+    std::string cypher = std::string(compiler.compile(ast));
 
     std::cerr << "COMPILED CYPHER: " << cypher << std::endl;
     EXPECT_TRUE(cypher.find("\"projections\"") != std::string::npos);

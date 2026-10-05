@@ -18,7 +18,7 @@ TEST(NestedLogicTest, ComplexOrQuery) {
     ast.conditions.push_back(cond2);
 
     compiler::Gq2ToL3kvgCompiler compiler;
-    std::string cypher = compiler.compile(ast);
+    std::string cypher = std::string(compiler.compile(ast));
 
     std::cerr << "COMPILED CYPHER: " << cypher << std::endl;
     EXPECT_TRUE(cypher.find("report%") != std::string::npos);

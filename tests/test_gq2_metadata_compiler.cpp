@@ -12,7 +12,7 @@ TEST(MetadataCompilerTest, GroupedMetadataQuery) {
     ast.conditions.push_back(gq::condition{gq::column{"META_DATA_ATTR_VALUE"}, gq::condition_equal{"L3KVG"}});
 
     compiler::Gq2ToL3kvgCompiler compiler;
-    std::string cypher = compiler.compile(ast);
+    std::string cypher = std::string(compiler.compile(ast));
 
     EXPECT_TRUE(cypher.find("Project") != std::string::npos);
     EXPECT_TRUE(cypher.find("L3KVG") != std::string::npos);
