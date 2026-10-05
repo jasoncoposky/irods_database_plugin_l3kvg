@@ -1423,14 +1423,14 @@ namespace irods::catalog {
             out_ids.push_back(coll_sid);
 
             // Fast path: prefix scan over collection name index
-            std::string payload = client_->get_node_payload_async(local_cluster_id_, coll_sid).get();
-            if (!payload.empty()) {
-                lite3cpp::Buffer buf(std::vector<uint8_t>(payload.begin(), payload.end()));
-                std::string coll_name = safe_get_str(buf, 0, "n");
-                if (!coll_name.empty()) {
-                    std::string prefix = get_idx_key(EntityType::Collection, "n", coll_name == "/" ? "/" : coll_name + "/");
-                    auto entries = client_->get_prefix_entries_async(local_cluster_id_, prefix).get();
-                    if (!entries.empty()) {
+            try {
+                std::string payload = client_->get_node_payload_async(local_cluster_id_, coll_sid).get();
+                if (!payload.empty()) {
+                    lite3cpp::Buffer buf(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+                    std::string coll_name = safe_get_str(buf, 0, "n");
+                    if (!coll_name.empty()) {
+                        std::string prefix = get_idx_key(EntityType::Collection, "n", coll_name == "/" ? "/" : coll_name + "/");
+                        auto entries = client_->get_prefix_entries_async(local_cluster_id_, prefix).get();
                         for (const auto& [k, v] : entries) {
                             if (!v.empty()) {
                                 try {
@@ -1441,24 +1441,28 @@ namespace irods::catalog {
                                 } catch (...) {}
                             }
                         }
-                        return;
+                        return; // Fast-path completed successfully! Return immediately.
                     }
                 }
+            } catch (...) {
+                // Fall back to graph traversal only upon error
             }
 
             // Fallback path: graph traversal
-            auto children = client_->get_neighbors_async(local_cluster_id_, coll_sid, "CONTAINS", 0.0).get();
-            for (snowflake_id_t child_sid : children) {
-                std::string ch_payload = client_->get_node_payload_async(local_cluster_id_, child_sid).get();
-                if (ch_payload.empty()) continue;
-                lite3cpp::Buffer ch_buf(std::vector<uint8_t>(ch_payload.begin(), ch_payload.end()));
-                std::string ch_type = safe_get_str(ch_buf, 0, "t");
-                std::string ch_entity_type = safe_get_str(ch_buf, 0, "entity_type");
-                bool is_coll = (ch_entity_type == "collection" || (ch_entity_type.empty() && ch_type == "collection"));
-                if (is_coll) {
-                    get_collection_subtree_ids(child_sid, out_ids, visited);
+            try {
+                auto children = client_->get_neighbors_async(local_cluster_id_, coll_sid, "CONTAINS", 0.0).get();
+                for (snowflake_id_t child_sid : children) {
+                    std::string ch_payload = client_->get_node_payload_async(local_cluster_id_, child_sid).get();
+                    if (ch_payload.empty()) continue;
+                    lite3cpp::Buffer ch_buf(reinterpret_cast<const uint8_t*>(ch_payload.data()), ch_payload.size());
+                    std::string ch_type = safe_get_str(ch_buf, 0, "t");
+                    std::string ch_entity_type = safe_get_str(ch_buf, 0, "entity_type");
+                    bool is_coll = (ch_entity_type == "collection" || (ch_entity_type.empty() && ch_type == "collection"));
+                    if (is_coll) {
+                        get_collection_subtree_ids(child_sid, out_ids, visited);
+                    }
                 }
-            }
+            } catch (...) {}
         }
 
         irods::error get_collection_subtree_ids(snowflake_id_t coll_sid, std::vector<snowflake_id_t>& out_ids) {
