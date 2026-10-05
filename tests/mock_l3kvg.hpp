@@ -13,6 +13,7 @@
 #include <sstream>
 #include <mutex>
 #include <regex>
+#include <cstring>
 #include "irods/catalog/binary_key.hpp"
 #include "buffer.hpp"
 #include "L3KVG/MutationBatch.hpp"
@@ -61,14 +62,26 @@ namespace irods::catalog::test {
                             std::cerr << "  Frame " << i << ": size=" << msgs[i].size() << " content=[" << msgs[i].to_string() << "]" << std::endl;
                         }
 
-                        if (msgs.size() < 3) continue;
+                        size_t data_idx = 1;
+                        if (data_idx < msgs.size() && msgs[data_idx].size() == 0) {
+                            data_idx++; // skip delimiter
+                        }
 
-                        std::string cmd = msgs[2].to_string();
-                        std::string key = (msgs.size() > 3) ? msgs[3].to_string() : "";
+                        uint32_t principal_id = 0;
+                        if (data_idx < msgs.size() && msgs[data_idx].size() == 4) {
+                            std::memcpy(&principal_id, msgs[data_idx].data(), 4);
+                            data_idx++;
+                        }
+                        (void)principal_id;
+
+                        if (data_idx >= msgs.size()) continue;
+
+                        std::string cmd = msgs[data_idx].to_string(); data_idx++;
+                        std::string key = (data_idx < msgs.size()) ? msgs[data_idx].to_string() : "";
                         
                         if (cmd == "P") {
-                            if (msgs.size() < 5) continue;
-                            std::string payload = msgs[4].to_string();
+                            if (msgs.size() < data_idx + 2) continue;
+                            std::string payload = msgs[data_idx + 1].to_string();
                             std::lock_guard<std::mutex> lock(mu_);
                             
                             if (key.starts_with("n:{") && key.size() >= 3 + 16) {
@@ -104,8 +117,8 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "D") {
-                            if (msgs.size() < 4) continue;
-                            std::string key = msgs[3].to_string();
+                            if (msgs.size() < data_idx + 1) continue;
+                            std::string key = msgs[data_idx].to_string();
                             std::lock_guard<std::mutex> lock(mu_);
                             
                             if (key.starts_with("n:{") && key.size() >= 3 + 16) {
@@ -148,8 +161,8 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "B") {
-                            if (msgs.size() < 4) continue;
-                            const auto& payload_msg = msgs[3];
+                            if (msgs.size() < data_idx + 1) continue;
+                            const auto& payload_msg = msgs[data_idx];
                             lite3cpp::Buffer buf(std::vector<uint8_t>(
                                 static_cast<const uint8_t*>(payload_msg.data()),
                                 static_cast<const uint8_t*>(payload_msg.data()) + payload_msg.size()
@@ -204,8 +217,8 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t("OK", 2), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "G") {
-                            if (msgs.size() < 4) continue;
-                            std::string key = msgs[3].to_string();
+                            if (msgs.size() < data_idx + 1) continue;
+                            std::string key = msgs[data_idx].to_string();
                             std::string payload = "";
                             {
                                 std::lock_guard<std::mutex> lock(mu_);
@@ -235,10 +248,10 @@ namespace irods::catalog::test {
                             std::cerr << "[MockServer] Sent Payload for [" << key << "]" << std::endl;
                             continue;
                         } else if (cmd == "N") {
-                            if (msgs.size() < 5) continue;
+                            if (msgs.size() < data_idx + 2) continue;
                             uint64_t id = 0;
-                            try { id = std::stoull(msgs[3].to_string(), nullptr, 16); } catch (...) {}
-                            std::string label = msgs[4].to_string();
+                            try { id = std::stoull(msgs[data_idx].to_string(), nullptr, 16); } catch (...) {}
+                            std::string label = msgs[data_idx + 1].to_string();
                             
                             std::vector<uint64_t> neighs;
                             {
@@ -262,10 +275,10 @@ namespace irods::catalog::test {
                             socket_.send(zmq::message_t(j.dump()), zmq::send_flags::none);
                             continue;
                         } else if (cmd == "I") {
-                            if (msgs.size() < 5) continue;
+                            if (msgs.size() < data_idx + 2) continue;
                             uint64_t id = 0;
-                            try { id = std::stoull(msgs[3].to_string(), nullptr, 16); } catch (...) {}
-                            std::string label = msgs[4].to_string();
+                            try { id = std::stoull(msgs[data_idx].to_string(), nullptr, 16); } catch (...) {}
+                            std::string label = msgs[data_idx + 1].to_string();
                             
                             std::vector<uint64_t> neighs;
                             {
@@ -293,12 +306,12 @@ namespace irods::catalog::test {
                              socket_.send(zmq::message_t(), zmq::send_flags::none);
                              continue;
                         } else if (cmd == "R") {
-                             if (msgs.size() < 5) continue;
-                             std::string query_json = msgs[4].to_string();
+                             if (msgs.size() < data_idx + 2) continue;
+                             std::string query_json = msgs[data_idx + 1].to_string();
                              nlohmann::json q = nlohmann::json::parse(query_json);
                              
                              std::vector<uint64_t> sn;
-                             try { sn = nlohmann::json::parse(msgs[3].to_string()).get<std::vector<uint64_t>>(); } catch (...) {}
+                             try { sn = nlohmann::json::parse(msgs[data_idx].to_string()).get<std::vector<uint64_t>>(); } catch (...) {}
                              std::unordered_set<uint64_t> sn_set(sn.begin(), sn.end());
 
                              nlohmann::json results = nlohmann::json::array();
@@ -376,10 +389,10 @@ namespace irods::catalog::test {
                              socket_.send(zmq::message_t(results.dump()), zmq::send_flags::none);
                              continue;
                         } else if (cmd == "+") {
-                             if (msgs.size() < 5) continue;
-                             std::string key = msgs[3].to_string();
+                             if (msgs.size() < data_idx + 2) continue;
+                             std::string key = msgs[data_idx].to_string();
                              int64_t delta = 1;
-                             try { delta = std::stoll(msgs[4].to_string()); } catch (...) {}
+                             try { delta = std::stoll(msgs[data_idx + 1].to_string()); } catch (...) {}
                              uint64_t val = 0;
                              {
                                  std::lock_guard<std::mutex> lock(mu_);
