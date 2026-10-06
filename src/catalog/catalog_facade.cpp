@@ -782,6 +782,23 @@ namespace irods::catalog {
             #ifdef IRODS_SERVER
             rodsLog(LOG_DEBUG, "L3_CATALOG: Registering DataObject [%s] with ID [%llu] (SID: %016llx) in Coll [%llu]", obj.name.c_str(), (unsigned long long)obj.id, (unsigned long long)sid, (unsigned long long)obj.coll_id);
             #endif
+            std::string user_key = obj.owner_name + "#" + (obj.owner_zone.empty() ? local_zone_name_ : obj.owner_zone);
+            snowflake_id_t uid = 0;
+            {
+                std::lock_guard<std::mutex> lock(s_reg_cache_mu);
+                auto it = s_user_id_cache.find(user_key);
+                if (it != s_user_id_cache.end()) {
+                    uid = it->second;
+                }
+            }
+            if (!uid) {
+                uid = resolve_user(obj.owner_name, obj.owner_zone);
+                if (uid) {
+                    std::lock_guard<std::mutex> lock(s_reg_cache_mu);
+                    s_user_id_cache[user_key] = uid;
+                }
+            }
+
             lite3cpp::Buffer buf; buf.init_object(); 
             buf.set_str(0, "n", obj.name); buf.set_str(0, "o", obj.owner_name); buf.set_i64(0, "s", obj.size); 
             buf.set_str(0, "t", obj.type);
@@ -792,6 +809,9 @@ namespace irods::catalog {
             buf.set_str(0, "ct", obj.create_ts); buf.set_str(0, "mt", obj.modify_ts);
             buf.set_i64(0, "id", static_cast<int64_t>(obj.id));
             buf.set_i64(0, "cid", static_cast<int64_t>(obj.coll_id));
+            if (uid) {
+                buf.set_i64(0, "uid", static_cast<int64_t>(uid));
+            }
             std::string expiry = obj.expiry.empty() ? "00000000000" : obj.expiry;
             buf.set_str(0, "ex", expiry);
             if (!obj.owner_zone.empty()) buf.set_str(0, "z", obj.owner_zone);
@@ -826,22 +846,6 @@ namespace irods::catalog {
             #endif
             batch.add_edge(cid, "CONTAINS", 1.0, sid, "{}");
 
-            std::string user_key = obj.owner_name + "#" + (obj.owner_zone.empty() ? local_zone_name_ : obj.owner_zone);
-            snowflake_id_t uid = 0;
-            {
-                std::lock_guard<std::mutex> lock(s_reg_cache_mu);
-                auto it = s_user_id_cache.find(user_key);
-                if (it != s_user_id_cache.end()) {
-                    uid = it->second;
-                }
-            }
-            if (!uid) {
-                uid = resolve_user(obj.owner_name, obj.owner_zone);
-                if (uid) {
-                    std::lock_guard<std::mutex> lock(s_reg_cache_mu);
-                    s_user_id_cache[user_key] = uid;
-                }
-            }
             if (uid) {
                 #ifdef IRODS_SERVER
                 rodsLog(LOG_DEBUG, "L3_CATALOG: Creating OWNS edge: %016llx -- OWNS --> %016llx", (unsigned long long)uid, (unsigned long long)sid);
@@ -925,28 +929,25 @@ namespace irods::catalog {
 
             l3kvg::MutationBatch batch;
 
-            // Pipelined parallel query futures
-            auto f_repl = client_->get_neighbors_async(local_cluster_id_, sid, "HAS_REPLICA", 0.0);
+            // Roundtrip 1: Pipelined parallel query futures
             auto f_payload = client_->get_node_payload_async(local_cluster_id_, sid);
-            auto f_coll = client_->get_in_neighbors_async(local_cluster_id_, sid, "CONTAINS");
-            auto f_owns = client_->get_in_neighbors_async(local_cluster_id_, sid, "OWNS");
+            auto f_repl = client_->get_neighbors_async(local_cluster_id_, sid, "HAS_REPLICA", 0.0);
             auto f_access = client_->get_in_neighbors_async(local_cluster_id_, sid, "FOR_OBJECT");
             auto f_avus = client_->get_neighbors_async(local_cluster_id_, sid, "ANNOTATED_WITH", 0.0);
 
-            auto replicas = f_repl.get();
-            for (auto rid : replicas) {
-                batch.del_edge(sid, "HAS_REPLICA", 1.0, rid);
-                batch.del_node(rid);
-            }
-
             std::string payload = f_payload.get();
+            int64_t cid = 0;
+            int64_t uid = 0;
+            std::string owner_name, owner_zone;
+
             if (!payload.empty()) {
                 try {
                     lite3cpp::Buffer buf(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
                     std::string name = safe_get_str(buf, 0, "n");
+                    char id_hex[17];
+                    std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
+
                     if (!name.empty()) {
-                        char id_hex[17];
-                        std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
                         std::string idx_name = get_idx_key(EntityType::DataObject, "n", name);
                         batch.del_raw(idx_name);
                         batch.del_raw(idx_name + ":" + std::string(id_hex));
@@ -965,45 +966,101 @@ namespace irods::catalog {
 
                     std::string pn = safe_get_str(buf, 0, "pn");
                     if (!pn.empty()) {
-                        char id_hex[17];
-                        std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
                         batch.del_raw(get_idx_key(EntityType::DataObject, "pn", pn) + ":" + std::string(id_hex));
                     }
+
+                    try { cid = buf.get_i64(0, "cid"); } catch (...) {}
+                    try { uid = buf.get_i64(0, "uid"); } catch (...) {}
+                    owner_name = safe_get_str(buf, 0, "o");
+                    owner_zone = safe_get_str(buf, 0, "z");
                 } catch (...) {}
             }
 
-            auto collections = f_coll.get();
-            for (auto cid : collections) batch.del_edge(cid, "CONTAINS", 1.0, sid);
-            auto owners = f_owns.get();
-            for (auto oid : owners) batch.del_edge(oid, "OWNS", 1.0, sid);
+            // Fallback owner user resolution if uid wasn't in payload
+            if (uid == 0 && !owner_name.empty()) {
+                std::string user_key = owner_name + "#" + (owner_zone.empty() ? local_zone_name_ : owner_zone);
+                {
+                    std::lock_guard<std::mutex> lock(s_reg_cache_mu);
+                    auto it = s_user_id_cache.find(user_key);
+                    if (it != s_user_id_cache.end()) {
+                        uid = it->second;
+                    }
+                }
+                if (uid == 0) {
+                    uid = resolve_user(owner_name, owner_zone);
+                    if (uid != 0) {
+                        std::lock_guard<std::mutex> lock(s_reg_cache_mu);
+                        s_user_id_cache[user_key] = uid;
+                    }
+                }
+            }
+
+            // Delete parent collection CONTAINS edge deterministically
+            if (cid != 0) {
+                snowflake_id_t coll_sid = make_id(EntityType::Collection, static_cast<coll_id_t>(cid));
+                batch.del_edge(coll_sid, "CONTAINS", 1.0, sid);
+            }
+
+            // Delete owner OWNS edge deterministically
+            if (uid != 0) {
+                batch.del_edge(uid, "OWNS", 1.0, sid);
+            }
+
+            // Delete replicas
+            auto replicas = f_repl.get();
+            for (auto rid : replicas) {
+                batch.del_edge(sid, "HAS_REPLICA", 1.0, rid);
+                batch.del_node(rid);
+            }
+
+            // Delete access nodes and HAS_ACCESS edges
             auto accesses = f_access.get();
-            std::vector<std::pair<snowflake_id_t, std::future<std::vector<snowflake_id_t>>>> f_access_uids;
-            f_access_uids.reserve(accesses.size());
-            for (auto aid : accesses) {
-                f_access_uids.emplace_back(aid, client_->get_in_neighbors_async(local_cluster_id_, aid, "HAS_ACCESS"));
+            if (!accesses.empty()) {
+                std::vector<snowflake_id_t> members;
+                if (uid != 0) {
+                    bool cache_hit = false;
+                    auto now = std::chrono::steady_clock::now();
+                    {
+                        std::lock_guard<std::mutex> lock(s_user_members_mu);
+                        auto it = s_user_members_cache.find(uid);
+                        if (it != s_user_members_cache.end() && now < it->second.expires_at) {
+                            members = it->second.members;
+                            cache_hit = true;
+                        }
+                    }
+                    if (!cache_hit) {
+                        members = client_->get_in_neighbors_async(local_cluster_id_, uid, "MEMBER_OF").get();
+                        std::lock_guard<std::mutex> lock(s_user_members_mu);
+                        s_user_members_cache[uid] = {members, now + std::chrono::seconds(30)};
+                    }
+                }
+
+                for (auto aid : accesses) {
+                    if (uid != 0) {
+                        batch.del_edge(uid, "HAS_ACCESS", 1.0, aid);
+                        for (auto mid : members) {
+                            batch.del_edge(mid, "HAS_ACCESS", 1.0, aid);
+                        }
+                    }
+                    batch.del_edge(aid, "FOR_OBJECT", 1.0, sid);
+                    batch.del_node(aid);
+                }
             }
 
+            // Delete AVUs (only query incoming refs if AVUs actually exist)
             auto avus = f_avus.get();
-            std::vector<std::pair<snowflake_id_t, std::future<std::vector<snowflake_id_t>>>> f_avu_refs;
-            f_avu_refs.reserve(avus.size());
-            for (auto aid : avus) {
-                f_avu_refs.emplace_back(aid, client_->get_in_neighbors_async(local_cluster_id_, aid, "ANNOTATED_WITH"));
+            if (!avus.empty()) {
+                for (auto aid : avus) {
+                    batch.del_edge(sid, "ANNOTATED_WITH", 1.0, aid);
+                    auto refs = client_->get_in_neighbors_async(local_cluster_id_, aid, "ANNOTATED_WITH").get();
+                    if (refs.size() <= 1) batch.del_node(aid);
+                }
             }
 
-            for (auto& [aid, fut] : f_access_uids) {
-                auto uids = fut.get();
-                for (auto uid : uids) batch.del_edge(uid, "HAS_ACCESS", 1.0, aid);
-                batch.del_edge(aid, "FOR_OBJECT", 1.0, sid);
-                batch.del_node(aid);
-            }
-            for (auto& [aid, fut] : f_avu_refs) {
-                batch.del_edge(sid, "ANNOTATED_WITH", 1.0, aid);
-                auto refs = fut.get();
-                if (refs.size() <= 1) batch.del_node(aid);
-            }
+            // Roundtrip 2: Delete node and execute atomic mutation batch
             batch.del_node(sid);
             client_->execute_batch_async(local_cluster_id_, batch).get();
-            return SUCCESS(); 
+            return SUCCESS();
         }
         irods::error rename_data_object(data_id_t obj_id, std::string_view new_name) { 
             snowflake_id_t sid = make_id(EntityType::DataObject, obj_id);
@@ -1129,6 +1186,7 @@ namespace irods::catalog {
             dbuf.set_str(0, "p", new_path);
             dbuf.set_str(0, "pn", target_coll_path);
             dbuf.set_str(0, "mt", std::string(time_buf));
+            dbuf.set_i64(0, "cid", static_cast<int64_t>(target_coll_id));
 
             l3kvg::MutationBatch batch;
             for (auto old_cid : in_colls) {
