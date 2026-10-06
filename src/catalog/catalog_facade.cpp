@@ -48,6 +48,7 @@ namespace irods::catalog {
     static std::unordered_map<std::string, snowflake_id_t> s_user_id_cache;
     static std::mutex s_path_cache_mu;
     static std::unordered_map<std::string, snowflake_id_t> s_coll_name_cache;
+    static bool s_coll_name_cache_initialized = false;
     struct UserMembersCacheEntry {
         std::vector<snowflake_id_t> members;
         std::chrono::steady_clock::time_point expires_at;
@@ -434,6 +435,23 @@ namespace irods::catalog {
              }
         }
 
+        void ensure_coll_name_cache_loaded() {
+            if (!s_coll_name_cache_initialized) {
+                try {
+                    auto entries = client_->get_prefix_entries_async(local_cluster_id_, "idx:Collection:n:").get();
+                    for (const auto& [k, v] : entries) {
+                        if (k.ends_with(":meta") || v.empty()) continue;
+                        std::string prefix = "idx:Collection:n:";
+                        if (k.rfind(prefix, 0) == 0) {
+                            std::string cpath = k.substr(prefix.length());
+                            try { s_coll_name_cache[cpath] = std::stoull(v, nullptr, 16); } catch(...) {}
+                        }
+                    }
+                } catch (...) {}
+                s_coll_name_cache_initialized = true;
+            }
+        }
+
         snowflake_id_t get_zone_id(std::string_view zname = "") const {
             std::string_view target_zone = zname.empty() ? std::string_view(local_zone_name_) : zname;
             if (!target_zone.empty()) {
@@ -765,15 +783,13 @@ namespace irods::catalog {
                 bool coll_exists = false;
                 {
                     std::lock_guard<std::mutex> lock(s_path_cache_mu);
-                    if (s_coll_name_cache.find(full_path) != s_coll_name_cache.end()) {
+                    ensure_coll_name_cache_loaded();
+                    auto it = s_coll_name_cache.find(full_path);
+                    if (it != s_coll_name_cache.end() && it->second != 0) {
                         coll_exists = true;
                     }
                 }
                 if (coll_exists) {
-                    return ERROR(CAT_NAME_EXISTS_AS_COLLECTION, "Collection already exists with data object name: " + full_path);
-                }
-                snowflake_id_t existing_coll = resolve_id_from_index(EntityType::Collection, "n", full_path);
-                if (existing_coll) {
                     return ERROR(CAT_NAME_EXISTS_AS_COLLECTION, "Collection already exists with data object name: " + full_path);
                 }
             }
@@ -2905,8 +2921,9 @@ namespace irods::catalog {
             std::string path_str(path);
             {
                 std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                ensure_coll_name_cache_loaded();
                 auto it = s_coll_name_cache.find(path_str);
-                if (it != s_coll_name_cache.end()) {
+                if (it != s_coll_name_cache.end() && it->second != 0) {
                     out_id = it->second;
                     out_type = EntityType::Collection;
                     return SUCCESS();
@@ -2970,8 +2987,9 @@ namespace irods::catalog {
                 snowflake_id_t sid = 0;
                 {
                     std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                    ensure_coll_name_cache_loaded();
                     auto it = s_coll_name_cache.find(std::string(target_id_or_name));
-                    if (it != s_coll_name_cache.end()) {
+                    if (it != s_coll_name_cache.end() && it->second != 0) {
                         return it->second;
                     }
                 }
