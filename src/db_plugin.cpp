@@ -135,6 +135,7 @@ static char g_session_client_zone[NAME_LEN]{};
 
 static std::mutex s_rid_cache_mu;
 static std::unordered_map<std::string, uint64_t> s_rid_cache;
+static std::unordered_map<uint64_t, std::string> s_rname_by_id_cache;
 
 irods::error init_l3kvg_catalog();
 
@@ -148,6 +149,11 @@ static void atfork_child() {
     g_session_client_user[0] = '\0';
     g_session_client_zone[0] = '\0';
     irods::catalog::CatalogFacade::reset_collection_cache();
+    {
+        std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+        s_rid_cache.clear();
+        s_rname_by_id_cache.clear();
+    }
     init_l3kvg_catalog();
     if (g_catalog) {
         g_catalog->reset_ticket_session_state();
@@ -424,9 +430,15 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
                         repl.resource_id = buf.get_i64(0, "id");
                         std::lock_guard<std::mutex> lock(s_rid_cache_mu);
                         s_rid_cache[rname] = repl.resource_id;
+                        s_rname_by_id_cache[repl.resource_id] = rname;
                     }
                 }
             }
+        }
+        if (repl.resource_id > 0 && _info->rescName && _info->rescName[0] != '\0') {
+            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+            s_rid_cache[_info->rescName] = repl.resource_id;
+            s_rname_by_id_cache[repl.resource_id] = _info->rescName;
         }
 
         irods::catalog::data_id_t out_id;
@@ -485,7 +497,7 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
             }
         }
 
-        if (!admin_mode && !user_name.empty()) {
+        if (!admin_mode && !user_name.empty() && (!_ctx.comm() || !irods::is_privileged_client(*_ctx.comm()))) {
             std::string req_level = "write";
             if (_reg_param && getValByKey(_reg_param, DATA_EXPIRY_KW) != nullptr) {
                 req_level = "own";
@@ -532,9 +544,6 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
                     all_repl_status = true;
                 }
                 updates.emplace_back(kw, val);
-                if (data_id > 0) {
-                    g_catalog->modify_data_object(data_id, kw, val);
-                }
             }
         }
 
@@ -544,7 +553,6 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
                 if (k == "dataSize" || k == DATA_SIZE_KW) { has_size = true; break; }
             }
             if (!has_size) {
-                g_catalog->modify_data_object(data_id, "dataSize", std::to_string(_info->dataSize));
                 updates.emplace_back("dataSize", std::to_string(_info->dataSize));
             }
         }
@@ -574,10 +582,14 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
 
             bool all_replicas = (_reg_param && getValByKey(_reg_param, ALL_KW) != nullptr);
 
-            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_mod_data_obj_meta_op calling modify_replicas_for_data_object data_id=%llu target_repl_num=%u target_resc_hier='%s' all_replicas=%d updates_len=%zu",
+            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_mod_data_obj_meta_op calling modify_data_object_and_replica data_id=%llu target_repl_num=%u target_resc_hier='%s' all_replicas=%d updates_len=%zu",
                     (unsigned long long)data_id, target_repl_num, target_resc_hier.c_str(), all_replicas ? 1 : 0, updates.size());
 
-            g_catalog->modify_replicas_for_data_object(data_id, target_repl_num, target_resc_hier, updates, all_repl_status, all_replicas);
+            auto ret = g_catalog->modify_data_object_and_replica(data_id, target_repl_num, target_resc_hier, updates, all_repl_status, all_replicas);
+            if (!ret.ok()) {
+                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_mod_data_obj_meta_op: modify_data_object_and_replica failed: %ld - %s", ret.code(), ret.result().c_str());
+                return ret;
+            }
         }
 
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_data_obj_meta_op SUCCESS");
@@ -671,9 +683,15 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
                         _dst->rescId = resc_id;
                         std::lock_guard<std::mutex> lock(s_rid_cache_mu);
                         s_rid_cache[rname] = resc_id;
+                        s_rname_by_id_cache[resc_id] = rname;
                     }
                 }
             }
+        }
+        if (resc_id > 0 && _dst->rescName[0] != '\0') {
+            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+            s_rid_cache[_dst->rescName] = resc_id;
+            s_rname_by_id_cache[resc_id] = _dst->rescName;
         }
 
         irods::catalog::replica repl{
@@ -1251,6 +1269,11 @@ irods::error db_reg_resc_op(irods::plugin_context& _ctx, std::map<std::string, s
         
         irods::catalog::resc_id_t out_id;
         auto ret = g_catalog->register_resource(resc, out_id);
+        if (ret.ok() && !resc.name.empty() && out_id > 0) {
+            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+            s_rid_cache[resc.name] = out_id;
+            s_rname_by_id_cache[out_id] = resc.name;
+        }
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_resc_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -1264,7 +1287,11 @@ irods::error db_mod_resc_op(irods::plugin_context& _ctx, const char* _resc, cons
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_resc_op");
         if (_resc) {
             std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-            s_rid_cache.erase(safe_string(_resc));
+            auto it = s_rid_cache.find(safe_string(_resc));
+            if (it != s_rid_cache.end()) {
+                s_rname_by_id_cache.erase(it->second);
+                s_rid_cache.erase(it);
+            }
         }
         irods::catalog::resc_id_t rid = 0;
         if (_resc && g_catalog->resolve_resource_name(_resc, rid).ok()) {
@@ -1285,7 +1312,11 @@ irods::error db_del_resc_op(irods::plugin_context& _ctx, const char* _resc, int 
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_resc_op");
         if (_resc) {
             std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-            s_rid_cache.erase(safe_string(_resc));
+            auto it = s_rid_cache.find(safe_string(_resc));
+            if (it != s_rid_cache.end()) {
+                s_rname_by_id_cache.erase(it->second);
+                s_rid_cache.erase(it);
+            }
         }
         irods::catalog::resc_id_t rid = 0;
         if (_resc && g_catalog->resolve_resource_name(_resc, rid).ok()) {
@@ -2409,11 +2440,25 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
                         }
                     }
                     if (repl.resc_hier.empty() && resc_id > 0) {
-                        irods::catalog::snowflake_id_t rsid = g_catalog->make_id(irods::catalog::EntityType::Resource, resc_id);
-                        auto rpayload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
-                        if (!rpayload.empty()) {
-                            lite3cpp::Buffer rbuf(rpayload);
-                            try { repl.resc_hier = rbuf.get_str(0, "n"); } catch (...) {}
+                        {
+                            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+                            auto it = s_rname_by_id_cache.find(resc_id);
+                            if (it != s_rname_by_id_cache.end()) {
+                                repl.resc_hier = it->second;
+                            }
+                        }
+                        if (repl.resc_hier.empty()) {
+                            irods::catalog::snowflake_id_t rsid = g_catalog->make_id(irods::catalog::EntityType::Resource, resc_id);
+                            auto rpayload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
+                            if (!rpayload.empty()) {
+                                lite3cpp::Buffer rbuf(rpayload);
+                                try { 
+                                    repl.resc_hier = rbuf.get_str(0, "n"); 
+                                    std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+                                    s_rname_by_id_cache[resc_id] = repl.resc_hier;
+                                    s_rid_cache[repl.resc_hier] = resc_id;
+                                } catch (...) {}
+                            }
                         }
                     }
                     repl.status = get_after_str("data_is_dirty", "1");
@@ -2421,15 +2466,25 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
                     repl.modify_ts = get_timestamp(modify_ts);
                     repl.size = data_size;
 
-                    // Update the replica in the catalog
-                    g_catalog->register_replica(repl);
-
-                    // Update data object size
-                    g_catalog->modify_data_object(data_id, "DATA_SIZE", std::to_string(data_size));
-
+                    std::vector<std::pair<std::string, std::string>> updates;
+                    updates.emplace_back("dataSize", std::to_string(data_size));
+                    updates.emplace_back("dataModify", repl.modify_ts);
+                    if (!checksum.empty()) updates.emplace_back("chksum", checksum);
+                    if (!repl.status.empty()) updates.emplace_back("replStatus", repl.status);
+                    if (!repl.physical_path.empty()) updates.emplace_back("filePath", repl.physical_path);
+                    if (!repl.resc_hier.empty()) updates.emplace_back("rescHier", repl.resc_hier);
+                    if (repl.resource_id > 0) updates.emplace_back("rescId", std::to_string(repl.resource_id));
                     std::string expiry = get_after_str("data_expiry_ts");
-                    if (!expiry.empty()) {
-                        g_catalog->modify_data_object(data_id, "ex", get_timestamp(expiry));
+                    if (!expiry.empty()) updates.emplace_back("ex", get_timestamp(expiry));
+
+                    auto mod_ret = g_catalog->modify_data_object_and_replica(data_id, repl_num, repl.resc_hier, updates, /*all_repl_status=*/false, /*all_replicas=*/false);
+                    if (!mod_ret.ok()) {
+                        // Fallback in case replica does not exist yet
+                        g_catalog->register_replica(repl);
+                        g_catalog->modify_data_object(data_id, "DATA_SIZE", std::to_string(data_size));
+                        if (!expiry.empty()) {
+                            g_catalog->modify_data_object(data_id, "ex", get_timestamp(expiry));
+                        }
                     }
                 }
             }
