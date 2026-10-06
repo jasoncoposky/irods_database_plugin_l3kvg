@@ -1,6 +1,7 @@
 #include "plugin_test_fixture.hpp"
 #include "irods/catalog/catalog_facade.hpp"
 #include "irods/irods_server_properties.hpp"
+#include "irods/rodsErrorTable.h"
 
 using namespace irods::catalog;
 using namespace irods::catalog::test;
@@ -133,6 +134,80 @@ TEST_F(CollectionTest, SubtreeHierarchyScan) {
     EXPECT_NE(std::find(out_ids.begin(), out_ids.end(), sid_102), out_ids.end());
     EXPECT_NE(std::find(out_ids.begin(), out_ids.end(), sid_103), out_ids.end());
     EXPECT_EQ(std::find(out_ids.begin(), out_ids.end(), sid_200), out_ids.end());
+}
+
+TEST_F(CollectionTest, NameCollisionWithDataObjectRejection) {
+    nlohmann::json config;
+    config["zone_name"] = "testZone";
+    config["zone_user"] = "testuser";
+    config["plugin_configuration"]["database"]["l3kvg"]["plugin_specific_configuration"] = {
+        {"db_path", "test_collision.l3kvg"},
+        {"node_id", 1},
+        {"zmq_endpoint", endpoint()}
+    };
+    irods::server_properties::instance().set_configuration(config);
+
+    CatalogFacade catalog;
+    Config cfg;
+    cfg.node_id = 1;
+    cfg.zmq_endpoint = endpoint();
+    ASSERT_TRUE(catalog.init(cfg, "testZone").ok());
+
+    coll_id_t coll_id;
+    collection coll;
+    coll.id = 300;
+    coll.name = "/testZone/home/testuser/collision_test_dir";
+    coll.owner_name = "testuser";
+    coll.owner_zone = "testZone";
+    ASSERT_TRUE(catalog.register_collection(coll, coll_id).ok());
+
+    data_object obj;
+    obj.id = 3001;
+    obj.full_path = "/testZone/home/testuser/collision_test_dir";
+    obj.name = "collision_test_dir";
+    obj.owner_name = "testuser";
+    obj.owner_zone = "testZone";
+    data_id_t out_id;
+    auto ret = catalog.register_data_object(obj, out_id);
+    EXPECT_FALSE(ret.ok());
+    EXPECT_EQ(ret.code(), CAT_NAME_EXISTS_AS_COLLECTION);
+}
+
+TEST_F(CollectionTest, CollectionCacheReset) {
+    nlohmann::json config;
+    config["zone_name"] = "tempZone";
+    config["zone_user"] = "rods";
+    config["plugin_configuration"]["database"]["l3kvg"]["plugin_specific_configuration"] = {
+        {"db_path", "test_cache_reset.l3kvg"},
+        {"node_id", 1},
+        {"zmq_endpoint", endpoint()}
+    };
+    irods::server_properties::instance().set_configuration(config);
+
+    CatalogFacade catalog;
+    Config cfg;
+    cfg.node_id = 1;
+    cfg.zmq_endpoint = endpoint();
+    ASSERT_TRUE(catalog.init(cfg, "tempZone").ok());
+
+    CatalogFacade::reset_collection_cache();
+
+    coll_id_t out_coll_id;
+    collection c;
+    c.id = 400;
+    c.name = "/tempZone/home/cached_coll";
+    c.owner_name = "rods";
+    c.owner_zone = "tempZone";
+    ASSERT_TRUE(catalog.register_collection(c, out_coll_id).ok());
+
+    snowflake_id_t sid = 0;
+    EntityType et;
+    ASSERT_TRUE(catalog.resolve_path("/tempZone/home/cached_coll", sid, et).ok());
+    EXPECT_EQ(et, EntityType::Collection);
+
+    CatalogFacade::reset_collection_cache();
+    ASSERT_TRUE(catalog.resolve_path("/tempZone/home/cached_coll", sid, et).ok());
+    EXPECT_EQ(et, EntityType::Collection);
 }
 
 class MetadataTest : public PluginTestFixture {};

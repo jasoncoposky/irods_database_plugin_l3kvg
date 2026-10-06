@@ -147,6 +147,7 @@ static void atfork_child() {
     g_session_client_addr[0] = '\0';
     g_session_client_user[0] = '\0';
     g_session_client_zone[0] = '\0';
+    irods::catalog::CatalogFacade::reset_collection_cache();
     init_l3kvg_catalog();
     if (g_catalog) {
         g_catalog->reset_ticket_session_state();
@@ -163,6 +164,7 @@ irods::error init_l3kvg_catalog() {
     if (g_catalog && g_catalog_pid != current_pid) {
         g_catalog.release();
         g_catalog = nullptr;
+        irods::catalog::CatalogFacade::reset_collection_cache();
     }
     try {
         const auto& config_handle = irods::server_properties::instance().map();

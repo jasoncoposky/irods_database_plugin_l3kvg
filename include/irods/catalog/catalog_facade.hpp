@@ -121,6 +121,7 @@ namespace irods::catalog {
         irods::error modify_collection(coll_id_t coll_id, std::string_view prop, std::string_view value);
         irods::error get_collection_subtree_ids(snowflake_id_t coll_sid, std::vector<snowflake_id_t>& out_ids);
         irods::error get_child_collection_ids(snowflake_id_t parent_sid, std::string_view parent_path, std::vector<snowflake_id_t>& out_ids);
+        static void reset_collection_cache();
 
         // Resource Operations
         irods::error register_resource(const resource& resc, resc_id_t& out_id);

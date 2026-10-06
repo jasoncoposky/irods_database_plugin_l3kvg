@@ -21,6 +21,8 @@
 #include <tuple>
 #include <ctime>
 #include <chrono>
+#include <mutex>
+#include <pthread.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -49,6 +51,7 @@ namespace irods::catalog {
     static std::mutex s_path_cache_mu;
     static std::unordered_map<std::string, snowflake_id_t> s_coll_name_cache;
     static bool s_coll_name_cache_initialized = false;
+    static std::chrono::steady_clock::time_point s_coll_name_cache_expires_at;
     struct UserMembersCacheEntry {
         std::vector<snowflake_id_t> members;
         std::chrono::steady_clock::time_point expires_at;
@@ -436,19 +439,23 @@ namespace irods::catalog {
         }
 
         void ensure_coll_name_cache_loaded() {
-            if (!s_coll_name_cache_initialized) {
+            auto now = std::chrono::steady_clock::now();
+            if (!s_coll_name_cache_initialized || now >= s_coll_name_cache_expires_at) {
                 try {
                     auto entries = client_->get_prefix_entries_async(local_cluster_id_, "idx:Collection:n:").get();
+                    std::unordered_map<std::string, snowflake_id_t> new_cache;
                     for (const auto& [k, v] : entries) {
                         if (k.ends_with(":meta") || v.empty()) continue;
                         std::string prefix = "idx:Collection:n:";
                         if (k.rfind(prefix, 0) == 0) {
                             std::string cpath = k.substr(prefix.length());
-                            try { s_coll_name_cache[cpath] = std::stoull(v, nullptr, 16); } catch(...) {}
+                            try { new_cache[cpath] = std::stoull(v, nullptr, 16); } catch(...) {}
                         }
                     }
+                    s_coll_name_cache = std::move(new_cache);
+                    s_coll_name_cache_initialized = true;
+                    s_coll_name_cache_expires_at = now + std::chrono::seconds(30);
                 } catch (...) {}
-                s_coll_name_cache_initialized = true;
             }
         }
 
@@ -4828,7 +4835,15 @@ namespace irods::catalog {
 
     CatalogFacade::CatalogFacade() : pImpl_(std::make_unique<CatalogImpl>()) {}
     CatalogFacade::~CatalogFacade() = default;
-    irods::error CatalogFacade::init(const Config& cfg, std::string_view zone_name, const l3kvg::Settings& settings) { return pImpl_->init(cfg, zone_name, settings); }
+    irods::error CatalogFacade::init(const Config& cfg, std::string_view zone_name, const l3kvg::Settings& settings) {
+        static std::once_flag s_coll_cache_atfork_once;
+        std::call_once(s_coll_cache_atfork_once, []() {
+            pthread_atfork(nullptr, nullptr, []() {
+                CatalogFacade::reset_collection_cache();
+            });
+        });
+        return pImpl_->init(cfg, zone_name, settings);
+    }
     irods::error CatalogFacade::bootstrap_catalog(std::string_view zone_name, std::string_view admin_name) { return pImpl_->bootstrap_catalog(zone_name, admin_name); }
     irods::error CatalogFacade::bootstrap_federation(const std::vector<FederatedZone>& peers) { return pImpl_->bootstrap_federation(peers); }
     irods::error CatalogFacade::register_data_object(const data_object& obj, data_id_t& out_id, const replica* initial_repl) { return pImpl_->register_data_object(obj, out_id, initial_repl); }
@@ -4921,6 +4936,18 @@ namespace irods::catalog {
     irods::error CatalogFacade::resolve_path(std::string_view path, snowflake_id_t& out_id, EntityType& out_type) { return pImpl_->resolve_path(path, out_id, out_type); }
     irods::error CatalogFacade::get_collection_subtree_ids(snowflake_id_t coll_sid, std::vector<snowflake_id_t>& out_ids) { return pImpl_->get_collection_subtree_ids(coll_sid, out_ids); }
     irods::error CatalogFacade::get_child_collection_ids(snowflake_id_t parent_sid, std::string_view parent_path, std::vector<snowflake_id_t>& out_ids) { return pImpl_->get_child_collection_ids(parent_sid, parent_path, out_ids); }
+    void CatalogFacade::reset_collection_cache() {
+        {
+            std::lock_guard<std::mutex> lock(s_path_cache_mu);
+            s_coll_name_cache.clear();
+            s_coll_name_cache_initialized = false;
+            s_coll_name_cache_expires_at = std::chrono::steady_clock::time_point{};
+        }
+        {
+            std::lock_guard<std::mutex> lock(s_reg_cache_mu);
+            s_coll_path_cache.clear();
+        }
+    }
     irods::error CatalogFacade::execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes, std::string_view root_type, const irods::experimental::genquery2::options* opts) { return pImpl_->execute_query(ast, results, starting_nodes, root_type, opts); }
     irods::error CatalogFacade::execute_dml(const compiler::DmlPlan& plan, lite3cpp::Buffer& result) { return pImpl_->execute_dml(plan, result); }
     irods::error CatalogFacade::apply_atomic_operations(const std::vector<irods::experimental::dml::operation_type>& ops) { return pImpl_->apply_atomic_operations(ops); }
