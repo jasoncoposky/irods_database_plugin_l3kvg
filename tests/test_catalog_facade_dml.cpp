@@ -302,3 +302,131 @@ TEST_F(CatalogFacadeDmlTest, ModifyDataObjectAndReplicaUnified) {
     EXPECT_FALSE(non_exist_err.ok());
     EXPECT_EQ(non_exist_err.code(), CAT_UNKNOWN_FILE);
 }
+
+TEST_F(CatalogFacadeDmlTest, ModifyDataObjectAndReplicaMultiReplica) {
+    // 1. Register a collection
+    collection coll;
+    coll.id = 600;
+    coll.name = "/tempZone/home/rods/multicoll";
+    coll.owner_name = "rods";
+    coll.owner_zone = "tempZone";
+    coll_id_t coll_id = 0;
+    ASSERT_TRUE(facade_.register_collection(coll, coll_id).ok());
+
+    // 2. Register resources demoResc and otherResc
+    resource r1;
+    r1.name = "demoResc";
+    r1.type = "unixfilesystem";
+    resc_id_t r1_id = 40001;
+    facade_.register_resource(r1, r1_id);
+
+    resource r2;
+    r2.name = "otherResc";
+    r2.type = "unixfilesystem";
+    resc_id_t r2_id = 40002;
+    facade_.register_resource(r2, r2_id);
+
+    // 3. Register Data Object with initial replica 0 on demoResc
+    data_object obj;
+    obj.id = 6001;
+    obj.coll_id = coll_id;
+    obj.name = "multi_mod.dat";
+    obj.owner_name = "rods";
+    obj.owner_zone = "tempZone";
+    obj.size = 100;
+    obj.create_ts = "0100000000";
+    obj.modify_ts = "0100000000";
+
+    replica repl0;
+    repl0.data_id = 6001;
+    repl0.replica_number = 0;
+    repl0.resc_hier = "demoResc";
+    repl0.physical_path = "/var/lib/irods/Vault/multi_mod_0.dat";
+    repl0.status = "1";
+    repl0.size = 100;
+    repl0.modify_ts = "0100000000";
+
+    data_id_t registered_data_id = 0;
+    ASSERT_TRUE(facade_.register_data_object(obj, registered_data_id, &repl0).ok());
+    EXPECT_EQ(registered_data_id, 6001);
+
+    // 4. Register replica 1 on otherResc
+    replica repl1;
+    repl1.data_id = 6001;
+    repl1.replica_number = 1;
+    repl1.resc_hier = "otherResc";
+    repl1.physical_path = "/var/lib/irods/Vault/multi_mod_1.dat";
+    repl1.status = "1";
+    repl1.size = 100;
+    repl1.modify_ts = "0100000000";
+    ASSERT_TRUE(facade_.register_replica(repl1).ok());
+
+    uint16_t cluster_id = facade_.get_cluster_id();
+    snowflake_id_t sid = facade_.make_id(EntityType::DataObject, 6001);
+    snowflake_id_t rid0 = SnowflakeID::create(cluster_id, "6001:0");
+    snowflake_id_t rid1 = SnowflakeID::create(cluster_id, "6001:1");
+
+    ASSERT_TRUE(mock_server_->has_node(sid));
+    ASSERT_TRUE(mock_server_->has_node(rid0));
+    ASSERT_TRUE(mock_server_->has_node(rid1));
+
+    // 5. Update only replica 1 with all_repl_status = true, all_replicas = false
+    std::vector<std::pair<std::string, std::string>> updates1 = {
+        {"dataSize", "8192"},
+        {"dataModify", "0175000000"},
+        {"chksum", "sha2:repl1chksum"},
+        {"filePath", "/new/path/multi_mod_1.dat"}
+    };
+
+    auto mod_err1 = facade_.modify_data_object_and_replica(
+        6001,
+        1,
+        "otherResc",
+        updates1,
+        /*all_repl_status=*/true,
+        /*all_replicas=*/false
+    );
+    ASSERT_TRUE(mod_err1.ok()) << mod_err1.result();
+
+    // Verify Data Object updated
+    auto d_node1 = mock_server_->get_node(sid);
+    EXPECT_EQ(d_node1.get_attribute<int64_t>("s"), 8192);
+    EXPECT_EQ(d_node1.get_attribute<std::string>("mt"), "0175000000");
+
+    // Verify Replica 1 updated and marked GOOD ("1")
+    auto r1_node = mock_server_->get_node(rid1);
+    EXPECT_EQ(r1_node.get_attribute<int64_t>("s"), 8192);
+    EXPECT_EQ(r1_node.get_attribute<std::string>("mt"), "0175000000");
+    EXPECT_EQ(r1_node.get_attribute<std::string>("cs"), "sha2:repl1chksum");
+    EXPECT_EQ(r1_node.get_attribute<std::string>("p"), "/new/path/multi_mod_1.dat");
+    EXPECT_EQ(r1_node.get_attribute<std::string>("st"), "1");
+
+    // Verify Replica 0 marked STALE ("0") and original size preserved
+    auto r0_node = mock_server_->get_node(rid0);
+    EXPECT_EQ(r0_node.get_attribute<std::string>("st"), "0");
+    EXPECT_EQ(r0_node.get_attribute<int64_t>("s"), 100);
+
+    // 6. Test with all_replicas == true and verify both replicas receive update
+    std::vector<std::pair<std::string, std::string>> updates_all = {
+        {"dataSize", "16384"},
+        {"dataModify", "0180000000"}
+    };
+
+    auto mod_err2 = facade_.modify_data_object_and_replica(
+        6001,
+        0,
+        "",
+        updates_all,
+        /*all_repl_status=*/false,
+        /*all_replicas=*/true
+    );
+    ASSERT_TRUE(mod_err2.ok()) << mod_err2.result();
+
+    auto r0_node_after = mock_server_->get_node(rid0);
+    EXPECT_EQ(r0_node_after.get_attribute<int64_t>("s"), 16384);
+    EXPECT_EQ(r0_node_after.get_attribute<std::string>("mt"), "0180000000");
+
+    auto r1_node_after = mock_server_->get_node(rid1);
+    EXPECT_EQ(r1_node_after.get_attribute<int64_t>("s"), 16384);
+    EXPECT_EQ(r1_node_after.get_attribute<std::string>("mt"), "0180000000");
+}

@@ -1654,7 +1654,7 @@ namespace irods::catalog {
 
                 // Update replicas
                 // If primary replica matches, update directly
-                if (!r_payload.empty() && (all_replicas || replicas.size() == 1 || repl_num == 0)) {
+                if (!r_payload.empty() && replicas.size() <= 1 && !all_replicas) {
                     lite3cpp::Buffer rbuf(reinterpret_cast<const uint8_t*>(r_payload.data()), r_payload.size());
                     for (const auto& [kw, val] : updates) {
                         if (kw == "dataModify" || kw == "modify_ts" || kw == "DATA_MODIFY_TIME" || kw == "mt") {
@@ -1693,8 +1693,10 @@ namespace irods::catalog {
                         if (all_replicas || (rn == repl_num) || (!resc_hier.empty() && (rh == resc_hier || rh == leaf_name))) {
                             target_matched = true;
                         }
+                        bool modified = false;
                         if (all_repl_status) {
                             rbuf.set_str(0, "st", target_matched ? "1" : "0");
+                            modified = true;
                         }
                         if (target_matched) {
                             for (const auto& [kw, val] : updates) {
@@ -1706,6 +1708,9 @@ namespace irods::catalog {
                                 else if (kw == "replStatus" || kw == "data_is_dirty" || kw == "DATA_REPL_STATUS" || kw == "st") { if (!all_repl_status) rbuf.set_str(0, "st", val); }
                                 else if (kw == "dataSize" || kw == "data_size" || kw == "DATA_SIZE" || kw == "size" || kw == "s") { try { rbuf.set_i64(0, "s", std::stoll(val)); } catch (...) {} }
                             }
+                            modified = true;
+                        }
+                        if (modified) {
                             batch.put_node(rid, rbuf.move_to_string());
                         }
                     }
