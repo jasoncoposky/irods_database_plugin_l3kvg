@@ -29,6 +29,51 @@ namespace irods::catalog::bridge {
         return str;
     }
 
+    bool fast_parse_equality(std::string_view cond, std::string& out_literal) {
+        size_t i = 0;
+        while (i < cond.size() && std::isspace(static_cast<unsigned char>(cond[i]))) ++i;
+        if (i >= cond.size() || cond[i] != '=') return false;
+        ++i;
+        if (i < cond.size() && (cond[i] == '=' || cond[i] == '<' || cond[i] == '>')) return false;
+        while (i < cond.size() && std::isspace(static_cast<unsigned char>(cond[i]))) ++i;
+        if (i >= cond.size()) return false;
+        if (cond[i] == '\'') {
+            ++i;
+            std::string res;
+            res.reserve(cond.size() - i);
+            while (i < cond.size()) {
+                if (cond[i] == '\'') {
+                    if (i + 1 < cond.size() && cond[i + 1] == '\'') {
+                        res += '\'';
+                        i += 2;
+                    } else {
+                        break; // closing quote
+                    }
+                } else if (cond[i] == '\\' && i + 1 < cond.size()) {
+                    res += cond[i + 1];
+                    i += 2;
+                } else {
+                    res += cond[i++];
+                }
+            }
+            if (i < cond.size() && cond[i] == '\'') {
+                ++i;
+                while (i < cond.size() && std::isspace(static_cast<unsigned char>(cond[i]))) ++i;
+                if (i == cond.size()) {
+                    out_literal = std::move(res);
+                    return true;
+                }
+            }
+            return false;
+        } else {
+            size_t start = i;
+            while (i < cond.size() && !std::isspace(static_cast<unsigned char>(cond[i]))) ++i;
+            out_literal = std::string(cond.substr(start, i - start));
+            while (i < cond.size() && std::isspace(static_cast<unsigned char>(cond[i]))) ++i;
+            return (i == cond.size() && !out_literal.empty());
+        }
+    }
+
     std::string get_col_name(int pure_inx) {
             switch(pure_inx) {
                 case COL_D_DATA_ID: return "DATA_ID";
@@ -404,9 +449,16 @@ namespace irods::catalog::bridge {
         for (int i = 0; i < _inp->sqlCondInp.len; ++i) {
             int inx = _inp->sqlCondInp.inx[i];
             std::string cond(_inp->sqlCondInp.value[i]);
-            std::smatch match;
-            if (cond.find("||") == std::string::npos && std::regex_match(cond, match, eq_regex)) {
-                std::string literal = extract_literal(match);
+            std::string literal;
+            bool is_eq = fast_parse_equality(cond, literal);
+            if (!is_eq && cond.find("||") == std::string::npos) {
+                std::smatch match;
+                if (std::regex_match(cond, match, eq_regex)) {
+                    literal = extract_literal(match);
+                    is_eq = true;
+                }
+            }
+            if (is_eq) {
                 if (inx == COL_COLL_NAME) {
                     target_coll_name = literal;
                 } else if (inx == COL_DATA_NAME) {
@@ -432,9 +484,16 @@ namespace irods::catalog::bridge {
             int inx = _inp->sqlCondInp.inx[i];
             int pure_inx = get_pure_inx(inx);
             std::string cond(_inp->sqlCondInp.value[i]);
-            std::smatch match;
-            if (cond.find("||") == std::string::npos && std::regex_match(cond, match, eq_regex)) {
-                std::string literal = extract_literal(match);
+            std::string literal;
+            bool is_eq = fast_parse_equality(cond, literal);
+            if (!is_eq && cond.find("||") == std::string::npos) {
+                std::smatch match;
+                if (std::regex_match(cond, match, eq_regex)) {
+                    literal = extract_literal(match);
+                    is_eq = true;
+                }
+            }
+            if (is_eq) {
                 if (inx == COL_META_DATA_ATTR_NAME || pure_inx == COL_META_DATA_ATTR_NAME) meta_attr = literal;
                 else if (inx == COL_META_DATA_ATTR_VALUE || pure_inx == COL_META_DATA_ATTR_VALUE) meta_val = literal;
             }
@@ -466,8 +525,14 @@ namespace irods::catalog::bridge {
             std::string cond(_inp->sqlCondInp.value[i]);
             std::smatch match;
 
-            if (cond.find("||") == std::string::npos && std::regex_match(cond, match, eq_regex)) {
-                std::string literal = extract_literal(match);
+            std::string literal;
+            bool is_eq = fast_parse_equality(cond, literal);
+            if (!is_eq && cond.find("||") == std::string::npos && std::regex_match(cond, match, eq_regex)) {
+                literal = extract_literal(match);
+                is_eq = true;
+            }
+
+            if (is_eq) {
                 if (inx == COL_DATA_ACCESS_DATA_ID || inx == COL_D_DATA_ID) {
                     if (_catalog != nullptr && best_start_priority < 4) {
                         try {
@@ -582,10 +647,12 @@ namespace irods::catalog::bridge {
                         std::string clean_zone;
                         for (int j = 0; j < _inp->sqlCondInp.len; ++j) {
                             if (get_pure_inx(_inp->sqlCondInp.inx[j]) == COL_USER_ZONE) {
-                                std::smatch z_match;
                                 std::string z_cond(_inp->sqlCondInp.value[j]);
-                                if (std::regex_match(z_cond, z_match, eq_regex)) {
-                                    clean_zone = extract_literal(z_match);
+                                if (!fast_parse_equality(z_cond, clean_zone)) {
+                                    std::smatch z_match;
+                                    if (std::regex_match(z_cond, z_match, eq_regex)) {
+                                        clean_zone = extract_literal(z_match);
+                                    }
                                 }
                                 break;
                             }
@@ -925,8 +992,10 @@ namespace irods::catalog::bridge {
 
             if (!name.empty()) {
                 gq2::column col(name);
-                std::smatch match;
-                if (std::regex_search(cond, in_clause_regex)) {
+                std::string eq_literal;
+                if (fast_parse_equality(cond, eq_literal)) {
+                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(eq_literal)));
+                } else if (std::regex_search(cond, in_clause_regex)) {
                     auto words_begin = std::sregex_iterator(cond.begin(), cond.end(), quoted_literal_regex);
                     auto words_end = std::sregex_iterator();
                     std::vector<std::string> literals;
@@ -968,25 +1037,30 @@ namespace irods::catalog::bridge {
                         std::string sub = (pos == std::string::npos) ? cond.substr(start) : cond.substr(start, pos - start);
                         boost::algorithm::trim(sub);
                         if (!sub.empty()) {
-                            std::smatch m;
-                            if (std::regex_match(sub, m, not_like_regex)) {
-                                or_cond.condition.push_back(gq2::condition(col, gq2::condition_operator_not{gq2::condition_like(extract_literal(m))}));
-                            } else if (std::regex_match(sub, m, like_regex)) {
-                                or_cond.condition.push_back(gq2::condition(col, gq2::condition_like(extract_literal(m))));
-                            } else if (std::regex_match(sub, m, ne_regex)) {
-                                or_cond.condition.push_back(gq2::condition(col, gq2::condition_not_equal(extract_literal(m))));
-                            } else if (std::regex_match(sub, m, le_regex)) {
-                                or_cond.condition.push_back(gq2::condition(col, gq2::condition_less_than_or_equal_to(extract_literal(m))));
-                            } else if (std::regex_match(sub, m, ge_regex)) {
-                                or_cond.condition.push_back(gq2::condition(col, gq2::condition_greater_than_or_equal_to(extract_literal(m))));
-                            } else if (std::regex_match(sub, m, lt_regex)) {
-                                or_cond.condition.push_back(gq2::condition(col, gq2::condition_less_than(extract_literal(m))));
-                            } else if (std::regex_match(sub, m, gt_regex)) {
-                                or_cond.condition.push_back(gq2::condition(col, gq2::condition_greater_than(extract_literal(m))));
-                            } else if (std::regex_match(sub, m, eq_regex)) {
-                                or_cond.condition.push_back(gq2::condition(col, gq2::condition_equal(extract_literal(m))));
+                            std::string sub_eq_literal;
+                            if (fast_parse_equality(sub, sub_eq_literal)) {
+                                or_cond.condition.push_back(gq2::condition(col, gq2::condition_equal(sub_eq_literal)));
                             } else {
-                                or_cond.condition.push_back(gq2::condition(col, gq2::condition_equal(sub)));
+                                std::smatch m;
+                                if (std::regex_match(sub, m, not_like_regex)) {
+                                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_operator_not{gq2::condition_like(extract_literal(m))}));
+                                } else if (std::regex_match(sub, m, like_regex)) {
+                                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_like(extract_literal(m))));
+                                } else if (std::regex_match(sub, m, ne_regex)) {
+                                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_not_equal(extract_literal(m))));
+                                } else if (std::regex_match(sub, m, le_regex)) {
+                                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_less_than_or_equal_to(extract_literal(m))));
+                                } else if (std::regex_match(sub, m, ge_regex)) {
+                                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_greater_than_or_equal_to(extract_literal(m))));
+                                } else if (std::regex_match(sub, m, lt_regex)) {
+                                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_less_than(extract_literal(m))));
+                                } else if (std::regex_match(sub, m, gt_regex)) {
+                                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_greater_than(extract_literal(m))));
+                                } else if (std::regex_match(sub, m, eq_regex)) {
+                                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_equal(extract_literal(m))));
+                                } else {
+                                    or_cond.condition.push_back(gq2::condition(col, gq2::condition_equal(sub)));
+                                }
                             }
                         }
                         if (pos == std::string::npos) break;
@@ -997,31 +1071,34 @@ namespace irods::catalog::bridge {
                     } else if (or_cond.condition.size() > 1) {
                         ast.conditions.push_back(std::move(or_cond));
                     }
-                } else if (std::regex_match(cond, match, not_like_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_operator_not{gq2::condition_like(extract_literal(match))}));
-                } else if (std::regex_match(cond, match, le_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_less_than_or_equal_to(extract_literal(match))));
-                } else if (std::regex_match(cond, match, ge_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_greater_than_or_equal_to(extract_literal(match))));
-                } else if (std::regex_match(cond, match, lt_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_less_than(extract_literal(match))));
-                } else if (std::regex_match(cond, match, gt_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_greater_than(extract_literal(match))));
-                } else if (std::regex_match(cond, match, eq_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(extract_literal(match))));
-                } else if (std::regex_match(cond, match, ne_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_not_equal(extract_literal(match))));
-                } else if (std::regex_match(cond, match, like_regex)) {
-                    ast.conditions.push_back(gq2::condition(col, gq2::condition_like(extract_literal(match))));
-                } else if (std::regex_match(cond, match, parent_regex)) {
-                    if (_catalog == nullptr) {
-                        irods::experimental::filesystem::path p(match[1].str());
-                        ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(unescape_sql_literal(p.string()))));
-                    } else if (!resolved_start || _starting_nodes.empty()) {
-                        ast.conditions.push_back(gq2::condition(col, gq2::condition_equal("__NON_EXISTENT_PARENT_OF_PATH__")));
-                    }
                 } else {
-                    rodsLog(LOG_WARNING, "L3_BRIDGE: Condition on column '%s' was NOT recognized: '%s'", name.c_str(), cond.c_str());
+                    std::smatch match;
+                    if (std::regex_match(cond, match, not_like_regex)) {
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_operator_not{gq2::condition_like(extract_literal(match))}));
+                    } else if (std::regex_match(cond, match, le_regex)) {
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_less_than_or_equal_to(extract_literal(match))));
+                    } else if (std::regex_match(cond, match, ge_regex)) {
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_greater_than_or_equal_to(extract_literal(match))));
+                    } else if (std::regex_match(cond, match, lt_regex)) {
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_less_than(extract_literal(match))));
+                    } else if (std::regex_match(cond, match, gt_regex)) {
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_greater_than(extract_literal(match))));
+                    } else if (std::regex_match(cond, match, eq_regex)) {
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(extract_literal(match))));
+                    } else if (std::regex_match(cond, match, ne_regex)) {
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_not_equal(extract_literal(match))));
+                    } else if (std::regex_match(cond, match, like_regex)) {
+                        ast.conditions.push_back(gq2::condition(col, gq2::condition_like(extract_literal(match))));
+                    } else if (std::regex_match(cond, match, parent_regex)) {
+                        if (_catalog == nullptr) {
+                            irods::experimental::filesystem::path p(match[1].str());
+                            ast.conditions.push_back(gq2::condition(col, gq2::condition_equal(unescape_sql_literal(p.string()))));
+                        } else if (!resolved_start || _starting_nodes.empty()) {
+                            ast.conditions.push_back(gq2::condition(col, gq2::condition_equal("__NON_EXISTENT_PARENT_OF_PATH__")));
+                        }
+                    } else {
+                        rodsLog(LOG_WARNING, "L3_BRIDGE: Condition on column '%s' was NOT recognized: '%s'", name.c_str(), cond.c_str());
+                    }
                 }
             }
         }

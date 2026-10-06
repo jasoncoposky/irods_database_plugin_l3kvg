@@ -7,6 +7,7 @@
 #include <cstring>
 
 namespace irods::catalog::bridge {
+    bool fast_parse_equality(std::string_view cond, std::string& out_literal);
     irods::experimental::genquery2::select synthesize_gq2_ast(genQueryInp_t* _inp, CatalogFacade* _catalog, std::vector<uint64_t>& _starting_nodes);
     void pack_gq1_results(const ResultSet& _results, genQueryInp_t* _inp, genQueryOut_t* _out);
 }
@@ -171,6 +172,129 @@ TEST(Gq1BridgeTest, ZeroHopDataObjectColumnMapping) {
     EXPECT_EQ(buf.get_str(f1, "alias"), "DataObject");
     EXPECT_EQ(buf.get_str(f1, "key"), "cid");
     EXPECT_EQ(buf.get_str(f1, "value"), "1001");
+}
+
+TEST(Gq1BridgeTest, FastParseEqualityUnitTests) {
+    std::string lit;
+
+    // Standard quoted equality
+    EXPECT_TRUE(fast_parse_equality("= 'test'", lit));
+    EXPECT_EQ(lit, "test");
+
+    // Whitespace handling
+    EXPECT_TRUE(fast_parse_equality("   =   'hello world'   ", lit));
+    EXPECT_EQ(lit, "hello world");
+
+    // Escaped quotes with backslash
+    EXPECT_TRUE(fast_parse_equality("= 'don\\'t stop'", lit));
+    EXPECT_EQ(lit, "don't stop");
+
+    // Escaped quotes with SQL doubling
+    EXPECT_TRUE(fast_parse_equality("= 'don''t stop'", lit));
+    EXPECT_EQ(lit, "don't stop");
+
+    // Mixed escapes and multiple quotes
+    EXPECT_TRUE(fast_parse_equality("= 'a''b\\'c''d'", lit));
+    EXPECT_EQ(lit, "a'b'c'd");
+
+    // Backslash escapes
+    EXPECT_TRUE(fast_parse_equality("= 'path\\\\to\\\\file'", lit));
+    EXPECT_EQ(lit, "path\\to\\file");
+
+    // Empty quoted string
+    EXPECT_TRUE(fast_parse_equality("= ''", lit));
+    EXPECT_EQ(lit, "");
+
+    // Unquoted integer
+    EXPECT_TRUE(fast_parse_equality("= 12345", lit));
+    EXPECT_EQ(lit, "12345");
+
+    // Unquoted alphanumeric identifier
+    EXPECT_TRUE(fast_parse_equality("= test_coll", lit));
+    EXPECT_EQ(lit, "test_coll");
+
+    // Unquoted with leading/trailing whitespace
+    EXPECT_TRUE(fast_parse_equality("   =   99999   ", lit));
+    EXPECT_EQ(lit, "99999");
+
+    // Path strings
+    EXPECT_TRUE(fast_parse_equality("= '/tempZone/home/rods/coll'", lit));
+    EXPECT_EQ(lit, "/tempZone/home/rods/coll");
+
+    // Negative / Invalid cases
+    // Bare equal without value
+    EXPECT_FALSE(fast_parse_equality("=", lit));
+    EXPECT_FALSE(fast_parse_equality("=   ", lit));
+
+    // Empty input
+    EXPECT_FALSE(fast_parse_equality("", lit));
+    EXPECT_FALSE(fast_parse_equality("   ", lit));
+
+    // Double equal
+    EXPECT_FALSE(fast_parse_equality("== 'test'", lit));
+
+    // Other operators
+    EXPECT_FALSE(fast_parse_equality("!= 'test'", lit));
+    EXPECT_FALSE(fast_parse_equality("<> 'test'", lit));
+    EXPECT_FALSE(fast_parse_equality("<= 'test'", lit));
+    EXPECT_FALSE(fast_parse_equality(">= 'test'", lit));
+    EXPECT_FALSE(fast_parse_equality("< 'test'", lit));
+    EXPECT_FALSE(fast_parse_equality("> 'test'", lit));
+    EXPECT_FALSE(fast_parse_equality("=> 'test'", lit));
+    EXPECT_FALSE(fast_parse_equality("=< 'test'", lit));
+
+    // Unclosed quote
+    EXPECT_FALSE(fast_parse_equality("= 'unclosed", lit));
+    EXPECT_FALSE(fast_parse_equality("= '", lit));
+
+    // Trailing garbage after quoted string
+    EXPECT_FALSE(fast_parse_equality("= 'valid' extra", lit));
+
+    // Unquoted with spaces in value
+    EXPECT_FALSE(fast_parse_equality("= val1 val2", lit));
+
+    // SQL keywords / non-equality conditions
+    EXPECT_FALSE(fast_parse_equality("like 'pattern%'", lit));
+    EXPECT_FALSE(fast_parse_equality("parent_of '/path'", lit));
+    EXPECT_FALSE(fast_parse_equality("IN ('a', 'b')", lit));
+    EXPECT_FALSE(fast_parse_equality("= 'a' || = 'b'", lit));
+}
+
+TEST(Gq1BridgeTest, SynthesizeGq2AstFastPathEqualityIntegration) {
+    genQueryInp_t inp{};
+    memset(&inp, 0, sizeof(genQueryInp_t));
+
+    inp.selectInp.len = 2;
+    inp.selectInp.inx = (int*)malloc(2 * sizeof(int));
+    inp.selectInp.inx[0] = COL_DATA_NAME;
+    inp.selectInp.inx[1] = COL_DATA_SIZE;
+    inp.selectInp.value = (int*)malloc(2 * sizeof(int));
+    inp.selectInp.value[0] = 1;
+    inp.selectInp.value[1] = 1;
+
+    inp.sqlCondInp.len = 3;
+    inp.sqlCondInp.inx = (int*)malloc(3 * sizeof(int));
+    inp.sqlCondInp.inx[0] = COL_COLL_NAME;
+    inp.sqlCondInp.inx[1] = COL_DATA_NAME;
+    inp.sqlCondInp.inx[2] = COL_DATA_SIZE;
+
+    inp.sqlCondInp.value = (char**)malloc(3 * sizeof(char*));
+    inp.sqlCondInp.value[0] = strdup("= '/tempZone/home/rods'");
+    inp.sqlCondInp.value[1] = strdup("= 'my_file.txt'");
+    inp.sqlCondInp.value[2] = strdup("= 1024");
+
+    std::vector<snowflake_id_t> starting_nodes;
+    auto ast = synthesize_gq2_ast(&inp, nullptr, starting_nodes);
+
+    EXPECT_EQ(ast.conditions.size(), 3);
+
+    free(inp.selectInp.inx);
+    free(inp.selectInp.value);
+    free(inp.sqlCondInp.inx);
+    free(inp.sqlCondInp.value[0]);
+    free(inp.sqlCondInp.value[1]);
+    free(inp.sqlCondInp.value[2]);
+    free(inp.sqlCondInp.value);
 }
 
 int main(int argc, char **argv) {
