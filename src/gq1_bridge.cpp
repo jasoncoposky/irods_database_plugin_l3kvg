@@ -446,6 +446,7 @@ namespace irods::catalog::bridge {
                 std::vector<snowflake_id_t> target_sids;
                 target_sids.reserve(entries.size());
                 for (const auto& [k, v] : entries) {
+                    if (k.ends_with(":meta")) continue;
                     if (!v.empty()) {
                         try { target_sids.push_back(std::stoull(v, nullptr, 16)); } catch (...) {}
                     }
@@ -523,6 +524,7 @@ namespace irods::catalog::bridge {
                                     _starting_nodes.clear();
                                     _starting_nodes.reserve(pn_entries.size());
                                     for (const auto& [k, v] : pn_entries) {
+                                        if (k.ends_with(":meta")) continue;
                                         if (!v.empty()) {
                                             try { _starting_nodes.push_back(std::stoull(v, nullptr, 16)); } catch (...) {}
                                         }
@@ -795,6 +797,7 @@ namespace irods::catalog::bridge {
                                 std::vector<snowflake_id_t> data_ids;
                                 data_ids.reserve(do_entries.size());
                                 for (const auto& [k, v] : do_entries) {
+                                    if (k.ends_with(":meta")) continue;
                                     if (!v.empty()) {
                                         try {
                                             data_ids.push_back(std::stoull(v, nullptr, 16));

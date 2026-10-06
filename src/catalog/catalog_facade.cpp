@@ -1884,6 +1884,10 @@ namespace irods::catalog {
                 if (cid == sid) continue;
                 std::string cpayload = client_->get_node_payload_async(local_cluster_id_, cid).get();
                 if (!cpayload.empty()) {
+                    try {
+                        lite3cpp::Buffer cbuf(reinterpret_cast<const uint8_t*>(cpayload.data()), cpayload.size());
+                        if (cbuf.get_bool(0, "tombstone")) continue;
+                    } catch (...) {}
                     is_empty = false;
                     return SUCCESS();
                 }
@@ -1907,7 +1911,7 @@ namespace irods::catalog {
             #endif
 
             bool empty = true;
-            auto empty_res = is_collection_empty(sid, empty);
+            auto empty_res = is_collection_empty(coll_id, empty);
             if (!empty_res.ok()) {
                 return empty_res;
             }
