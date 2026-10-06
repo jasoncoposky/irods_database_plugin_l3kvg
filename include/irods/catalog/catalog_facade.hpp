@@ -24,8 +24,15 @@ namespace irods::catalog {
         std::string_view get_field(size_t row, std::string_view key) const {
             if (row >= rows.size()) return "";
             auto it = rows[row].fields.find(std::string(key));
-            if (it == rows[row].fields.end()) return "";
-            return it->second;
+            if (it != rows[row].fields.end()) return it->second;
+            if (!rows.empty() && !rows[0].projected_names.empty()) {
+                for (size_t i = 0; i < rows[0].projected_names.size(); ++i) {
+                    if (rows[0].projected_names[i] == key) {
+                        return get_field(row, i);
+                    }
+                }
+            }
+            return "";
         }
         std::string_view get_field(size_t row, size_t col_idx) const {
             if (row < rows.size()) {

@@ -1042,6 +1042,15 @@ namespace irods::catalog::bridge {
 
         _out->totalRowCount = _out->rowCnt;
 
+        if (_out->rowCnt == 0) {
+            for (int i = 0; i < _out->attriCnt; ++i) {
+                _out->sqlResult[i].attriInx = _inp->selectInp.inx[i];
+                _out->sqlResult[i].len = 0;
+                _out->sqlResult[i].value = nullptr;
+            }
+            return;
+        }
+
         for (int i = 0; i < _out->attriCnt; ++i) {
             int inx = _inp->selectInp.inx[i];
             int pure_inx = get_pure_inx(inx);

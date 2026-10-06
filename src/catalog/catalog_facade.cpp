@@ -76,7 +76,7 @@ namespace irods::catalog {
 
     class CatalogImpl {
     public:
-        CatalogImpl() {}
+        CatalogImpl() : objid_curr_{0}, objid_limit_{0} {}
 
         irods::error init(const Config& cfg, std::string_view zone_name, const l3kvg::Settings& settings) {
             try {
@@ -1122,7 +1122,7 @@ namespace irods::catalog {
                 size_t old_slash = old_path.find_last_of('/');
                 old_parent_path = (old_slash == 0) ? "/" : (old_slash != std::string::npos ? old_path.substr(0, old_slash) : "");
             }
-            std::string new_path = (target_coll_path == "/" ? "/" : target_coll_path + "/") + data_name;
+            std::string new_path = (target_coll_path == "/" ? "/" : (target_coll_path.ends_with('/') ? target_coll_path : target_coll_path + "/")) + data_name;
 
             char time_buf[50];
             snprintf(time_buf, sizeof(time_buf), "%011lld", (long long)time(nullptr));
@@ -2713,25 +2713,30 @@ namespace irods::catalog {
             }
             std::string key = "seq:" + effective_seq;
             if (effective_seq == "R_OBJECTID") {
-                static std::mutex s_objid_mu;
-                static uint64_t s_objid_curr = 0;
-                static uint64_t s_objid_limit = 0;
-
-                std::lock_guard<std::mutex> lock(s_objid_mu);
-                if (s_objid_curr < s_objid_limit) {
-                    out_val = ++s_objid_curr;
+                std::lock_guard<std::mutex> lock(objid_mu_);
+                if (objid_curr_ < objid_limit_) {
+                    out_val = ++objid_curr_;
                     return SUCCESS();
                 }
 
                 uint64_t block_end = client_->atomic_incr_async(local_cluster_id_, key, 100).get();
-                if (block_end == 0) return ERROR(-1, "Failed to increment sequence: " + std::string(seq_name));
+                if (block_end == 0 || block_end < 100) {
+                    objid_limit_ = 0;
+                    objid_curr_ = 0;
+                    return ERROR(-1, "Failed to increment sequence: " + std::string(seq_name));
+                }
                 if (block_end < 100000) {
                     uint64_t jump = 100000 - block_end + 100;
                     block_end = client_->atomic_incr_async(local_cluster_id_, key, jump).get();
+                    if (block_end == 0 || block_end < 100) {
+                        objid_limit_ = 0;
+                        objid_curr_ = 0;
+                        return ERROR(-1, "Failed to increment sequence jump: " + std::string(seq_name));
+                    }
                 }
-                s_objid_limit = block_end;
-                s_objid_curr = block_end - 100;
-                out_val = ++s_objid_curr;
+                objid_limit_ = block_end;
+                objid_curr_ = block_end - 100;
+                out_val = ++objid_curr_;
                 return SUCCESS();
             }
 
@@ -4645,6 +4650,9 @@ namespace irods::catalog {
         uint64_t prev_data_id_write_ = 0;
         uint64_t prev_data_id_uses_ = 0;
         std::string prev_ticket_;
+        std::mutex objid_mu_;
+        uint64_t objid_curr_{0};
+        uint64_t objid_limit_{0};
     };
 
     CatalogFacade::CatalogFacade() : pImpl_(std::make_unique<CatalogImpl>()) {}
