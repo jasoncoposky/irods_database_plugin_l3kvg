@@ -921,146 +921,237 @@ namespace irods::catalog {
             out_id = obj.id; return SUCCESS();
         }
         irods::error delete_data_object(data_id_t id) { 
-            snowflake_id_t sid = make_id(EntityType::DataObject, id);
-            
-            #ifdef IRODS_SERVER
-            rodsLog(LOG_DEBUG, "L3_CATALOG: Deleting DataObject %llu (SID: %016llx)", (unsigned long long)id, (unsigned long long)sid);
-            #endif
+            try {
+                snowflake_id_t sid = make_id(EntityType::DataObject, id);
+                
+                #ifdef IRODS_SERVER
+                rodsLog(LOG_DEBUG, "L3_CATALOG: Deleting DataObject %llu (SID: %016llx)", (unsigned long long)id, (unsigned long long)sid);
+                #endif
 
-            l3kvg::MutationBatch batch;
+                l3kvg::MutationBatch batch;
 
-            // Roundtrip 1: Pipelined parallel query futures
-            auto f_payload = client_->get_node_payload_async(local_cluster_id_, sid);
-            auto f_repl = client_->get_neighbors_async(local_cluster_id_, sid, "HAS_REPLICA", 0.0);
-            auto f_access = client_->get_in_neighbors_async(local_cluster_id_, sid, "FOR_OBJECT");
-            auto f_avus = client_->get_neighbors_async(local_cluster_id_, sid, "ANNOTATED_WITH", 0.0);
+                // Roundtrip 1: Pipelined parallel query futures
+                auto f_payload = client_->get_node_payload_async(local_cluster_id_, sid);
+                auto f_repl = client_->get_neighbors_async(local_cluster_id_, sid, "HAS_REPLICA", 0.0);
+                auto f_access = client_->get_in_neighbors_async(local_cluster_id_, sid, "FOR_OBJECT");
+                auto f_avus = client_->get_neighbors_async(local_cluster_id_, sid, "ANNOTATED_WITH", 0.0);
 
-            std::string payload = f_payload.get();
-            int64_t cid = 0;
-            int64_t uid = 0;
-            std::string owner_name, owner_zone;
+                std::string payload = f_payload.get();
+                int64_t cid = 0;
+                int64_t uid = 0;
+                std::string owner_name, owner_zone;
+                std::string pn;
 
-            if (!payload.empty()) {
-                try {
-                    lite3cpp::Buffer buf(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
-                    std::string name = safe_get_str(buf, 0, "n");
-                    char id_hex[17];
-                    std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
+                if (!payload.empty()) {
+                    try {
+                        lite3cpp::Buffer buf(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+                        std::string name = safe_get_str(buf, 0, "n");
+                        char id_hex[17];
+                        std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
 
-                    if (!name.empty()) {
-                        std::string idx_name = get_idx_key(EntityType::DataObject, "n", name);
-                        batch.del_raw(idx_name);
-                        batch.del_raw(idx_name + ":" + std::string(id_hex));
-                    }
-                    std::string id_str = safe_get_str(buf, 0, "id");
-                    if (!id_str.empty()) {
-                        batch.del_raw(get_idx_key(EntityType::DataObject, "id", id_str));
-                    } else if (id != 0) {
-                        batch.del_raw(get_idx_key(EntityType::DataObject, "id", std::to_string(id)));
-                    }
+                        if (!name.empty()) {
+                            std::string idx_name = get_idx_key(EntityType::DataObject, "n", name);
+                            batch.del_raw(idx_name);
+                            batch.del_raw(idx_name + ":" + std::string(id_hex));
+                        }
+                        std::string id_str = safe_get_str(buf, 0, "id");
+                        if (!id_str.empty()) {
+                            batch.del_raw(get_idx_key(EntityType::DataObject, "id", id_str));
+                        } else if (id != 0) {
+                            batch.del_raw(get_idx_key(EntityType::DataObject, "id", std::to_string(id)));
+                        }
 
-                    std::string path = safe_get_str(buf, 0, "p");
-                    if (!path.empty()) {
-                        batch.del_raw(get_idx_key(EntityType::DataObject, "path", path));
-                    }
+                        std::string path = safe_get_str(buf, 0, "p");
+                        if (!path.empty()) {
+                            batch.del_raw(get_idx_key(EntityType::DataObject, "path", path));
+                        }
 
-                    std::string pn = safe_get_str(buf, 0, "pn");
-                    if (!pn.empty()) {
-                        batch.del_raw(get_idx_key(EntityType::DataObject, "pn", pn) + ":" + std::string(id_hex));
-                    }
+                        pn = safe_get_str(buf, 0, "pn");
+                        if (pn.empty() && !path.empty()) {
+                            size_t slash = path.rfind('/');
+                            pn = (slash == 0) ? "/" : (slash != std::string::npos ? path.substr(0, slash) : "");
+                        }
+                        if (!pn.empty()) {
+                            batch.del_raw(get_idx_key(EntityType::DataObject, "pn", pn) + ":" + std::string(id_hex));
+                        }
 
-                    try { cid = buf.get_i64(0, "cid"); } catch (...) {}
-                    try { uid = buf.get_i64(0, "uid"); } catch (...) {}
-                    owner_name = safe_get_str(buf, 0, "o");
-                    owner_zone = safe_get_str(buf, 0, "z");
-                } catch (...) {}
-            }
-
-            // Fallback owner user resolution if uid wasn't in payload
-            if (uid == 0 && !owner_name.empty()) {
-                std::string user_key = owner_name + "#" + (owner_zone.empty() ? local_zone_name_ : owner_zone);
-                {
-                    std::lock_guard<std::mutex> lock(s_reg_cache_mu);
-                    auto it = s_user_id_cache.find(user_key);
-                    if (it != s_user_id_cache.end()) {
-                        uid = it->second;
-                    }
+                        try { cid = buf.get_i64(0, "cid"); } catch (...) {}
+                        try { uid = buf.get_i64(0, "uid"); } catch (...) {}
+                        owner_name = safe_get_str(buf, 0, "o");
+                        owner_zone = safe_get_str(buf, 0, "z");
+                    } catch (...) {}
                 }
-                if (uid == 0) {
-                    uid = resolve_user(owner_name, owner_zone);
-                    if (uid != 0) {
-                        std::lock_guard<std::mutex> lock(s_reg_cache_mu);
-                        s_user_id_cache[user_key] = uid;
-                    }
-                }
-            }
 
-            // Delete parent collection CONTAINS edge deterministically
-            if (cid != 0) {
-                snowflake_id_t coll_sid = make_id(EntityType::Collection, static_cast<coll_id_t>(cid));
-                batch.del_edge(coll_sid, "CONTAINS", 1.0, sid);
-            }
-
-            // Delete owner OWNS edge deterministically
-            if (uid != 0) {
-                batch.del_edge(uid, "OWNS", 1.0, sid);
-            }
-
-            // Delete replicas
-            auto replicas = f_repl.get();
-            for (auto rid : replicas) {
-                batch.del_edge(sid, "HAS_REPLICA", 1.0, rid);
-                batch.del_node(rid);
-            }
-
-            // Delete access nodes and HAS_ACCESS edges
-            auto accesses = f_access.get();
-            if (!accesses.empty()) {
-                std::vector<snowflake_id_t> members;
-                if (uid != 0) {
-                    bool cache_hit = false;
-                    auto now = std::chrono::steady_clock::now();
+                // Fallback owner user resolution if uid wasn't in payload
+                if (uid == 0 && !owner_name.empty()) {
+                    std::string user_key = owner_name + "#" + (owner_zone.empty() ? local_zone_name_ : owner_zone);
                     {
-                        std::lock_guard<std::mutex> lock(s_user_members_mu);
-                        auto it = s_user_members_cache.find(uid);
-                        if (it != s_user_members_cache.end() && now < it->second.expires_at) {
-                            members = it->second.members;
-                            cache_hit = true;
+                        std::lock_guard<std::mutex> lock(s_reg_cache_mu);
+                        auto it = s_user_id_cache.find(user_key);
+                        if (it != s_user_id_cache.end()) {
+                            uid = it->second;
                         }
                     }
-                    if (!cache_hit) {
-                        members = client_->get_in_neighbors_async(local_cluster_id_, uid, "MEMBER_OF").get();
-                        std::lock_guard<std::mutex> lock(s_user_members_mu);
-                        s_user_members_cache[uid] = {members, now + std::chrono::seconds(30)};
+                    if (uid == 0) {
+                        uid = resolve_user(owner_name, owner_zone);
+                        if (uid != 0) {
+                            std::lock_guard<std::mutex> lock(s_reg_cache_mu);
+                            s_user_id_cache[user_key] = uid;
+                        }
                     }
                 }
 
-                for (auto aid : accesses) {
+                // Defensive fallback for collection CONTAINS edge
+                snowflake_id_t coll_sid = 0;
+                if (cid != 0) {
+                    coll_sid = make_id(EntityType::Collection, static_cast<coll_id_t>(cid));
+                }
+                if (coll_sid == 0 && !pn.empty()) {
+                    {
+                        std::lock_guard<std::mutex> lock(s_path_cache_mu);
+                        auto it = s_coll_name_cache.find(pn);
+                        if (it != s_coll_name_cache.end() && it->second != 0) {
+                            coll_sid = it->second;
+                            cid = coll_sid;
+                        }
+                    }
+                    if (coll_sid == 0) {
+                        coll_sid = resolve_id_from_index(EntityType::Collection, "n", pn);
+                        if (coll_sid != 0) {
+                            cid = coll_sid;
+                        }
+                    }
+                }
+
+                // Delete parent collection CONTAINS edge deterministically
+                if (coll_sid != 0) {
+                    batch.del_edge(coll_sid, "CONTAINS", 1.0, sid);
+                }
+
+                // Delete owner OWNS edge deterministically
+                if (uid != 0) {
+                    batch.del_edge(uid, "OWNS", 1.0, sid);
+                }
+
+                // Delete replicas
+                auto replicas = f_repl.get();
+                std::vector<std::future<std::vector<snowflake_id_t>>> f_hosts;
+                f_hosts.reserve(replicas.size());
+                for (auto rid : replicas) {
+                    f_hosts.push_back(client_->get_in_neighbors_async(local_cluster_id_, rid, "HOSTS_REPLICA"));
+                }
+                for (size_t i = 0; i < replicas.size(); ++i) {
+                    snowflake_id_t rid = replicas[i];
+                    batch.del_edge(sid, "HAS_REPLICA", 1.0, rid);
+                    // Check and delete HOSTS_REPLICA and STAYING_AT edges if present
+                    try {
+                        auto hosts = f_hosts[i].get();
+                        for (auto resc_sid : hosts) {
+                            batch.del_edge(resc_sid, "HOSTS_REPLICA", 1.0, rid);
+                            batch.del_edge(rid, "STAYING_AT", 1.0, resc_sid);
+                        }
+                        if (hosts.empty()) {
+                            auto staying = client_->get_neighbors_async(local_cluster_id_, rid, "STAYING_AT", 0.0).get();
+                            for (auto resc_sid : staying) {
+                                batch.del_edge(resc_sid, "HOSTS_REPLICA", 1.0, rid);
+                                batch.del_edge(rid, "STAYING_AT", 1.0, resc_sid);
+                            }
+                        }
+                    } catch (...) {}
+                    batch.del_node(rid);
+                }
+
+                // Delete access nodes and HAS_ACCESS edges
+                auto accesses = f_access.get();
+                if (!accesses.empty()) {
+                    std::vector<snowflake_id_t> members;
                     if (uid != 0) {
-                        batch.del_edge(uid, "HAS_ACCESS", 1.0, aid);
-                        for (auto mid : members) {
-                            batch.del_edge(mid, "HAS_ACCESS", 1.0, aid);
+                        bool cache_hit = false;
+                        auto now = std::chrono::steady_clock::now();
+                        {
+                            std::lock_guard<std::mutex> lock(s_user_members_mu);
+                            auto it = s_user_members_cache.find(uid);
+                            if (it != s_user_members_cache.end() && now < it->second.expires_at) {
+                                members = it->second.members;
+                                cache_hit = true;
+                            }
+                        }
+                        if (!cache_hit) {
+                            try {
+                                members = client_->get_in_neighbors_async(local_cluster_id_, uid, "MEMBER_OF").get();
+                                std::lock_guard<std::mutex> lock(s_user_members_mu);
+                                s_user_members_cache[uid] = {members, now + std::chrono::seconds(30)};
+                            } catch (...) {}
                         }
                     }
-                    batch.del_edge(aid, "FOR_OBJECT", 1.0, sid);
-                    batch.del_node(aid);
-                }
-            }
 
-            // Delete AVUs (only query incoming refs if AVUs actually exist)
-            auto avus = f_avus.get();
-            if (!avus.empty()) {
-                for (auto aid : avus) {
-                    batch.del_edge(sid, "ANNOTATED_WITH", 1.0, aid);
-                    auto refs = client_->get_in_neighbors_async(local_cluster_id_, aid, "ANNOTATED_WITH").get();
-                    if (refs.size() <= 1) batch.del_node(aid);
-                }
-            }
+                    snowflake_id_t owner_aid = 0;
+                    if (uid != 0) {
+                        std::string aid_uuid = std::to_string(uid) + ":" + std::to_string(sid);
+                        owner_aid = SnowflakeID::create(local_cluster_id_, aid_uuid);
+                    }
 
-            // Roundtrip 2: Delete node and execute atomic mutation batch
-            batch.del_node(sid);
-            client_->execute_batch_async(local_cluster_id_, batch).get();
-            return SUCCESS();
+                    // Query inbound HAS_ACCESS edges for non-owner access nodes in parallel
+                    std::vector<std::pair<snowflake_id_t, std::future<std::vector<snowflake_id_t>>>> non_owner_futs;
+                    for (auto aid : accesses) {
+                        if (aid != owner_aid || uid == 0) {
+                            non_owner_futs.emplace_back(aid, client_->get_in_neighbors_async(local_cluster_id_, aid, "HAS_ACCESS"));
+                        }
+                    }
+                    std::unordered_map<snowflake_id_t, std::vector<snowflake_id_t>> non_owner_uids;
+                    for (auto& [aid, fut] : non_owner_futs) {
+                        try {
+                            non_owner_uids[aid] = fut.get();
+                        } catch (...) {}
+                    }
+
+                    for (auto aid : accesses) {
+                        if (aid == owner_aid && uid != 0) {
+                            // Fast-path: owner access node, use cached uid and group members
+                            batch.del_edge(uid, "HAS_ACCESS", 1.0, aid);
+                            for (auto mid : members) {
+                                batch.del_edge(mid, "HAS_ACCESS", 1.0, aid);
+                            }
+                        } else {
+                            // Non-owner access node (custom ichmod ACL): query actual inbound HAS_ACCESS edges
+                            auto it = non_owner_uids.find(aid);
+                            if (it != non_owner_uids.end()) {
+                                for (auto u : it->second) {
+                                    batch.del_edge(u, "HAS_ACCESS", 1.0, aid);
+                                }
+                            } else {
+                                try {
+                                    auto uids = client_->get_in_neighbors_async(local_cluster_id_, aid, "HAS_ACCESS").get();
+                                    for (auto u : uids) {
+                                        batch.del_edge(u, "HAS_ACCESS", 1.0, aid);
+                                    }
+                                } catch (...) {}
+                            }
+                        }
+                        batch.del_edge(aid, "FOR_OBJECT", 1.0, sid);
+                        batch.del_node(aid);
+                    }
+                }
+
+                // Delete AVUs (only query incoming refs if AVUs actually exist)
+                auto avus = f_avus.get();
+                if (!avus.empty()) {
+                    for (auto aid : avus) {
+                        batch.del_edge(sid, "ANNOTATED_WITH", 1.0, aid);
+                        auto refs = client_->get_in_neighbors_async(local_cluster_id_, aid, "ANNOTATED_WITH").get();
+                        if (refs.size() <= 1) batch.del_node(aid);
+                    }
+                }
+
+                // Roundtrip 2: Delete node and execute atomic mutation batch
+                batch.del_node(sid);
+                client_->execute_batch_async(local_cluster_id_, batch).get();
+                return SUCCESS();
+            } catch (const std::exception& e) {
+                return ERROR(SYS_INTERNAL_ERR, e.what());
+            } catch (...) {
+                return ERROR(SYS_INTERNAL_ERR, "Unknown exception in delete_data_object");
+            }
         }
         irods::error rename_data_object(data_id_t obj_id, std::string_view new_name) { 
             snowflake_id_t sid = make_id(EntityType::DataObject, obj_id);
