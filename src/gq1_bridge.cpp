@@ -26,6 +26,11 @@ namespace irods::catalog::bridge {
             str.replace(pos, 2, "'");
             pos += 1;
         }
+        pos = 0;
+        while ((pos = str.find("\\\\", pos)) != std::string::npos) {
+            str.replace(pos, 2, "\\");
+            pos += 1;
+        }
         return str;
     }
 
@@ -68,9 +73,13 @@ namespace irods::catalog::bridge {
         } else {
             size_t start = i;
             while (i < cond.size() && !std::isspace(static_cast<unsigned char>(cond[i]))) ++i;
-            out_literal = std::string(cond.substr(start, i - start));
+            size_t end = i;
             while (i < cond.size() && std::isspace(static_cast<unsigned char>(cond[i]))) ++i;
-            return (i == cond.size() && !out_literal.empty());
+            if (i == cond.size() && end > start) {
+                out_literal = std::string(cond.substr(start, end - start));
+                return true;
+            }
+            return false;
         }
     }
 

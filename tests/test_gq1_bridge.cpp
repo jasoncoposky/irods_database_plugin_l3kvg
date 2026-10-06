@@ -251,7 +251,9 @@ TEST(Gq1BridgeTest, FastParseEqualityUnitTests) {
     EXPECT_FALSE(fast_parse_equality("= 'valid' extra", lit));
 
     // Unquoted with spaces in value
+    lit = "sentinel";
     EXPECT_FALSE(fast_parse_equality("= val1 val2", lit));
+    EXPECT_EQ(lit, "sentinel");
 
     // SQL keywords / non-equality conditions
     EXPECT_FALSE(fast_parse_equality("like 'pattern%'", lit));
@@ -261,6 +263,8 @@ TEST(Gq1BridgeTest, FastParseEqualityUnitTests) {
 }
 
 TEST(Gq1BridgeTest, SynthesizeGq2AstFastPathEqualityIntegration) {
+    namespace gq2 = irods::experimental::genquery2;
+
     genQueryInp_t inp{};
     memset(&inp, 0, sizeof(genQueryInp_t));
 
@@ -286,7 +290,34 @@ TEST(Gq1BridgeTest, SynthesizeGq2AstFastPathEqualityIntegration) {
     std::vector<snowflake_id_t> starting_nodes;
     auto ast = synthesize_gq2_ast(&inp, nullptr, starting_nodes);
 
-    EXPECT_EQ(ast.conditions.size(), 3);
+    ASSERT_EQ(ast.conditions.size(), 3);
+
+    const auto* cond0 = boost::get<gq2::condition>(&ast.conditions[0]);
+    ASSERT_NE(cond0, nullptr);
+    const auto* col0 = std::get_if<gq2::column>(&cond0->lhs);
+    ASSERT_NE(col0, nullptr);
+    EXPECT_EQ(col0->name, "COLL_NAME");
+    const auto* eq0 = boost::get<gq2::condition_equal>(&cond0->expression);
+    ASSERT_NE(eq0, nullptr);
+    EXPECT_EQ(eq0->string_literal, "/tempZone/home/rods");
+
+    const auto* cond1 = boost::get<gq2::condition>(&ast.conditions[1]);
+    ASSERT_NE(cond1, nullptr);
+    const auto* col1 = std::get_if<gq2::column>(&cond1->lhs);
+    ASSERT_NE(col1, nullptr);
+    EXPECT_EQ(col1->name, "DATA_NAME");
+    const auto* eq1 = boost::get<gq2::condition_equal>(&cond1->expression);
+    ASSERT_NE(eq1, nullptr);
+    EXPECT_EQ(eq1->string_literal, "my_file.txt");
+
+    const auto* cond2 = boost::get<gq2::condition>(&ast.conditions[2]);
+    ASSERT_NE(cond2, nullptr);
+    const auto* col2 = std::get_if<gq2::column>(&cond2->lhs);
+    ASSERT_NE(col2, nullptr);
+    EXPECT_EQ(col2->name, "DATA_SIZE");
+    const auto* eq2 = boost::get<gq2::condition_equal>(&cond2->expression);
+    ASSERT_NE(eq2, nullptr);
+    EXPECT_EQ(eq2->string_literal, "1024");
 
     free(inp.selectInp.inx);
     free(inp.selectInp.value);
