@@ -388,57 +388,52 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
 
         rodsLog(LOG_DEBUG, "L3_PLUGIN: db_reg_data_obj_op: obj.name=%s, obj.coll_id=%llu, obj.id=%llu", obj.name.c_str(), (unsigned long long)obj.coll_id, (unsigned long long)obj.id);
 
+        // Prepare initial replica
+        irods::catalog::replica repl;
+        repl.data_id = (uint64_t)obj.id;
+        repl.replica_number = (uint32_t)_info->replNum;
+        repl.resource_id = (uint64_t)_info->rescId;
+        repl.physical_path = safe_string(_info->filePath);
+        repl.resc_hier = safe_string(_info->rescHier);
+        repl.status = std::to_string(_info->replStatus);
+        repl.checksum = safe_string(_info->chksum);
+        repl.modify_ts = get_timestamp(safe_string(_info->dataModify));
+        repl.size = (int64_t)_info->dataSize;
+
+        if (repl.resc_hier.empty() && _info->rescName && _info->rescName[0] != '\0') {
+            repl.resc_hier = _info->rescName;
+        }
+
+        if (repl.resource_id == 0 && _info->rescName && _info->rescName[0] != '\0') {
+            std::string rname(_info->rescName);
+            {
+                std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+                auto it = s_rid_cache.find(rname);
+                if (it != s_rid_cache.end()) {
+                    repl.resource_id = it->second;
+                }
+            }
+            if (repl.resource_id == 0) {
+                irods::catalog::snowflake_id_t rsid;
+                if (g_catalog->resolve_resource_name(_info->rescName, rsid).ok()) {
+                    auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
+                    if (!payload.empty()) {
+                        lite3cpp::Buffer buf(payload);
+                        repl.resource_id = buf.get_i64(0, "id");
+                        std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+                        s_rid_cache[rname] = repl.resource_id;
+                    }
+                }
+            }
+        }
+
         irods::catalog::data_id_t out_id;
-        auto ret = g_catalog->register_data_object(obj, out_id);
+        auto ret = g_catalog->register_data_object(obj, out_id, &repl);
         if (!ret.ok()) {
             rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_data_obj_op ERROR: %ld - %s", ret.code(), ret.result().c_str());
             return ret;
         }
         _info->dataId = out_id;
-            
-        // Also register the initial replica, as R_DATA_MAIN traditionally holds both
-        irods::catalog::replica repl;
-        repl.data_id = (uint64_t)out_id;
-            repl.replica_number = (uint32_t)_info->replNum;
-            repl.resource_id = (uint64_t)_info->rescId;
-            repl.physical_path = safe_string(_info->filePath);
-            repl.resc_hier = safe_string(_info->rescHier);
-            repl.status = std::to_string(_info->replStatus);
-            repl.checksum = safe_string(_info->chksum);
-            repl.modify_ts = get_timestamp(safe_string(_info->dataModify));
-            repl.size = (int64_t)_info->dataSize;
-
-            if (repl.resc_hier.empty() && _info->rescName && _info->rescName[0] != '\0') {
-                repl.resc_hier = _info->rescName;
-            }
-
-            if (repl.resource_id == 0 && _info->rescName && _info->rescName[0] != '\0') {
-                std::string rname(_info->rescName);
-                {
-                    std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-                    auto it = s_rid_cache.find(rname);
-                    if (it != s_rid_cache.end()) {
-                        repl.resource_id = it->second;
-                    }
-                }
-                if (repl.resource_id == 0) {
-                    irods::catalog::snowflake_id_t rsid;
-                    if (g_catalog->resolve_resource_name(_info->rescName, rsid).ok()) {
-                        auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
-                        if (!payload.empty()) {
-                            lite3cpp::Buffer buf(payload);
-                            repl.resource_id = buf.get_i64(0, "id");
-                            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-                            s_rid_cache[rname] = repl.resource_id;
-                        }
-                    }
-                }
-            }
-            
-            auto repl_ret = g_catalog->register_replica(repl);
-            if (!repl_ret.ok()) {
-                rodsLog(LOG_ERROR, "L3_PLUGIN: db_reg_data_obj_op failed to register replica: %s", repl_ret.result().c_str());
-            }
 
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_data_obj_op SUCCESS");
         return ret;

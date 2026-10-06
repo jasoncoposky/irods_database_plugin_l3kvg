@@ -726,7 +726,7 @@ namespace irods::catalog {
         }
 
         // --- Data Object Operations ---
-        irods::error register_data_object(const data_object& obj, data_id_t& out_id) {
+        irods::error register_data_object(const data_object& obj, data_id_t& out_id, const replica* initial_repl = nullptr) {
             std::string full_path = obj.full_path;
             if (full_path.empty() && obj.coll_id != 0) {
                 snowflake_id_t csid = make_id(EntityType::Collection, obj.coll_id);
@@ -884,6 +884,32 @@ namespace irods::catalog {
                     batch.add_edge(mid, "HAS_ACCESS", 1.0, aid, "{}");
                 }
                 batch.add_edge(aid, "FOR_OBJECT", 1.0, sid, "{}");
+            }
+
+            if (initial_repl) {
+                uint64_t r_data_id = initial_repl->data_id != 0 ? initial_repl->data_id : obj.id;
+                std::string local_uuid = std::to_string(r_data_id) + ":" + std::to_string(initial_repl->replica_number);
+                snowflake_id_t rid = SnowflakeID::create(local_cluster_id_, local_uuid);
+                lite3cpp::Buffer r_buf; r_buf.init_object();
+                r_buf.set_i64(0, "id", static_cast<int64_t>(r_data_id));
+                r_buf.set_str(0, "p", initial_repl->physical_path);
+                r_buf.set_str(0, "rh", initial_repl->resc_hier);
+                r_buf.set_str(0, "st", initial_repl->status);
+                r_buf.set_str(0, "c", initial_repl->checksum);
+                r_buf.set_str(0, "cs", initial_repl->checksum);
+                r_buf.set_str(0, "mt", initial_repl->modify_ts);
+                r_buf.set_str(0, "t", "replica");
+                r_buf.set_str(0, "entity_type", "replica");
+                r_buf.set_i64(0, "s", initial_repl->size);
+                r_buf.set_i64(0, "rn", static_cast<int64_t>(initial_repl->replica_number));
+                r_buf.set_i64(0, "rid", static_cast<int64_t>(initial_repl->resource_id));
+                batch.put_node(rid, r_buf.move_to_string());
+                batch.add_edge(sid, "HAS_REPLICA", 1.0, rid, "{}");
+                if (initial_repl->resource_id != 0) {
+                    snowflake_id_t resc_sid = make_id(EntityType::Resource, initial_repl->resource_id);
+                    batch.add_edge(resc_sid, "HOSTS_REPLICA", 1.0, rid, "{}");
+                    batch.add_edge(rid, "STAYING_AT", 1.0, resc_sid, "{}");
+                }
             }
 
             client_->execute_batch_async(local_cluster_id_, batch).get();
@@ -1061,14 +1087,33 @@ namespace irods::catalog {
             snowflake_id_t sid = make_id(EntityType::DataObject, obj_id);
             snowflake_id_t cid = make_id(EntityType::Collection, target_coll_id);
             
-            std::string d_payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
-            if (d_payload.empty()) return ERROR(CAT_UNKNOWN_FILE, "Data object not found");
+            std::string target_coll_path;
+            {
+                std::lock_guard<std::mutex> lock(s_reg_cache_mu);
+                auto it = s_coll_path_cache.find(cid);
+                if (it != s_coll_path_cache.end()) {
+                    target_coll_path = it->second;
+                }
+            }
+            if (target_coll_path.empty()) {
+                std::string c_payload = client_->get_node_payload_async(local_cluster_id_, cid).get();
+                if (c_payload.empty()) return ERROR(CAT_UNKNOWN_COLLECTION, "Target collection not found");
+                lite3cpp::Buffer cbuf(c_payload);
+                target_coll_path = safe_get_str(cbuf, 0, "n");
+                if (!target_coll_path.empty()) {
+                    std::lock_guard<std::mutex> lock(s_reg_cache_mu);
+                    s_coll_path_cache[cid] = target_coll_path;
+                }
+            }
 
-            std::string c_payload = client_->get_node_payload_async(local_cluster_id_, cid).get();
-            if (c_payload.empty()) return ERROR(CAT_UNKNOWN_COLLECTION, "Target collection not found");
+            auto f_payload = client_->get_node_payload_async(local_cluster_id_, sid);
+            auto f_in_colls = client_->get_in_neighbors_async(local_cluster_id_, sid, "CONTAINS");
+
+            std::string d_payload = f_payload.get();
+            if (d_payload.empty()) return ERROR(CAT_UNKNOWN_FILE, "Data object not found");
+            auto in_colls = f_in_colls.get();
 
             lite3cpp::Buffer dbuf(d_payload);
-            lite3cpp::Buffer cbuf(c_payload);
 
             std::string data_name = safe_get_str(dbuf, 0, "n");
             std::string old_path = safe_get_str(dbuf, 0, "p");
@@ -1077,39 +1122,33 @@ namespace irods::catalog {
                 size_t old_slash = old_path.find_last_of('/');
                 old_parent_path = (old_slash == 0) ? "/" : (old_slash != std::string::npos ? old_path.substr(0, old_slash) : "");
             }
-            std::string target_coll_path = safe_get_str(cbuf, 0, "n");
             std::string new_path = (target_coll_path == "/" ? "/" : target_coll_path + "/") + data_name;
 
-            // Remove old CONTAINS edge(s) from collection(s) to this data object
-            auto in_colls = client_->get_in_neighbors_async(local_cluster_id_, sid, "CONTAINS").get();
-            for (auto old_cid : in_colls) {
-                del_edge(old_cid, "CONTAINS", 1.0, sid);
-            }
-
-            // Add new CONTAINS edge
-            add_edge(cid, "CONTAINS", 1.0, sid);
-
-            // Update data object path and timestamp
             char time_buf[50];
             snprintf(time_buf, sizeof(time_buf), "%011lld", (long long)time(nullptr));
             dbuf.set_str(0, "p", new_path);
             dbuf.set_str(0, "pn", target_coll_path);
             dbuf.set_str(0, "mt", std::string(time_buf));
-            client_->put_node_async(local_cluster_id_, sid, dbuf.move_to_string()).get();
 
-            if (!old_path.empty()) {
-                del_index(EntityType::DataObject, "path", old_path);
+            l3kvg::MutationBatch batch;
+            for (auto old_cid : in_colls) {
+                batch.del_edge(old_cid, "CONTAINS", 1.0, sid);
             }
-            add_index(EntityType::DataObject, "path", new_path, sid);
-
-            if (!old_parent_path.empty()) {
-                char id_hex[17];
-                std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
-                client_->del_raw_async(local_cluster_id_, get_idx_key(EntityType::DataObject, "pn", old_parent_path) + ":" + id_hex);
+            batch.add_edge(cid, "CONTAINS", 1.0, sid);
+            batch.put_node(sid, dbuf.move_to_string());
+            if (!old_path.empty()) {
+                batch.del_raw(get_idx_key(EntityType::DataObject, "path", old_path));
             }
             char id_hex[17];
             std::snprintf(id_hex, sizeof(id_hex), "%016llx", (unsigned long long)sid);
-            client_->put_raw_async(local_cluster_id_, get_idx_key(EntityType::DataObject, "pn", target_coll_path) + ":" + id_hex, id_hex);
+            batch.put_raw(get_idx_key(EntityType::DataObject, "path", new_path), id_hex);
+
+            if (!old_parent_path.empty()) {
+                batch.del_raw(get_idx_key(EntityType::DataObject, "pn", old_parent_path) + ":" + id_hex);
+            }
+            batch.put_raw(get_idx_key(EntityType::DataObject, "pn", target_coll_path) + ":" + id_hex, id_hex);
+
+            client_->execute_batch_async(local_cluster_id_, batch).get();
 
             return SUCCESS(); 
         }
@@ -1792,9 +1831,11 @@ namespace irods::catalog {
 
         irods::error move_object(uint64_t obj_id, uint64_t target_coll_id) {
             snowflake_id_t cid = make_id(EntityType::Collection, obj_id);
-            std::string c_payload = client_->get_node_payload_async(local_cluster_id_, cid).get();
             snowflake_id_t did = make_id(EntityType::DataObject, obj_id);
-            std::string d_payload = client_->get_node_payload_async(local_cluster_id_, did).get();
+            auto f_c = client_->get_node_payload_async(local_cluster_id_, cid);
+            auto f_d = client_->get_node_payload_async(local_cluster_id_, did);
+            std::string c_payload = f_c.get();
+            std::string d_payload = f_d.get();
 
             if (!c_payload.empty() && !d_payload.empty()) {
                 lite3cpp::Buffer cbuf(c_payload);
@@ -2671,12 +2712,31 @@ namespace irods::catalog {
                 effective_seq = "R_OBJECTID";
             }
             std::string key = "seq:" + effective_seq;
+            if (effective_seq == "R_OBJECTID") {
+                static std::mutex s_objid_mu;
+                static uint64_t s_objid_curr = 0;
+                static uint64_t s_objid_limit = 0;
+
+                std::lock_guard<std::mutex> lock(s_objid_mu);
+                if (s_objid_curr < s_objid_limit) {
+                    out_val = ++s_objid_curr;
+                    return SUCCESS();
+                }
+
+                uint64_t block_end = client_->atomic_incr_async(local_cluster_id_, key, 100).get();
+                if (block_end == 0) return ERROR(-1, "Failed to increment sequence: " + std::string(seq_name));
+                if (block_end < 100000) {
+                    uint64_t jump = 100000 - block_end + 100;
+                    block_end = client_->atomic_incr_async(local_cluster_id_, key, jump).get();
+                }
+                s_objid_limit = block_end;
+                s_objid_curr = block_end - 100;
+                out_val = ++s_objid_curr;
+                return SUCCESS();
+            }
+
             out_val = client_->atomic_incr_async(local_cluster_id_, key, 1).get();
             if (out_val == 0) return ERROR(-1, "Failed to increment sequence: " + std::string(seq_name));
-            if (effective_seq == "R_OBJECTID" && out_val < 100000) {
-                uint64_t jump = 100000 - out_val;
-                out_val = client_->atomic_incr_async(local_cluster_id_, key, jump).get();
-            }
             return SUCCESS();
         }
 
@@ -4592,7 +4652,7 @@ namespace irods::catalog {
     irods::error CatalogFacade::init(const Config& cfg, std::string_view zone_name, const l3kvg::Settings& settings) { return pImpl_->init(cfg, zone_name, settings); }
     irods::error CatalogFacade::bootstrap_catalog(std::string_view zone_name, std::string_view admin_name) { return pImpl_->bootstrap_catalog(zone_name, admin_name); }
     irods::error CatalogFacade::bootstrap_federation(const std::vector<FederatedZone>& peers) { return pImpl_->bootstrap_federation(peers); }
-    irods::error CatalogFacade::register_data_object(const data_object& obj, data_id_t& out_id) { return pImpl_->register_data_object(obj, out_id); }
+    irods::error CatalogFacade::register_data_object(const data_object& obj, data_id_t& out_id, const replica* initial_repl) { return pImpl_->register_data_object(obj, out_id, initial_repl); }
     irods::error CatalogFacade::delete_data_object(data_id_t id) { return pImpl_->delete_data_object(id); }
     irods::error CatalogFacade::rename_data_object(data_id_t obj_id, std::string_view new_name) { return pImpl_->rename_data_object(obj_id, new_name); }
     irods::error CatalogFacade::move_data_object(data_id_t obj_id, coll_id_t target_coll_id) { return pImpl_->move_data_object(obj_id, target_coll_id); }

@@ -1053,9 +1053,8 @@ namespace irods::catalog::bridge {
             int col_len = 2700; 
             
             _out->sqlResult[i].len = col_len;
-            _out->sqlResult[i].value = (char*)malloc(_out->rowCnt * col_len);
+            _out->sqlResult[i].value = (char*)calloc(_out->rowCnt, col_len);
             if (!_out->sqlResult[i].value) throw std::runtime_error("Failed to allocate result buffer");
-            memset(_out->sqlResult[i].value, 0, _out->rowCnt * col_len);
 
             // Hoist column type check out of row loop
             const bool is_string_col = (pure_inx == COL_DATA_NAME || pure_inx == COL_COLL_NAME || 

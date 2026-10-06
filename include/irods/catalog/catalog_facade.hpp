@@ -91,7 +91,7 @@ namespace irods::catalog {
         irods::error bootstrap_federation(const std::vector<FederatedZone>& peers);
 
         // Data Object Operations
-        irods::error register_data_object(const data_object& obj, data_id_t& out_id);
+        irods::error register_data_object(const data_object& obj, data_id_t& out_id, const replica* initial_repl = nullptr);
         irods::error delete_data_object(data_id_t id);
         irods::error rename_data_object(data_id_t obj_id, std::string_view new_name);
         irods::error move_data_object(data_id_t obj_id, coll_id_t target_coll_id);
