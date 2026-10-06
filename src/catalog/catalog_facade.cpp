@@ -1469,7 +1469,7 @@ namespace irods::catalog {
             snowflake_id_t sid = make_id(EntityType::DataObject, obj_id);
             auto replicas = client_->get_neighbors_async(local_cluster_id_, sid, "HAS_REPLICA", 0.0).get();
 
-            rodsLog(LOG_NOTICE, "L3_CATALOG: modify_replicas_for_data_object obj_id=%llu, repl_num=%u, resc_hier='%.*s', updates_count=%zu, all_replicas=%d, replica_count=%zu",
+            rodsLog(LOG_DEBUG, "L3_CATALOG: modify_replicas_for_data_object obj_id=%llu, repl_num=%u, resc_hier='%.*s', updates_count=%zu, all_replicas=%d, replica_count=%zu",
                     (unsigned long long)obj_id, repl_num, (int)resc_hier.size(), resc_hier.data(), updates.size(), all_replicas ? 1 : 0, replicas.size());
 
             bool update_resc_hier = false;
@@ -1589,6 +1589,137 @@ namespace irods::catalog {
             }
             return SUCCESS();
         }
+        irods::error modify_data_object_and_replica(
+            data_id_t data_id,
+            uint32_t repl_num,
+            std::string_view resc_hier,
+            const std::vector<std::pair<std::string, std::string>>& updates,
+            bool all_repl_status,
+            bool all_replicas = false) {
+            try {
+                snowflake_id_t sid = make_id(EntityType::DataObject, data_id);
+                std::string local_uuid = std::to_string(data_id) + ":" + std::to_string(repl_num);
+                snowflake_id_t primary_rid = SnowflakeID::create(local_cluster_id_, local_uuid);
+
+                // Roundtrip 1: Concurrent parallel read
+                auto f_data = client_->get_node_payload_async(local_cluster_id_, sid);
+                auto f_repl = client_->get_node_payload_async(local_cluster_id_, primary_rid);
+                auto f_repls = client_->get_neighbors_async(local_cluster_id_, sid, "HAS_REPLICA", 0.0);
+
+                std::string d_payload = f_data.get();
+                std::string r_payload = f_repl.get();
+                auto replicas = f_repls.get();
+
+                if (d_payload.empty()) {
+                    return ERROR(CAT_UNKNOWN_FILE, "DataObject not found for modify");
+                }
+                if (replicas.empty()) {
+                    replicas.push_back(primary_rid);
+                }
+
+                // Check if resc_hier specifies resource
+                std::string leaf_name;
+                if (!resc_hier.empty()) {
+                    leaf_name = std::string(resc_hier);
+                    auto sep = leaf_name.rfind(';');
+                    if (sep != std::string::npos) leaf_name = leaf_name.substr(sep + 1);
+                }
+
+                // Update DataObject payload
+                lite3cpp::Buffer dbuf(reinterpret_cast<const uint8_t*>(d_payload.data()), d_payload.size());
+                for (const auto& [kw, val] : updates) {
+                    if (kw == "dataSize" || kw == "data_size" || kw == "DATA_SIZE" || kw == "size" || kw == "s") {
+                        try { dbuf.set_i64(0, "s", std::stoll(val)); } catch (...) {}
+                    } else if (kw == "dataModify" || kw == "modify_ts" || kw == "DATA_MODIFY_TIME" || kw == "mt") {
+                        dbuf.set_str(0, "mt", val);
+                    } else if (kw == "dataCreate" || kw == "create_ts" || kw == "DATA_CREATE_TIME" || kw == "ct") {
+                        dbuf.set_str(0, "ct", val);
+                    } else if (kw == "dataComments" || kw == "r_comment" || kw == "DATA_COMMENTS" || kw == "cm" || kw == "c") {
+                        dbuf.set_str(0, "c", val);
+                    } else if (kw == "dataType" || kw == "data_type_name" || kw == "DATA_TYPE_NAME" || kw == "t") {
+                        dbuf.set_str(0, "t", val);
+                    } else if (kw == "dataOwner" || kw == "data_owner_name" || kw == "DATA_OWNER_NAME" || kw == "o") {
+                        dbuf.set_str(0, "o", val);
+                    } else if (kw == "dataOwnerZone" || kw == "data_owner_zone" || kw == "DATA_OWNER_ZONE" || kw == "z") {
+                        dbuf.set_str(0, "z", val);
+                    } else if (kw == "dataMode" || kw == "data_mode" || kw == "DATA_MODE" || kw == "mode") {
+                        dbuf.set_str(0, "mode", val);
+                    } else if (kw == "dataExpiry" || kw == "data_expiry_ts" || kw == "DATA_EXPIRY" || kw == "ex") {
+                        dbuf.set_str(0, "ex", val);
+                    }
+                }
+
+                l3kvg::MutationBatch batch;
+                batch.put_node(sid, dbuf.move_to_string());
+
+                // Update replicas
+                // If primary replica matches, update directly
+                if (!r_payload.empty() && (all_replicas || replicas.size() == 1 || repl_num == 0)) {
+                    lite3cpp::Buffer rbuf(reinterpret_cast<const uint8_t*>(r_payload.data()), r_payload.size());
+                    for (const auto& [kw, val] : updates) {
+                        if (kw == "dataModify" || kw == "modify_ts" || kw == "DATA_MODIFY_TIME" || kw == "mt") {
+                            rbuf.set_str(0, "mt", val);
+                        } else if (kw == "chksum" || kw == "data_checksum" || kw == "DATA_CHECKSUM" || kw == "cs") {
+                            rbuf.set_str(0, "cs", val);
+                            rbuf.set_str(0, "c", val);
+                        } else if (kw == "filePath" || kw == "data_path" || kw == "DATA_PATH" || kw == "p") {
+                            rbuf.set_str(0, "p", val);
+                        } else if (kw == "rescHier" || kw == "resc_hier" || kw == "DATA_RESC_HIER" || kw == "rh") {
+                            rbuf.set_str(0, "rh", val);
+                        } else if (kw == "rescId" || kw == "resc_id" || kw == "DATA_RESC_ID") {
+                            try { rbuf.set_i64(0, "rid", std::stoll(val)); } catch (...) {}
+                        } else if (kw == "replStatus" || kw == "data_is_dirty" || kw == "DATA_REPL_STATUS" || kw == "st") {
+                            if (!all_repl_status) {
+                                rbuf.set_str(0, "st", val);
+                            }
+                        } else if (kw == "dataSize" || kw == "data_size" || kw == "DATA_SIZE" || kw == "size" || kw == "s") {
+                            try { rbuf.set_i64(0, "s", std::stoll(val)); } catch (...) {}
+                        }
+                    }
+                    if (all_repl_status) {
+                        rbuf.set_str(0, "st", "1"); // GOOD_REPLICA
+                    }
+                    batch.put_node(primary_rid, rbuf.move_to_string());
+                } else {
+                    // Fallback: update matching replicas from replicas list
+                    for (auto rid : replicas) {
+                        std::string payload = (rid == primary_rid && !r_payload.empty()) ? r_payload : client_->get_node_payload_async(local_cluster_id_, rid).get();
+                        if (payload.empty()) continue;
+                        lite3cpp::Buffer rbuf(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+                        uint32_t rn = 0;
+                        try { rn = static_cast<uint32_t>(rbuf.get_i64(0, "rn")); } catch (...) {}
+                        std::string rh{safe_get_str(rbuf, 0, "rh")};
+                        bool target_matched = false;
+                        if (all_replicas || (rn == repl_num) || (!resc_hier.empty() && (rh == resc_hier || rh == leaf_name))) {
+                            target_matched = true;
+                        }
+                        if (all_repl_status) {
+                            rbuf.set_str(0, "st", target_matched ? "1" : "0");
+                        }
+                        if (target_matched) {
+                            for (const auto& [kw, val] : updates) {
+                                if (kw == "dataModify" || kw == "modify_ts" || kw == "DATA_MODIFY_TIME" || kw == "mt") rbuf.set_str(0, "mt", val);
+                                else if (kw == "chksum" || kw == "data_checksum" || kw == "DATA_CHECKSUM" || kw == "cs") { rbuf.set_str(0, "cs", val); rbuf.set_str(0, "c", val); }
+                                else if (kw == "filePath" || kw == "data_path" || kw == "DATA_PATH" || kw == "p") rbuf.set_str(0, "p", val);
+                                else if (kw == "rescHier" || kw == "resc_hier" || kw == "DATA_RESC_HIER" || kw == "rh") rbuf.set_str(0, "rh", val);
+                                else if (kw == "rescId" || kw == "resc_id" || kw == "DATA_RESC_ID") { try { rbuf.set_i64(0, "rid", std::stoll(val)); } catch (...) {} }
+                                else if (kw == "replStatus" || kw == "data_is_dirty" || kw == "DATA_REPL_STATUS" || kw == "st") { if (!all_repl_status) rbuf.set_str(0, "st", val); }
+                                else if (kw == "dataSize" || kw == "data_size" || kw == "DATA_SIZE" || kw == "size" || kw == "s") { try { rbuf.set_i64(0, "s", std::stoll(val)); } catch (...) {} }
+                            }
+                            batch.put_node(rid, rbuf.move_to_string());
+                        }
+                    }
+                }
+
+                // Roundtrip 2: Atomic mutation batch
+                client_->execute_batch_async(local_cluster_id_, batch).get();
+                return SUCCESS();
+            } catch (const std::exception& e) {
+                return ERROR(SYS_INTERNAL_ERR, e.what());
+            } catch (...) {
+                return ERROR(SYS_INTERNAL_ERR, "Unknown exception in modify_data_object_and_replica");
+            }
+        }
 
         // --- Collections ---
         irods::error register_collection(const collection& coll, coll_id_t& out_id) {
@@ -1642,7 +1773,7 @@ namespace irods::catalog {
 
             snowflake_id_t sid = make_id(EntityType::Collection, coll.id);
             #ifdef IRODS_SERVER
-            rodsLog(LOG_NOTICE, "L3_CATALOG: Registering Collection [%s] with ID [%llu] (SID: %016llx)", coll.name.c_str(), (unsigned long long)coll.id, (unsigned long long)sid);
+            rodsLog(LOG_DEBUG, "L3_CATALOG: Registering Collection [%s] with ID [%llu] (SID: %016llx)", coll.name.c_str(), (unsigned long long)coll.id, (unsigned long long)sid);
             #endif
             lite3cpp::Buffer buf; buf.init_object(); 
             buf.set_str(0, "n", coll.name); 
@@ -1679,7 +1810,7 @@ namespace irods::catalog {
 
             if (psid != 0 && psid != sid) {
                 #ifdef IRODS_SERVER
-                rodsLog(LOG_NOTICE, "L3_CATALOG: Creating CONTAINS edge (Coll-to-Coll): %016llx -- CONTAINS --> %016llx", (unsigned long long)psid, (unsigned long long)sid);
+                rodsLog(LOG_DEBUG, "L3_CATALOG: Creating CONTAINS edge (Coll-to-Coll): %016llx -- CONTAINS --> %016llx", (unsigned long long)psid, (unsigned long long)sid);
                 #endif
                 add_edge(psid, "CONTAINS", 1.0, sid);
             } else if (psid == 0) {
@@ -4857,6 +4988,15 @@ namespace irods::catalog {
     irods::error CatalogFacade::unregister_replica(data_id_t data_id, uint32_t repl_num) { return pImpl_->unregister_replica(data_id, repl_num); }
     irods::error CatalogFacade::update_replica_access_time(data_id_t data_id, uint32_t repl_num, std::string_view time) { return pImpl_->update_replica_access_time(data_id, repl_num, time); }
     irods::error CatalogFacade::modify_replicas_for_data_object(data_id_t obj_id, uint32_t repl_num, std::string_view resc_hier, const std::vector<std::pair<std::string, std::string>>& updates, bool all_repl_status, bool all_replicas) { return pImpl_->modify_replicas_for_data_object(obj_id, repl_num, resc_hier, updates, all_repl_status, all_replicas); }
+    irods::error CatalogFacade::modify_data_object_and_replica(
+        data_id_t data_id,
+        uint32_t repl_num,
+        std::string_view resc_hier,
+        const std::vector<std::pair<std::string, std::string>>& updates,
+        bool all_repl_status,
+        bool all_replicas) {
+        return pImpl_->modify_data_object_and_replica(data_id, repl_num, resc_hier, updates, all_repl_status, all_replicas);
+    }
     uint32_t CatalogFacade::get_next_replica_number(data_id_t data_id) { return pImpl_->get_next_replica_number(data_id); }
     irods::error CatalogFacade::register_collection(const collection& coll, coll_id_t& out_id) { return pImpl_->register_collection(coll, out_id); }
     irods::error CatalogFacade::rename_collection(std::string_view old_name, std::string_view new_name) { return pImpl_->rename_collection(old_name, new_name); }

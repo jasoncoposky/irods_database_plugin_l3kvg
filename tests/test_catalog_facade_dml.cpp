@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "irods/catalog/catalog_facade.hpp"
 #include "irods/catalog/gq2_compiler.hpp"
+#include "irods/rodsErrorTable.h"
 #include "mock_l3kvg.hpp"
 #include "buffer.hpp"
 #include <random>
@@ -209,4 +210,95 @@ TEST_F(CatalogFacadeDmlTest, ExecuteDmlUnknownEntityType) {
     lite3cpp::Buffer res;
     auto err = facade_.execute_dml(plan, res);
     EXPECT_FALSE(err.ok());
+}
+
+TEST_F(CatalogFacadeDmlTest, ModifyDataObjectAndReplicaUnified) {
+    // 1. Register a collection
+    collection coll;
+    coll.id = 500;
+    coll.name = "/tempZone/home/rods/modcoll";
+    coll.owner_name = "rods";
+    coll.owner_zone = "tempZone";
+    coll_id_t coll_id = 0;
+    ASSERT_TRUE(facade_.register_collection(coll, coll_id).ok());
+
+    // 2. Register a Data Object with initial replica
+    data_object obj;
+    obj.id = 5001;
+    obj.coll_id = coll_id;
+    obj.name = "test_mod.dat";
+    obj.owner_name = "rods";
+    obj.owner_zone = "tempZone";
+    obj.size = 100;
+    obj.create_ts = "0100000000";
+    obj.modify_ts = "0100000000";
+
+    replica repl;
+    repl.data_id = 5001;
+    repl.replica_number = 0;
+    repl.resc_hier = "demoResc";
+    repl.physical_path = "/var/lib/irods/Vault/test_mod.dat";
+    repl.status = "0";
+    repl.size = 100;
+    repl.modify_ts = "0100000000";
+
+    data_id_t registered_data_id = 0;
+    ASSERT_TRUE(facade_.register_data_object(obj, registered_data_id, &repl).ok());
+    EXPECT_EQ(registered_data_id, 5001);
+
+    // 3. Perform unified modification:
+    // Update dataSize to 4096, dataModify to "0170000000", chksum to "sha2:xyz",
+    // filePath to "/new/path/test_mod.dat", dataComments to "updated comment",
+    // and all_repl_status = true (which should mark good replica status "1")
+    std::vector<std::pair<std::string, std::string>> updates = {
+        {"dataSize", "4096"},
+        {"dataModify", "0170000000"},
+        {"chksum", "sha2:xyz"},
+        {"filePath", "/new/path/test_mod.dat"},
+        {"dataComments", "updated comment"}
+    };
+
+    auto mod_err = facade_.modify_data_object_and_replica(
+        5001,
+        0,
+        "demoResc",
+        updates,
+        true,   // all_repl_status
+        false   // all_replicas
+    );
+    ASSERT_TRUE(mod_err.ok()) << mod_err.result();
+
+    // 4. Verify updates on mock server
+    uint16_t cluster_id = facade_.get_cluster_id();
+    snowflake_id_t sid = facade_.make_id(EntityType::DataObject, 5001);
+    std::string local_uuid = "5001:0";
+    snowflake_id_t rid = SnowflakeID::create(cluster_id, local_uuid);
+
+    ASSERT_TRUE(mock_server_->has_node(sid));
+    ASSERT_TRUE(mock_server_->has_node(rid));
+
+    // DataObject node checks:
+    auto d_node = mock_server_->get_node(sid);
+    EXPECT_EQ(d_node.get_attribute<int64_t>("s"), 4096);
+    EXPECT_EQ(d_node.get_attribute<std::string>("mt"), "0170000000");
+    EXPECT_EQ(d_node.get_attribute<std::string>("c"), "updated comment");
+
+    // Replica node checks:
+    auto r_node = mock_server_->get_node(rid);
+    EXPECT_EQ(r_node.get_attribute<int64_t>("s"), 4096);
+    EXPECT_EQ(r_node.get_attribute<std::string>("mt"), "0170000000");
+    EXPECT_EQ(r_node.get_attribute<std::string>("cs"), "sha2:xyz");
+    EXPECT_EQ(r_node.get_attribute<std::string>("p"), "/new/path/test_mod.dat");
+    EXPECT_EQ(r_node.get_attribute<std::string>("st"), "1");
+
+    // 5. Test non-existent data object
+    auto non_exist_err = facade_.modify_data_object_and_replica(
+        99999,
+        0,
+        "demoResc",
+        updates,
+        false
+    );
+    EXPECT_FALSE(non_exist_err.ok());
+    EXPECT_EQ(non_exist_err.code(), CAT_UNKNOWN_FILE);
 }

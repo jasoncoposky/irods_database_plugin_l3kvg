@@ -111,6 +111,13 @@ namespace irods::catalog {
         irods::error unregister_replica(data_id_t data_id, uint32_t repl_num);
         irods::error update_replica_access_time(data_id_t data_id, uint32_t repl_num, std::string_view time);
         irods::error modify_replicas_for_data_object(data_id_t obj_id, uint32_t repl_num, std::string_view resc_hier, const std::vector<std::pair<std::string, std::string>>& updates, bool all_repl_status, bool all_replicas = false);
+        irods::error modify_data_object_and_replica(
+            data_id_t data_id,
+            uint32_t repl_num,
+            std::string_view resc_hier,
+            const std::vector<std::pair<std::string, std::string>>& updates,
+            bool all_repl_status,
+            bool all_replicas = false);
         uint32_t get_next_replica_number(data_id_t data_id);
 
         // Collection Operations
