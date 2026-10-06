@@ -59,6 +59,9 @@ namespace irods::catalog {
     static std::mutex s_user_members_mu;
     static std::unordered_map<snowflake_id_t, UserMembersCacheEntry> s_user_members_cache;
 
+    static std::mutex s_coll_mtime_mu;
+    static std::unordered_map<coll_id_t, std::string> s_coll_mtime_cache;
+
     static void invalidate_user_cache(snowflake_id_t uid) {
         if (uid != 0) {
             std::lock_guard<std::mutex> lock(s_user_cache_mu);
@@ -2307,9 +2310,22 @@ namespace irods::catalog {
                 std::lock_guard<std::mutex> lock(s_path_cache_mu);
                 s_coll_name_cache.erase(deleted_coll_path);
             }
+            {
+                std::lock_guard<std::mutex> lock(s_coll_mtime_mu);
+                s_coll_mtime_cache.erase(coll_id);
+            }
             return SUCCESS(); 
         }
         irods::error modify_collection(coll_id_t coll_id, std::string_view prop, std::string_view value) { 
+            if (prop == "modify_ts" || prop == "collModify" || prop == "collectionMtime" || prop == "mtime") {
+                std::lock_guard<std::mutex> lock(s_coll_mtime_mu);
+                auto it = s_coll_mtime_cache.find(coll_id);
+                if (it != s_coll_mtime_cache.end() && it->second == value) {
+                    return SUCCESS(); // already up-to-date in this second!
+                }
+                s_coll_mtime_cache[coll_id] = std::string(value);
+            }
+
             snowflake_id_t sid = make_id(EntityType::Collection, coll_id);
             std::string payload = client_->get_node_payload_async(local_cluster_id_, sid).get();
             if (payload.empty()) {
@@ -5088,6 +5104,10 @@ namespace irods::catalog {
         {
             std::lock_guard<std::mutex> lock(s_reg_cache_mu);
             s_coll_path_cache.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lock(s_coll_mtime_mu);
+            s_coll_mtime_cache.clear();
         }
     }
     irods::error CatalogFacade::execute_query(const irods::experimental::genquery2::select& ast, ResultSet& results, const std::vector<uint64_t>& starting_nodes, std::string_view root_type, const irods::experimental::genquery2::options* opts) { return pImpl_->execute_query(ast, results, starting_nodes, root_type, opts); }

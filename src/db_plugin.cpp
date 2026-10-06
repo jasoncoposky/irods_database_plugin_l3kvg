@@ -137,6 +137,12 @@ static std::mutex s_rid_cache_mu;
 static std::unordered_map<std::string, uint64_t> s_rid_cache;
 static std::unordered_map<uint64_t, std::string> s_rname_by_id_cache;
 
+static std::mutex s_coll_acls_mu;
+static std::unordered_map<std::string, std::pair<std::vector<irods::catalog::AclEntry>, std::chrono::steady_clock::time_point>> s_coll_acls_cache;
+
+static std::mutex s_grid_cfg_mu;
+static std::unordered_map<std::string, std::pair<std::string, std::chrono::steady_clock::time_point>> s_grid_cfg_cache;
+
 irods::error init_l3kvg_catalog();
 
 static void atfork_child() {
@@ -153,6 +159,14 @@ static void atfork_child() {
         std::lock_guard<std::mutex> lock(s_rid_cache_mu);
         s_rid_cache.clear();
         s_rname_by_id_cache.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(s_coll_acls_mu);
+        s_coll_acls_cache.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(s_grid_cfg_mu);
+        s_grid_cfg_cache.clear();
     }
     init_l3kvg_catalog();
     if (g_catalog) {
@@ -2312,6 +2326,10 @@ irods::error db_set_avu_metadata_op(irods::plugin_context& _ctx, const char* _ty
 irods::error db_mod_access_control_op(irods::plugin_context& _ctx, int _recursive, const char* _access_level, const char* _user, const char* _zone, const char* _path) {
     try {
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_access_control_op");
+        {
+            std::lock_guard<std::mutex> lock(s_coll_acls_mu);
+            s_coll_acls_cache.clear();
+        }
         auto ret = g_catalog->set_access(safe_string(_user), safe_string(_zone), safe_string(_path), safe_string(_access_level), _recursive != 0);
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_access_control_op SUCCESS");
         return ret;
@@ -2786,23 +2804,30 @@ irods::error db_specific_query_op(
                                   (sql_str.find("R_COLL_MAIN") != std::string::npos && sql_str.find("R_OBJT_ACCESS") != std::string::npos));
 
         if (is_show_coll_acls) {
-            bool has_query = false;
-            g_catalog->has_specific_query("ShowCollAcls", has_query);
-            if (!has_query) {
-                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_specific_query_op: ShowCollAcls not found in catalog");
-                return ERROR(CAT_UNKNOWN_SPECIFIC_QUERY, "unknown query: ShowCollAcls");
-            }
-
             std::string coll_name = safe_string(_spec_query_inp->args[0]);
             if (coll_name.empty()) {
                 return ERROR(CAT_INVALID_ARGUMENT, "missing collection argument for ShowCollAcls");
             }
 
             std::vector<irods::catalog::AclEntry> acls;
-            auto ret = g_catalog->get_collection_acls(coll_name, acls);
-            if (!ret.ok()) {
-                rodsLog(LOG_DEBUG, "L3_PLUGIN: db_specific_query_op: get_collection_acls failed: %s", ret.result().c_str());
-                return ret;
+            bool cache_hit = false;
+            auto now = std::chrono::steady_clock::now();
+            {
+                std::lock_guard<std::mutex> lock(s_coll_acls_mu);
+                auto it = s_coll_acls_cache.find(coll_name);
+                if (it != s_coll_acls_cache.end() && now < it->second.second) {
+                    acls = it->second.first;
+                    cache_hit = true;
+                }
+            }
+            if (!cache_hit) {
+                auto ret = g_catalog->get_collection_acls(coll_name, acls);
+                if (!ret.ok()) {
+                    rodsLog(LOG_DEBUG, "L3_PLUGIN: db_specific_query_op: get_collection_acls failed: %s", ret.result().c_str());
+                    return ret;
+                }
+                std::lock_guard<std::mutex> lock(s_coll_acls_mu);
+                s_coll_acls_cache[coll_name] = {acls, now + std::chrono::seconds(30)};
             }
 
             _result->rowCnt = static_cast<int>(acls.size());
@@ -2906,6 +2931,10 @@ irods::error db_set_grid_configuration_value_op(irods::plugin_context& _ctx, con
     try {
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_set_grid_configuration_value_op");
         if (auto ret = init_l3kvg_catalog(); !ret.ok()) return ret;
+        {
+            std::lock_guard<std::mutex> lock(s_grid_cfg_mu);
+            s_grid_cfg_cache.clear();
+        }
         std::string full_name = safe_string(_ns) + ":" + safe_string(_name);
         auto ret = g_catalog->set_grid_configuration_value(full_name, safe_string(_value));
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_set_grid_configuration_value_op SUCCESS");
@@ -2920,10 +2949,29 @@ irods::error db_get_grid_configuration_value_op(irods::plugin_context& _ctx, con
     try {
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_get_grid_configuration_value_op");
         if (auto ret = init_l3kvg_catalog(); !ret.ok()) return ret;
-        std::string val;
+        if (!_value || _value_buf_size == 0) return ERROR(SYS_INVALID_INPUT_PARAM, "null or empty buffer");
+
         std::string full_name = safe_string(_ns) + ":" + safe_string(_name);
+        auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(s_grid_cfg_mu);
+            auto it = s_grid_cfg_cache.find(full_name);
+            if (it != s_grid_cfg_cache.end() && now < it->second.second) {
+                std::strncpy(_value, it->second.first.c_str(), _value_buf_size - 1);
+                _value[_value_buf_size - 1] = '\0';
+                rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_get_grid_configuration_value_op CACHE HIT");
+                return SUCCESS();
+            }
+        }
+
+        std::string val;
         auto ret = g_catalog->get_grid_configuration_value(full_name, val);
-        if (ret.ok()) strncpy(_value, val.c_str(), _value_buf_size - 1);
+        if (ret.ok()) {
+            std::strncpy(_value, val.c_str(), _value_buf_size - 1);
+            _value[_value_buf_size - 1] = '\0';
+            std::lock_guard<std::mutex> lock(s_grid_cfg_mu);
+            s_grid_cfg_cache[full_name] = {val, now + std::chrono::seconds(30)};
+        }
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_get_grid_configuration_value_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
