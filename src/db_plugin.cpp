@@ -939,6 +939,10 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         auto ret = g_catalog->register_collection(coll, out_id);
         if (ret.ok()) {
             _info->collId = out_id;
+            {
+                std::lock_guard<std::mutex> lock(s_coll_acls_mu);
+                s_coll_acls_cache.erase(coll.name);
+            }
             rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_coll_op SUCCESS");
         } else {
             rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_coll_op ERROR: %ld - %s", ret.code(), ret.result().c_str());
@@ -1155,6 +1159,10 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         }
 
         auto ret = g_catalog->delete_collection(coll_id ? coll_id : sid);
+        if (ret.ok()) {
+            std::lock_guard<std::mutex> lock(s_coll_acls_mu);
+            s_coll_acls_cache.erase(coll_name);
+        }
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_coll_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -1237,6 +1245,12 @@ irods::error db_del_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _i
         }
 
         auto ret = g_catalog->delete_collection(coll_id ? coll_id : sid);
+        if (ret.ok()) {
+            std::lock_guard<std::mutex> lock(s_coll_acls_mu);
+            if (!coll_name.empty()) {
+                s_coll_acls_cache.erase(coll_name);
+            }
+        }
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_coll_by_admin_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -2331,6 +2345,10 @@ irods::error db_mod_access_control_op(irods::plugin_context& _ctx, int _recursiv
             s_coll_acls_cache.clear();
         }
         auto ret = g_catalog->set_access(safe_string(_user), safe_string(_zone), safe_string(_path), safe_string(_access_level), _recursive != 0);
+        if (ret.ok()) {
+            std::lock_guard<std::mutex> lock(s_coll_acls_mu);
+            s_coll_acls_cache.clear();
+        }
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_access_control_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -2801,7 +2819,9 @@ irods::error db_specific_query_op(
 
         bool is_show_coll_acls = (sql_str == "ShowCollAcls" ||
                                   sql_str.find("ShowCollAcls") != std::string::npos ||
-                                  (sql_str.find("R_COLL_MAIN") != std::string::npos && sql_str.find("R_OBJT_ACCESS") != std::string::npos));
+                                  (sql_str.find("R_COLL_MAIN") != std::string::npos &&
+                                   sql_str.find("R_OBJT_ACCESS") != std::string::npos &&
+                                   sql_str.find("access_type") != std::string::npos));
 
         if (is_show_coll_acls) {
             std::string coll_name = safe_string(_spec_query_inp->args[0]);
@@ -2841,6 +2861,10 @@ irods::error db_specific_query_op(
                 _result->sqlResult[i].len = col_len;
                 _result->sqlResult[i].value = static_cast<char*>(malloc(_result->rowCnt * col_len));
                 if (!_result->sqlResult[i].value) {
+                    for (int j = 0; j < i; ++j) {
+                        free(_result->sqlResult[j].value);
+                        _result->sqlResult[j].value = nullptr;
+                    }
                     return ERROR(SYS_MALLOC_ERR, "failed to allocate memory for specific query results");
                 }
                 std::memset(_result->sqlResult[i].value, 0, _result->rowCnt * col_len);
@@ -2937,6 +2961,10 @@ irods::error db_set_grid_configuration_value_op(irods::plugin_context& _ctx, con
         }
         std::string full_name = safe_string(_ns) + ":" + safe_string(_name);
         auto ret = g_catalog->set_grid_configuration_value(full_name, safe_string(_value));
+        if (ret.ok()) {
+            std::lock_guard<std::mutex> lock(s_grid_cfg_mu);
+            s_grid_cfg_cache.clear();
+        }
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_set_grid_configuration_value_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {

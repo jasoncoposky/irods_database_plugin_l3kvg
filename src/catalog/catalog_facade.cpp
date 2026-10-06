@@ -2317,13 +2317,13 @@ namespace irods::catalog {
             return SUCCESS(); 
         }
         irods::error modify_collection(coll_id_t coll_id, std::string_view prop, std::string_view value) { 
-            if (prop == "modify_ts" || prop == "collModify" || prop == "collectionMtime" || prop == "mtime") {
+            bool is_mtime_prop = (prop == "modify_ts" || prop == "collModify" || prop == "collectionMtime" || prop == "mtime");
+            if (is_mtime_prop) {
                 std::lock_guard<std::mutex> lock(s_coll_mtime_mu);
                 auto it = s_coll_mtime_cache.find(coll_id);
                 if (it != s_coll_mtime_cache.end() && it->second == value) {
                     return SUCCESS(); // already up-to-date in this second!
                 }
-                s_coll_mtime_cache[coll_id] = std::string(value);
             }
 
             snowflake_id_t sid = make_id(EntityType::Collection, coll_id);
@@ -2344,10 +2344,14 @@ namespace irods::catalog {
             else if (prop == "type" || prop == "coll_type" || prop == "collType" || prop == "collectionType") key = "t";
             else if (prop == "info1" || prop == "coll_info1" || prop == "collInfo1" || prop == "collectionInfo1") key = "c1";
             else if (prop == "info2" || prop == "coll_info2" || prop == "collInfo2" || prop == "collectionInfo2") key = "c2";
-            else if (prop == "modify_ts" || prop == "collModify" || prop == "collectionMtime" || prop == "mtime") key = "mt";
+            else if (is_mtime_prop) key = "mt";
             
             buf.set_str(0, key, std::string(value));
             client_->put_node_async(local_cluster_id_, sid, buf.move_to_string()).get();
+            if (is_mtime_prop) {
+                std::lock_guard<std::mutex> lock(s_coll_mtime_mu);
+                s_coll_mtime_cache[coll_id] = std::string(value);
+            }
             return SUCCESS(); 
         }
 
