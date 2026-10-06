@@ -380,7 +380,7 @@ TEST_F(CatalogFacadeDmlTest, ModifyDataObjectAndReplicaMultiReplica) {
 
     auto mod_err1 = facade_.modify_data_object_and_replica(
         6001,
-        1,
+        0, // default repl_num should be overridden by resc_hier matching
         "otherResc",
         updates1,
         /*all_repl_status=*/true,

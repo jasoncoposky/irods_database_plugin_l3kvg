@@ -1644,7 +1644,7 @@ namespace irods::catalog {
                         dbuf.set_str(0, "z", val);
                     } else if (kw == "dataMode" || kw == "data_mode" || kw == "DATA_MODE" || kw == "mode") {
                         dbuf.set_str(0, "mode", val);
-                    } else if (kw == "dataExpiry" || kw == "data_expiry_ts" || kw == "DATA_EXPIRY" || kw == "ex") {
+                    } else if (kw == "dataExpiry" || kw == "data_expiry" || kw == "data_expiry_ts" || kw == "DATA_EXPIRY" || kw == "ex") {
                         dbuf.set_str(0, "ex", val);
                     }
                 }
@@ -1652,67 +1652,64 @@ namespace irods::catalog {
                 l3kvg::MutationBatch batch;
                 batch.put_node(sid, dbuf.move_to_string());
 
-                // Update replicas
-                // If primary replica matches, update directly
-                if (!r_payload.empty() && replicas.size() <= 1 && !all_replicas) {
-                    lite3cpp::Buffer rbuf(reinterpret_cast<const uint8_t*>(r_payload.data()), r_payload.size());
-                    for (const auto& [kw, val] : updates) {
-                        if (kw == "dataModify" || kw == "modify_ts" || kw == "DATA_MODIFY_TIME" || kw == "mt") {
-                            rbuf.set_str(0, "mt", val);
-                        } else if (kw == "chksum" || kw == "data_checksum" || kw == "DATA_CHECKSUM" || kw == "cs") {
-                            rbuf.set_str(0, "cs", val);
-                            rbuf.set_str(0, "c", val);
-                        } else if (kw == "filePath" || kw == "data_path" || kw == "DATA_PATH" || kw == "p") {
-                            rbuf.set_str(0, "p", val);
-                        } else if (kw == "rescHier" || kw == "resc_hier" || kw == "DATA_RESC_HIER" || kw == "rh") {
-                            rbuf.set_str(0, "rh", val);
-                        } else if (kw == "rescId" || kw == "resc_id" || kw == "DATA_RESC_ID") {
-                            try { rbuf.set_i64(0, "rid", std::stoll(val)); } catch (...) {}
-                        } else if (kw == "replStatus" || kw == "data_is_dirty" || kw == "DATA_REPL_STATUS" || kw == "st") {
-                            if (!all_repl_status) {
-                                rbuf.set_str(0, "st", val);
-                            }
-                        } else if (kw == "dataSize" || kw == "data_size" || kw == "DATA_SIZE" || kw == "size" || kw == "s") {
-                            try { rbuf.set_i64(0, "s", std::stoll(val)); } catch (...) {}
+                // Parallelize non-primary replica payload fetches
+                std::unordered_map<snowflake_id_t, std::future<std::string>> non_primary_futures;
+                for (auto rid : replicas) {
+                    if (rid != primary_rid || r_payload.empty()) {
+                        non_primary_futures.emplace(rid, client_->get_node_payload_async(local_cluster_id_, rid));
+                    }
+                }
+
+                // Unified replica update loop
+                for (auto rid : replicas) {
+                    std::string payload;
+                    if (rid == primary_rid && !r_payload.empty()) {
+                        payload = std::move(r_payload);
+                    } else {
+                        auto it = non_primary_futures.find(rid);
+                        if (it != non_primary_futures.end()) {
+                            payload = it->second.get();
                         }
                     }
-                    if (all_repl_status) {
-                        rbuf.set_str(0, "st", "1"); // GOOD_REPLICA
-                    }
-                    batch.put_node(primary_rid, rbuf.move_to_string());
-                } else {
-                    // Fallback: update matching replicas from replicas list
-                    for (auto rid : replicas) {
-                        std::string payload = (rid == primary_rid && !r_payload.empty()) ? r_payload : client_->get_node_payload_async(local_cluster_id_, rid).get();
-                        if (payload.empty()) continue;
-                        lite3cpp::Buffer rbuf(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
-                        uint32_t rn = 0;
-                        try { rn = static_cast<uint32_t>(rbuf.get_i64(0, "rn")); } catch (...) {}
-                        std::string rh{safe_get_str(rbuf, 0, "rh")};
-                        bool target_matched = false;
-                        if (all_replicas || (rn == repl_num) || (!resc_hier.empty() && (rh == resc_hier || rh == leaf_name))) {
+                    if (payload.empty()) continue;
+
+                    lite3cpp::Buffer rbuf(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+                    uint32_t rn = 0;
+                    try { rn = static_cast<uint32_t>(rbuf.get_i64(0, "rn")); } catch (...) {}
+                    std::string rh{safe_get_str(rbuf, 0, "rh")};
+
+                    bool target_matched = false;
+                    if (all_replicas) {
+                        target_matched = true;
+                    } else if (!resc_hier.empty()) {
+                        if (rh == resc_hier || (!leaf_name.empty() && (rh == leaf_name || rh.ends_with(";" + leaf_name) || std::string(resc_hier).ends_with(";" + rh)))) {
                             target_matched = true;
                         }
-                        bool modified = false;
-                        if (all_repl_status) {
-                            rbuf.set_str(0, "st", target_matched ? "1" : "0");
-                            modified = true;
+                    } else {
+                        if (rn == repl_num || replicas.size() == 1) {
+                            target_matched = true;
                         }
-                        if (target_matched) {
-                            for (const auto& [kw, val] : updates) {
-                                if (kw == "dataModify" || kw == "modify_ts" || kw == "DATA_MODIFY_TIME" || kw == "mt") rbuf.set_str(0, "mt", val);
-                                else if (kw == "chksum" || kw == "data_checksum" || kw == "DATA_CHECKSUM" || kw == "cs") { rbuf.set_str(0, "cs", val); rbuf.set_str(0, "c", val); }
-                                else if (kw == "filePath" || kw == "data_path" || kw == "DATA_PATH" || kw == "p") rbuf.set_str(0, "p", val);
-                                else if (kw == "rescHier" || kw == "resc_hier" || kw == "DATA_RESC_HIER" || kw == "rh") rbuf.set_str(0, "rh", val);
-                                else if (kw == "rescId" || kw == "resc_id" || kw == "DATA_RESC_ID") { try { rbuf.set_i64(0, "rid", std::stoll(val)); } catch (...) {} }
-                                else if (kw == "replStatus" || kw == "data_is_dirty" || kw == "DATA_REPL_STATUS" || kw == "st") { if (!all_repl_status) rbuf.set_str(0, "st", val); }
-                                else if (kw == "dataSize" || kw == "data_size" || kw == "DATA_SIZE" || kw == "size" || kw == "s") { try { rbuf.set_i64(0, "s", std::stoll(val)); } catch (...) {} }
-                            }
-                            modified = true;
+                    }
+
+                    bool modified = false;
+                    if (all_repl_status) {
+                        rbuf.set_str(0, "st", target_matched ? "1" : "0");
+                        modified = true;
+                    }
+                    if (target_matched) {
+                        for (const auto& [kw, val] : updates) {
+                            if (kw == "dataModify" || kw == "modify_ts" || kw == "DATA_MODIFY_TIME" || kw == "mt") rbuf.set_str(0, "mt", val);
+                            else if (kw == "chksum" || kw == "data_checksum" || kw == "DATA_CHECKSUM" || kw == "cs") { rbuf.set_str(0, "cs", val); rbuf.set_str(0, "c", val); }
+                            else if (kw == "filePath" || kw == "data_path" || kw == "DATA_PATH" || kw == "p") rbuf.set_str(0, "p", val);
+                            else if (kw == "rescHier" || kw == "resc_hier" || kw == "DATA_RESC_HIER" || kw == "rh") rbuf.set_str(0, "rh", val);
+                            else if (kw == "rescId" || kw == "resc_id" || kw == "DATA_RESC_ID") { try { rbuf.set_i64(0, "rid", std::stoll(val)); } catch (...) {} }
+                            else if (kw == "replStatus" || kw == "data_is_dirty" || kw == "DATA_REPL_STATUS" || kw == "st") { if (!all_repl_status) rbuf.set_str(0, "st", val); }
+                            else if (kw == "dataSize" || kw == "data_size" || kw == "DATA_SIZE" || kw == "size" || kw == "s") { try { rbuf.set_i64(0, "s", std::stoll(val)); } catch (...) {} }
                         }
-                        if (modified) {
-                            batch.put_node(rid, rbuf.move_to_string());
-                        }
+                        modified = true;
+                    }
+                    if (modified) {
+                        batch.put_node(rid, rbuf.move_to_string());
                     }
                 }
 
