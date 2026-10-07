@@ -1,0 +1,46 @@
+{
+  "footprint": {
+    "disk_bytes": {
+      "l3kvg_irods": 2055245068,
+      "l3kvg_db": 1226458064,
+      "postgres_data": 145874862
+    },
+    "disk_human": {
+      "l3kvg_irods": "2.0G",
+      "l3kvg_db": "1.2G",
+      "l3kvg_catalog": "embedded_in_provider",
+      "postgres_data": "140M"
+    },
+    "rss_kb": {
+      "l3kvg": {
+        "l3kvg_server": [
+          2203944
+        ],
+        "irodsServer": [
+          32976
+        ],
+        "irodsAgent": [
+          91132
+        ]
+      },
+      "postgres_server": {
+        "postgres": [
+          28152,
+          61820,
+          9068,
+          10200,
+          8892,
+          8068
+        ]
+      },
+      "postgres_irods_provider": {
+        "irodsServer": [
+          35232
+        ],
+        "irodsAgent": [
+          90408
+        ]
+      }
+    }
+  }
+}
