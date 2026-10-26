@@ -2396,19 +2396,55 @@ namespace irods::catalog {
                  if (prop == "path" || prop == "resc_def_path") key = "v";
                  else if (prop == "host" || prop == "location" || prop == "resc_net") key = "l";
                  else if (prop == "type" || prop == "resc_type_name") key = "t";
-                 else if (prop == "free_space") key = "f";
+                 else if (prop == "free_space" || prop == "freespace") key = "f";
                  else if (prop == "comment" || prop == "r_comment") key = "m";
+                 else if (prop == "info" || prop == "resc_info") key = "i";
                  else if (prop == "status" || prop == "resc_status") key = "s";
                  else if (prop == "context" || prop == "resc_context") key = "cx";
+                 else if (prop == "parent_context" || prop == "resc_parent_context") key = "pc";
+                 else if (prop == "name" || prop == "resc_name") key = "n";
                  
-                 try {
-                     if (key == "f" || key == "s") {
-                         buf.set_i64(0, key, std::stoll(std::string(value)));
-                     } else {
+                 char now_buf[32]{};
+                 std::snprintf(now_buf, sizeof(now_buf), "%011lld", static_cast<long long>(std::time(nullptr)));
+                 buf.set_str(0, "mt", now_buf);
+
+                 if (key == "n") {
+                     std::string old_name = safe_get_str(buf, 0, "n");
+                     if (!old_name.empty()) {
+                         del_index(EntityType::Resource, "n", old_name);
+                     }
+                     buf.set_str(0, "n", std::string(value));
+                     add_index(EntityType::Resource, "n", value, sid);
+                 } else if (key == "f") {
+                     int64_t new_fs = 0;
+                     try {
+                         if (!value.empty() && (value.front() == '+' || value.front() == '-')) {
+                             int64_t cur_fs = 0;
+                             if (buf.get_type(0, "f") == lite3cpp::Type::Int64) {
+                                 cur_fs = buf.get_i64(0, "f");
+                             } else if (buf.get_type(0, "f") == lite3cpp::Type::String) {
+                                 cur_fs = std::stoll(std::string(buf.get_str(0, "f")));
+                             }
+                             int64_t delta = std::stoll(std::string(value.substr(1)));
+                             new_fs = (value.front() == '+') ? (cur_fs + delta) : (cur_fs - delta);
+                         } else {
+                             new_fs = std::stoll(std::string(value));
+                         }
+                         buf.set_i64(0, "f", new_fs);
+                     } catch (...) {
+                         buf.set_str(0, "f", std::string(value));
+                     }
+                     buf.set_str(0, "ft", now_buf);
+                 } else {
+                     try {
+                         if (key == "s" && !value.empty() && std::all_of(value.begin(), value.end(), ::isdigit)) {
+                             buf.set_i64(0, key, std::stoll(std::string(value)));
+                         } else {
+                             buf.set_str(0, key, std::string(value));
+                         }
+                     } catch (...) {
                          buf.set_str(0, key, std::string(value));
                      }
-                 } catch (...) {
-                     buf.set_str(0, key, std::string(value));
                  }
                  
                  client_->put_node_async(local_cluster_id_, sid, buf).get();
@@ -2473,9 +2509,10 @@ namespace irods::catalog {
             return SUCCESS();
         }
         irods::error add_child_resource(std::string_view parent_name, std::string_view child_name, std::string_view context) { 
-            snowflake_id_t pid = resolve_id_from_index(EntityType::Resource, "n", parent_name);
             snowflake_id_t cid = resolve_id_from_index(EntityType::Resource, "n", child_name);
-            if (!pid || !cid) return ERROR(CAT_INVALID_RESOURCE, "Parent or child resource not found");
+            if (!cid) return ERROR(CHILD_NOT_FOUND, "Child resource not found");
+            snowflake_id_t pid = resolve_id_from_index(EntityType::Resource, "n", parent_name);
+            if (!pid) return ERROR(CAT_INVALID_RESOURCE, "Parent resource not found");
             
             add_edge(pid, "HAS_CHILD", 1.0, cid);
 
@@ -2514,8 +2551,7 @@ namespace irods::catalog {
             snowflake_id_t cid = resolve_id_from_index(EntityType::Resource, "n", child_name);
             if (!pid || !cid) return ERROR(CAT_INVALID_RESOURCE, "Parent or child resource not found");
             
-            std::string edge_key = std::string(l3kvg::KeyBuilder::edge_out_key(pid, "HAS_CHILD", 1.0, cid));
-            client_->del_edge_async(local_cluster_id_, edge_key).get();
+            del_edge(pid, "HAS_CHILD", 1.0, cid);
 
             std::string p_payload = client_->get_node_payload_async(local_cluster_id_, pid).get();
             if (!p_payload.empty()) {
@@ -4791,7 +4827,7 @@ namespace irods::catalog {
                                         }
                                     } catch (...) {}
                                 }
-                            } else if (cname == "RULE_EXEC_ID") {
+                            } else if (cname == "RULE_EXEC_ID" || cname == "DELAY_RULE_ID") {
                                 if (best_start_priority < 4) {
                                     try {
                                         uint64_t rid_num = std::stoull(literal);

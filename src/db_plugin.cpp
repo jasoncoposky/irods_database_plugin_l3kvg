@@ -1162,6 +1162,14 @@ irods::error db_reg_resc_op(irods::plugin_context& _ctx, std::map<std::string, s
 irods::error db_mod_resc_op(irods::plugin_context& _ctx, const char* _resc, const char* _prop, const char* _val) {
     try {
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_resc_op");
+        if (!_resc || !_prop || !_val) {
+            return ERROR(CAT_INVALID_ARGUMENT, "null argument");
+        }
+        const std::string prop_str = safe_string(_prop);
+        const std::string val_str = safe_string(_val);
+        if (val_str.empty() && prop_str != "comment" && prop_str != "info" && prop_str != "context" && prop_str != "parent_context") {
+            return ERROR(CAT_INVALID_ARGUMENT, "argument is empty");
+        }
         if (_resc) {
             std::lock_guard<std::mutex> lock(s_rid_cache_mu);
             auto it = s_rid_cache.find(safe_string(_resc));
@@ -1172,12 +1180,11 @@ irods::error db_mod_resc_op(irods::plugin_context& _ctx, const char* _resc, cons
         }
         irods::catalog::resc_id_t rid = 0;
         if (_resc && g_catalog->resolve_resource_name(_resc, rid).ok()) {
-            auto ret = g_catalog->modify_resource(rid, safe_string(_prop), safe_string(_val));
+            auto ret = g_catalog->modify_resource(rid, prop_str, val_str);
             rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_resc_op SUCCESS");
             return ret;
         }
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_resc_op SUCCESS (no resc)");
-        return SUCCESS();
+        return ERROR(CAT_INVALID_RESOURCE, "invalid resource");
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_resc_op EXCEPTION: %s", e.what());
         return ERROR(SYS_INTERNAL_ERR, e.what());
@@ -2687,7 +2694,7 @@ namespace {
             if (val.empty() || val == "00000000000") return "0";
             return val;
         }
-        if (col_name == "RULE_EXEC_PRIORITY") {
+        if (col_name == "RULE_EXEC_PRIORITY" || col_name == "DELAY_RULE_PRIORITY") {
             if (val.empty()) return "5";
             return val;
         }
@@ -2742,7 +2749,8 @@ irods::error db_execute_genquery2_buffer_op(
             std::string ticket_cuser;
             const bool is_caller_admin = (_ctx.comm() ? (_ctx.comm()->clientUser.authInfo.authFlag >= LOCAL_PRIV_USER_AUTH) : eff_opts.admin_mode);
 
-            if (g_session_ticket[0] != '\0') {
+            const std::string active_ticket = (g_session_ticket[0] != '\0') ? std::string(g_session_ticket) : std::string(eff_opts.session_ticket);
+            if (!active_ticket.empty()) {
                 if (_ctx.comm() && _ctx.comm()->clientUser.userName[0] != '\0') {
                     ticket_cuser = _ctx.comm()->clientUser.userName;
                 } else if (g_session_client_user[0] != '\0') {
@@ -2750,7 +2758,7 @@ irods::error db_execute_genquery2_buffer_op(
                 } else {
                     ticket_cuser = eff_opts.user_name;
                 }
-                auto terr = g_catalog->validate_ticket(g_session_ticket, ticket_cuser, g_session_client_addr, &ticket_target_path, &ticket_target_type);
+                auto terr = g_catalog->validate_ticket(active_ticket, ticket_cuser, g_session_client_addr, &ticket_target_path, &ticket_target_type);
                 if (!terr.ok()) {
                     return terr;
                 }
@@ -2782,7 +2790,7 @@ irods::error db_execute_genquery2_buffer_op(
 
             std::string cond_coll_name;
             std::string cond_data_name;
-            if (g_session_ticket[0] != '\0' && !is_caller_admin && !ticket_target_path.empty()) {
+            if (!active_ticket.empty() && !is_caller_admin && !ticket_target_path.empty()) {
                 auto extract_eq_conds = [&](auto& self, const gq2::conditions& conds) -> void {
                     for (const auto& w : conds) {
                         if (const auto* c = std::get_if<gq2::condition>(&w)) {
@@ -2808,7 +2816,7 @@ irods::error db_execute_genquery2_buffer_op(
             const size_t nrows = results.row_count();
             uint64_t first_data_id = 0;
             for (size_t r = 0; r < nrows; ++r) {
-                if (g_session_ticket[0] != '\0' && !is_caller_admin && !ticket_target_path.empty() &&
+                if (!active_ticket.empty() && !is_caller_admin && !ticket_target_path.empty() &&
                     (coll_name_idx >= 0 || data_name_idx >= 0 || !cond_coll_name.empty())) {
                     std::string cname = (coll_name_idx >= 0) ? std::string(results.get_field(r, static_cast<size_t>(coll_name_idx))) : cond_coll_name;
                     std::string dname = (data_name_idx >= 0) ? std::string(results.get_field(r, static_cast<size_t>(data_name_idx))) : cond_data_name;
@@ -2861,8 +2869,8 @@ irods::error db_execute_genquery2_buffer_op(
                 }
             }
 
-            if (g_session_ticket[0] != '\0' && first_data_id != 0 && data_id_idx >= 0 && sel->projections.size() <= 2) {
-                auto uerr = g_catalog->increment_ticket_uses(g_session_ticket, first_data_id);
+            if (!active_ticket.empty() && first_data_id != 0 && data_id_idx >= 0 && sel->projections.size() <= 2) {
+                auto uerr = g_catalog->increment_ticket_uses(active_ticket, first_data_id);
                 if (!uerr.ok()) {
                     return uerr;
                 }

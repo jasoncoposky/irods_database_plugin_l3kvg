@@ -377,6 +377,22 @@ namespace irods::catalog::compiler {
         {"RULE_EXEC_LOCK_HOST",           {"Rule", "lh"}},
         {"RULE_EXEC_LOCK_HOST_PID",       {"Rule", "lp"}},
         {"RULE_EXEC_LOCK_TIME",           {"Rule", "lt"}},
+        {"DELAY_RULE_ID",                 {"Rule", "id"}},
+        {"DELAY_RULE_NAME",               {"Rule", "n"}},
+        {"DELAY_RULE_REI_FILE_PATH",      {"Rule", "rei"}},
+        {"DELAY_RULE_USER_NAME",          {"Rule", "u"}},
+        {"DELAY_RULE_EXE_ADDRESS",        {"Rule", "addr"}},
+        {"DELAY_RULE_EXE_TIME",           {"Rule", "e"}},
+        {"DELAY_RULE_TIME",               {"Rule", "e"}},
+        {"DELAY_RULE_EXE_FREQUENCY",      {"Rule", "freq"}},
+        {"DELAY_RULE_PRIORITY",           {"Rule", "p"}},
+        {"DELAY_RULE_ESTIMATED_EXE_TIME", {"Rule", "est"}},
+        {"DELAY_RULE_NOTIFICATION_ADDR",  {"Rule", "notif"}},
+        {"DELAY_RULE_LAST_EXE_TIME",      {"Rule", "last"}},
+        {"DELAY_RULE_STATUS",             {"Rule", "status"}},
+        {"DELAY_RULE_LOCK_HOST",          {"Rule", "lh"}},
+        {"DELAY_RULE_LOCK_HOST_PID",      {"Rule", "lp"}},
+        {"DELAY_RULE_LOCK_TIME",          {"Rule", "lt"}},
         {"EXE_LOCK_HOST",                 {"Rule", "lh"}},
         {"LOCK_HOST",                     {"Rule", "lh"}},
         {"EXE_LOCK_HOST_PID",             {"Rule", "lp"}},
@@ -840,7 +856,7 @@ namespace irods::catalog::compiler {
                      const auto* gm = find_column_mapping(col_name);
                      if (gm) {
                          std::string t = std::string(gm->node_type);
-                         if (col_name.rfind("RULE_EXEC_", 0) == 0 || col_name.rfind("RULE_", 0) == 0) t = "Rule";
+                         if (col_name.rfind("RULE_EXEC_", 0) == 0 || col_name.rfind("DELAY_RULE_", 0) == 0 || col_name.rfind("RULE_", 0) == 0) t = "Rule";
                          else if (col_name.rfind("TICKET_", 0) == 0) t = "Ticket";
                          else if (col_name.rfind("DATA_ACCESS_", 0) == 0 || col_name.rfind("DATA_", 0) == 0 || col_name == "D_RESC_ID" || col_name == "D_RESC_HIER" || col_name == "D_RESC_NAME") t = "DataObject";
                          else if (col_name.rfind("COLL_ACCESS_", 0) == 0 || col_name.rfind("COLL_", 0) == 0) t = "Collection";
