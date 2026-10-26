@@ -91,7 +91,9 @@ macro(add_plugin_test name source)
         gtest
         gtest_main
         irods_common
+        irods_client
         irods_server
+        fmt
         dl
         libzmq
     )
@@ -107,6 +109,7 @@ add_plugin_test(test_plugin_collections tests/test_plugin_collections.cpp)
 add_plugin_test(test_plugin_misc tests/test_plugin_misc.cpp)
 add_plugin_test(test_plugin_environment tests/test_plugin_environment.cpp)
 add_plugin_test(test_plugin_genquery2 tests/test_plugin_genquery2.cpp)
+add_plugin_test(test_e2e_lite3_zero_copy_benchmark tests/test_e2e_lite3_zero_copy_benchmark.cpp)
 
 # Logic Tests (Direct Facade/Compiler)
 add_executable(test_metadata_acls tests/test_metadata_acls.cpp)

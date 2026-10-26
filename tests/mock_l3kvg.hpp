@@ -491,7 +491,9 @@ namespace irods::catalog::test {
                                          for (uint32_t pi = 0; pi < p_nv.size(); ++pi) {
                                              if (q.arr_get_type(projs_arr_ofs, pi) != lite3cpp::Type::Object) continue;
                                              size_t p_ofs = q.arr_get_obj(projs_arr_ofs, pi);
-                                             if (q.get_type(p_ofs, "alias") == lite3cpp::Type::String && q.get_str(p_ofs, "alias") == root_alias) {
+                                             if (q.get_type(p_ofs, "alias") == lite3cpp::Type::String &&
+                                                 (q.get_str(p_ofs, "alias") == root_alias ||
+                                                  (root_alias == "DataObject" && q.get_str(p_ofs, "alias") == "Replica"))) {
                                                  std::string prop = (q.get_type(p_ofs, "property") == lite3cpp::Type::String) ? std::string(q.get_str(p_ofs, "property")) : "";
                                                  std::string as = (q.get_type(p_ofs, "as") == lite3cpp::Type::String) ? std::string(q.get_str(p_ofs, "as")) : "";
                                                  std::string val = node.get_attribute<std::string>(prop);
