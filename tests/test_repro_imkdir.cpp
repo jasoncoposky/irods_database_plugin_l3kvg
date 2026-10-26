@@ -1,12 +1,9 @@
 #include "plugin_test_fixture.hpp"
 #include "irods/catalog/catalog_facade.hpp"
+#include "irods/genquery1_ast_adapter.hpp"
 #include "irods/irods_server_properties.hpp"
 #include "irods/rodsGenQuery.h"
 #include <cstring>
-
-namespace irods::catalog::bridge {
-    irods::experimental::genquery2::select synthesize_gq2_ast(genQueryInp_t* _inp, CatalogFacade* _catalog, std::vector<uint64_t>& _starting_nodes);
-}
 
 using namespace irods::catalog;
 using namespace irods::catalog::test;
@@ -63,8 +60,7 @@ TEST_F(GenQueryCompatibilityTest, ParentCollectionQueryReturnsResults) {
     inp.sqlCondInp.value = (char**)malloc(sizeof(char*));
     inp.sqlCondInp.value[0] = strdup("= '/tempZone/home/rods'");
 
-    std::vector<snowflake_id_t> starting_nodes;
-    auto ast = bridge::synthesize_gq2_ast(&inp, &catalog, starting_nodes);
+    auto ast = irods::experimental::genquery2::genquery1_to_genquery2_ast(inp);
 
     ResultSet results;
     ASSERT_TRUE(catalog.execute_query(ast, results).ok());
@@ -210,13 +206,10 @@ TEST_F(GenQueryCompatibilityTest, ParentOfMatchesLinkPointInHierarchy) {
     inp.sqlCondInp.value[0] = strdup("parent_of '/tempZone/home/alice/test_linkpt/subfile.txt'");
     inp.sqlCondInp.value[1] = strdup("like '_%'");
 
-    std::vector<snowflake_id_t> starting_nodes;
-    auto ast = bridge::synthesize_gq2_ast(&inp, &catalog, starting_nodes);
-
-    EXPECT_GE(starting_nodes.size(), 2u);
+    auto ast = irods::experimental::genquery2::genquery1_to_genquery2_ast(inp);
 
     ResultSet results;
-    ASSERT_TRUE(catalog.execute_query(ast, results, starting_nodes).ok());
+    ASSERT_TRUE(catalog.execute_query(ast, results).ok());
 
     ASSERT_EQ(results.row_count(), 1u);
     EXPECT_EQ(results.get_field(0, 0), "/tempZone/home/alice/test_linkpt");

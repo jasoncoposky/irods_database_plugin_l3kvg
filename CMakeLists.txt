@@ -21,6 +21,7 @@ include_directories(
     ${IRODS_DIR}/lib/filesystem/include
     ${IRODS_DIR}/server/core/include
     ${IRODS_DIR}/lib/core/include
+    ${IRODS_BUILD_DIR}/lib/core/include
     ${IRODS_DIR}/lib/api/include
     ${IRODS_DIR}/server/genquery2/include
     ${IRODS_BUILD_DIR}/server/genquery2/dsl
@@ -31,10 +32,12 @@ if(EXISTS "/usr/include/irods")
     include_directories(/usr/include/irods)
 endif()
 
-# External Libraries
+# External Libraries (prioritize local iRODS 6 build over system packages)
 link_directories(
-    /usr/lib/irods/plugins/database
     ${IRODS_BUILD_DIR}/lib
+    ${IRODS_BUILD_DIR}/lib/core
+    ${IRODS_BUILD_DIR}/server
+    /usr/lib/irods/plugins/database
 )
 
 # Dependencies
@@ -53,7 +56,6 @@ add_subdirectory(../l3kvg l3kvg)
 # Core Plugin Library
 add_library(irods_database_plugin_l3kvg SHARED
     src/db_plugin.cpp
-    src/gq1_bridge.cpp
     src/catalog/catalog_facade.cpp
     src/compiler/gq2_compiler.cpp
     ${IRODS_DIR}/server/genquery2/src/genquery2_driver.cpp
@@ -149,16 +151,16 @@ target_link_libraries(test_deep_traversal PRIVATE irods_database_plugin_l3kvg l3
 add_executable(test_legacy_compatibility tests/test_legacy_compatibility.cpp)
 target_link_libraries(test_legacy_compatibility PRIVATE irods_database_plugin_l3kvg l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq)
 
-add_executable(test_gq1_bridge tests/test_gq1_bridge.cpp src/gq1_bridge.cpp src/compiler/gq2_compiler.cpp src/catalog/catalog_facade.cpp)
+add_executable(test_gq1_bridge tests/test_gq1_bridge.cpp src/compiler/gq2_compiler.cpp src/catalog/catalog_facade.cpp)
 target_link_libraries(test_gq1_bridge PRIVATE l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq fmt)
 
 add_executable(bootstrap_l3kvg tests/bootstrap_l3kvg.cpp src/catalog/catalog_facade.cpp src/compiler/gq2_compiler.cpp)
 target_link_libraries(bootstrap_l3kvg PRIVATE l3kvg_engine l3kv_engine lite3-cpp conveyor irods_common irods_server dl libzmq fmt)
 
-add_executable(test_repro_imkdir tests/test_repro_imkdir.cpp src/gq1_bridge.cpp src/compiler/gq2_compiler.cpp src/catalog/catalog_facade.cpp)
+add_executable(test_repro_imkdir tests/test_repro_imkdir.cpp src/compiler/gq2_compiler.cpp src/catalog/catalog_facade.cpp)
 target_link_libraries(test_repro_imkdir PRIVATE l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq fmt)
 
-add_executable(test_repro_icp tests/test_repro_icp.cpp src/gq1_bridge.cpp src/compiler/gq2_compiler.cpp src/catalog/catalog_facade.cpp)
+add_executable(test_repro_icp tests/test_repro_icp.cpp src/compiler/gq2_compiler.cpp src/catalog/catalog_facade.cpp)
 target_link_libraries(test_repro_icp PRIVATE l3kvg_engine l3kv_engine lite3-cpp conveyor gtest gtest_main irods_common irods_server dl libzmq fmt)
 
 # CPack Configuration

@@ -1,14 +1,11 @@
 #include "plugin_test_fixture.hpp"
 #include "irods/catalog/catalog_facade.hpp"
+#include "irods/genquery1_ast_adapter.hpp"
 #include "irods/irods_server_properties.hpp"
 #include "irods/rodsGenQuery.h"
 #include "irods/private/genquery2_sql.hpp"
 #include <cstring>
 #include <iostream>
-
-namespace irods::catalog::bridge {
-    irods::experimental::genquery2::select synthesize_gq2_ast(genQueryInp_t* _inp, CatalogFacade* _catalog, std::vector<uint64_t>& _starting_nodes);
-}
 
 using namespace irods::catalog;
 using namespace irods::catalog::test;
@@ -74,8 +71,7 @@ TEST_F(DataAccessQueryTest, QueryDataAccessReturnsResults) {
     inp.sqlCondInp.value[0] = strdup("= '/tempZone/home/rods'");
     inp.sqlCondInp.value[1] = strdup("= 'access_type'");
 
-    std::vector<snowflake_id_t> starting_nodes;
-    auto ast = bridge::synthesize_gq2_ast(&inp, &catalog, starting_nodes);
+    auto ast = irods::experimental::genquery2::genquery1_to_genquery2_ast(inp);
 
     ResultSet results;
     ASSERT_TRUE(catalog.execute_query(ast, results).ok());
@@ -120,8 +116,7 @@ TEST_F(DataAccessQueryTest, QueryCollectionPublicCheck) {
     inp.sqlCondInp.value = (char**)malloc(sizeof(char*));
     inp.sqlCondInp.value[0] = strdup("= '/tempZone/home/public'");
 
-    std::vector<snowflake_id_t> starting_nodes;
-    auto ast = bridge::synthesize_gq2_ast(&inp, &catalog, starting_nodes);
+    auto ast = irods::experimental::genquery2::genquery1_to_genquery2_ast(inp);
 
     ResultSet results;
     ASSERT_TRUE(catalog.execute_query(ast, results).ok());
@@ -162,15 +157,14 @@ TEST_F(DataAccessQueryTest, QueryCollectionPublicCheckAsUnprivilegedUser) {
     inp.sqlCondInp.value = (char**)malloc(sizeof(char*));
     inp.sqlCondInp.value[0] = strdup("= '/tempZone/home/public'");
 
-    std::vector<snowflake_id_t> starting_nodes;
-    auto ast = bridge::synthesize_gq2_ast(&inp, &catalog, starting_nodes);
+    auto ast = irods::experimental::genquery2::genquery1_to_genquery2_ast(inp);
 
     irods::experimental::genquery2::options opts;
     opts.user_name = "otherrods";
     opts.admin_mode = false;
 
     ResultSet results;
-    ASSERT_TRUE(catalog.execute_query(ast, results, starting_nodes, "Collection", &opts).ok());
+    ASSERT_TRUE(catalog.execute_query(ast, results, {}, "Collection", &opts).ok());
     std::cerr << "Unprivileged Public Query found " << results.row_count() << " rows." << std::endl;
     for (size_t i = 0; i < results.row_count(); ++i) {
         std::cerr << "  Row " << i << ": COLL_NAME=" << results.get_field(i, 0) << ", COLL_ID=" << results.get_field(i, 1) << std::endl;

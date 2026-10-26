@@ -2,6 +2,7 @@
 #include "irods/irods_server_properties.hpp"
 #include "irods/irods_configuration_keywords.hpp"
 #include "irods/irods_database_constants.hpp"
+#include "irods/irods_resource_constants.hpp"
 
 using namespace irods::catalog;
 using namespace irods::catalog::test;
@@ -55,8 +56,11 @@ TEST_F(ResourcePluginTest, LifecycleAndHierarchy) {
     ASSERT_TRUE((plugin()->call<std::map<std::string, std::string>*>(
         nullptr, irods::DATABASE_OP_REG_RESC, nullptr, &child_info).ok()));
     
-    ASSERT_TRUE((plugin()->call<const char*, const char*, const char*>(
-        nullptr, irods::DATABASE_OP_ADD_CHILD_RESC, nullptr, "ufs", "ufs_child", "").ok()));
+    std::map<std::string, std::string> add_child_info;
+    add_child_info[irods::RESOURCE_NAME] = "ufs";
+    add_child_info[irods::RESOURCE_CHILDREN] = "ufs_child{}";
+    ASSERT_TRUE((plugin()->call<std::map<std::string, std::string>*>(
+        nullptr, irods::DATABASE_OP_ADD_CHILD_RESC, nullptr, &add_child_info).ok()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     snowflake_id_t crid = SnowflakeID::create(local_cid, "6:502");

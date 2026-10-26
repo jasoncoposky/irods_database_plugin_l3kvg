@@ -19,9 +19,53 @@
 namespace irods::catalog {
 
     struct ResultSet {
+        lite3cpp::Buffer raw_buffer;
+        std::vector<size_t> row_offsets;
         std::vector<l3kvg::Query::ResultRow> rows;
-        size_t row_count() const { return rows.size(); }
+
+        void bind_buffer(lite3cpp::Buffer&& buf) {
+            raw_buffer = std::move(buf);
+            row_offsets.clear();
+            rows.clear();
+            if (raw_buffer.size() >= sizeof(lite3cpp::PackedNodeLayout)) {
+                lite3cpp::NodeView root_nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(raw_buffer.data()));
+                if (root_nv.type() == lite3cpp::Type::Array) {
+                    const uint32_t count = root_nv.size();
+                    row_offsets.reserve(count);
+                    for (uint32_t r = 0; r < count; ++r) {
+                        if (raw_buffer.arr_get_type(0, r) == lite3cpp::Type::Object) {
+                            row_offsets.push_back(raw_buffer.arr_get_obj(0, r));
+                        }
+                    }
+                }
+            }
+        }
+
+        size_t row_count() const {
+            return !row_offsets.empty() ? row_offsets.size() : rows.size();
+        }
+
         std::string_view get_field(size_t row, std::string_view key) const {
+            if (row < row_offsets.size()) {
+                const size_t row_ofs = row_offsets[row];
+                if (raw_buffer.get_type(row_ofs, "fields") == lite3cpp::Type::Object) {
+                    const size_t fields_ofs = raw_buffer.get_obj(row_ofs, "fields");
+                    if (raw_buffer.get_type(fields_ofs, key) == lite3cpp::Type::String) {
+                        return raw_buffer.get_str(fields_ofs, key);
+                    }
+                }
+                const size_t cols_row_ofs = row_offsets[0];
+                if (raw_buffer.get_type(cols_row_ofs, "cols") == lite3cpp::Type::Array) {
+                    const size_t cols_ofs = raw_buffer.get_arr(cols_row_ofs, "cols");
+                    lite3cpp::NodeView cnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(raw_buffer.data() + cols_ofs));
+                    for (uint32_t ci = 0; ci < cnv.size(); ++ci) {
+                        if (raw_buffer.arr_get_str(cols_ofs, ci) == key) {
+                            return get_field(row, static_cast<size_t>(ci));
+                        }
+                    }
+                }
+                return "";
+            }
             if (row >= rows.size()) return "";
             auto it = rows[row].fields.find(std::string(key));
             if (it != rows[row].fields.end()) return it->second;
@@ -34,7 +78,37 @@ namespace irods::catalog {
             }
             return "";
         }
+
         std::string_view get_field(size_t row, size_t col_idx) const {
+            if (row < row_offsets.size()) {
+                const size_t row_ofs = row_offsets[row];
+                if (raw_buffer.get_type(row_ofs, "proj") == lite3cpp::Type::Array) {
+                    const size_t proj_ofs = raw_buffer.get_arr(row_ofs, "proj");
+                    lite3cpp::NodeView pnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(raw_buffer.data() + proj_ofs));
+                    if (col_idx < pnv.size() && raw_buffer.arr_get_type(proj_ofs, static_cast<uint32_t>(col_idx)) == lite3cpp::Type::String) {
+                        return raw_buffer.arr_get_str(proj_ofs, static_cast<uint32_t>(col_idx));
+                    }
+                }
+                if (raw_buffer.get_type(row_ofs, "fields") == lite3cpp::Type::Object) {
+                    const size_t fields_ofs = raw_buffer.get_obj(row_ofs, "fields");
+                    if (col_idx < 64) {
+                        static constexpr std::string_view idx_keys[] = {
+                            "idx_0", "idx_1", "idx_2", "idx_3", "idx_4", "idx_5", "idx_6", "idx_7",
+                            "idx_8", "idx_9", "idx_10", "idx_11", "idx_12", "idx_13", "idx_14", "idx_15",
+                            "idx_16", "idx_17", "idx_18", "idx_19", "idx_20", "idx_21", "idx_22", "idx_23",
+                            "idx_24", "idx_25", "idx_26", "idx_27", "idx_28", "idx_29", "idx_30", "idx_31",
+                            "idx_32", "idx_33", "idx_34", "idx_35", "idx_36", "idx_37", "idx_38", "idx_39",
+                            "idx_40", "idx_41", "idx_42", "idx_43", "idx_44", "idx_45", "idx_46", "idx_47",
+                            "idx_48", "idx_49", "idx_50", "idx_51", "idx_52", "idx_53", "idx_54", "idx_55",
+                            "idx_56", "idx_57", "idx_58", "idx_59", "idx_60", "idx_61", "idx_62", "idx_63"
+                        };
+                        if (raw_buffer.get_type(fields_ofs, idx_keys[col_idx]) == lite3cpp::Type::String) {
+                            return raw_buffer.get_str(fields_ofs, idx_keys[col_idx]);
+                        }
+                    }
+                }
+                return "";
+            }
             if (row < rows.size()) {
                 if (col_idx < rows[row].projected_values.size()) {
                     return rows[row].projected_values[col_idx];
@@ -76,9 +150,9 @@ namespace irods::catalog {
 
     struct Config {
         std::string db_path;
-        uint32_t node_id;
-        uint16_t cluster_id;
-        uint32_t shard_count;
+        uint32_t node_id = 0;
+        uint16_t cluster_id = 0;
+        uint32_t shard_count = 0;
         std::string zmq_endpoint;
         std::string default_resc;
         std::string default_resc_vault;

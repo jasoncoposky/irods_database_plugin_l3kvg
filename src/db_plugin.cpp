@@ -251,7 +251,7 @@ irods::error init_l3kvg_catalog() {
     }
 }
 
-irods::error db_maintenance_op(irods::lookup_table<boost::any>& _props) { return init_l3kvg_catalog(); }
+irods::error db_maintenance_op(irods::plugin_property_map& _props) { return init_l3kvg_catalog(); }
 irods::error db_start_op(irods::plugin_context& _ctx) { return init_l3kvg_catalog(); }
 irods::error db_stop_op(irods::plugin_context& _ctx) {
     if (g_catalog && g_catalog_pid == getpid()) {
@@ -1412,12 +1412,12 @@ irods::error db_del_child_resc_op(irods::plugin_context& _ctx, std::map<std::str
     }
 }
 
-irods::error db_gen_query_ticket_setup_op(
+static irods::error set_session_ticket(
     irods::plugin_context& _ctx,
     const char*            _ticket,
     const char*            _client_addr)
 {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_gen_query_ticket_setup_op ticket=%s, addr=%s",
+    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING set_session_ticket ticket=%s, addr=%s",
             safe_string(_ticket).c_str(), safe_string(_client_addr).c_str());
     if (!_ticket || !_client_addr) {
         return ERROR(CAT_INVALID_ARGUMENT, "null parameter");
@@ -1447,7 +1447,7 @@ irods::error db_mod_ticket_op(
 
         if (strcmp(_op_name, "session") == 0) {
             const char* addr = (_arg3 && strlen(_arg3) > 0) ? _arg3 : (_ctx.comm() ? _ctx.comm()->clientAddr : "");
-            return db_gen_query_ticket_setup_op(_ctx, _ticket_string ? _ticket_string : "", addr ? addr : "");
+            return set_session_ticket(_ctx, _ticket_string ? _ticket_string : "", addr ? addr : "");
         }
 
         bool is_admin = false;
@@ -3008,21 +3008,14 @@ irods::error db_get_grid_configuration_value_op(irods::plugin_context& _ctx, con
     }
 }
 
-namespace irods::catalog::bridge {
-    irods::experimental::genquery2::select synthesize_gq2_ast(genQueryInp_t* _inp, irods::catalog::CatalogFacade* _catalog, std::vector<uint64_t>& _starting_nodes);
-    void pack_gq1_results(const irods::catalog::ResultSet& _results, genQueryInp_t* _inp, genQueryOut_t* _out);
-    int get_pure_inx(int inx);
-}
-
-// GenQuery
+// Catalog Lifecycle & GenQuery2
 irods::error db_get_catalog_version_op(irods::plugin_context& _ctx, int* _version) {
     rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_get_catalog_version_op");
     try {
         if (!_version) return ERROR(SYS_INVALID_INPUT_PARAM, "Null version pointer");
-        *_version = 2; 
+        *_version = 11;
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_get_catalog_version_op SUCCESS");
         return SUCCESS();
-
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_get_catalog_version_op EXCEPTION: %s", e.what());
         return ERROR(SYS_INTERNAL_ERR, e.what());
@@ -3043,176 +3036,170 @@ irods::error db_initialize_catalog_op(irods::plugin_context& _ctx) {
     }
 }
 
-thread_local std::string g_access_control_user_name;
-thread_local std::string g_access_control_zone;
-thread_local int g_access_control_priv = 0;
-thread_local int g_access_control_flag = 0;
+namespace {
+    std::string get_projection_col_name(const irods::experimental::genquery2::projection& proj) {
+        namespace gq2 = irods::experimental::genquery2;
+        if (const auto* col = std::get_if<gq2::column>(&proj)) {
+            return col->name;
+        }
+        if (const auto* fn = std::get_if<gq2::function>(&proj)) {
+            for (const auto& arg : fn->arguments) {
+                if (const auto* arg_col = std::get_if<gq2::column>(&arg)) {
+                    return arg_col->name;
+                }
+            }
+            return fn->name;
+        }
+        return "";
+    }
 
-irods::error db_gen_query_access_control_setup_op(
+    bool is_numeric_default_column(std::string_view col_name) {
+        if (col_name.ends_with("_ID") || col_name.ends_with("_COUNT") || col_name.ends_with("_LIMIT")) {
+            return true;
+        }
+        return col_name == "DATA_SIZE" || col_name == "DATA_REPL_NUM" || col_name == "DATA_REPL_STATUS" ||
+               col_name == "RESC_FREE_SPACE" || col_name == "QUOTA_LIMIT" || col_name == "QUOTA_OVER" ||
+               col_name == "QUOTA_USAGE";
+    }
+
+    std::string_view normalize_projected_cell(std::string_view col_name, std::string_view val) {
+        if (col_name == "COLL_TYPE") {
+            if (val.empty() || val == "collection") return "";
+            return val;
+        }
+        if (col_name == "DATA_EXPIRY") {
+            if (val.empty()) return "00000000000";
+            return val;
+        }
+        if (col_name == "TICKET_EXPIRY_TS") {
+            if (val.empty() || val == "00000000000") return "0";
+            return val;
+        }
+        if (col_name == "RULE_EXEC_PRIORITY") {
+            if (val.empty()) return "5";
+            return val;
+        }
+        if (col_name == "DATA_ACCESS_TYPE" || col_name == "COLL_ACCESS_TYPE" ||
+            col_name == "DATA_ACCESS_PERM_ID" || col_name == "COLL_ACCESS_PERM_ID") {
+            if (val.starts_with("admin:")) val.remove_prefix(6);
+            if (val == "own") return "1200";
+            if (val == "write" || val == "modify_object") return "1100";
+            if (val == "read" || val == "read_object") return "1050";
+            if (val == "null" || val.empty()) return "1000";
+            return val;
+        }
+        if (col_name == "DATA_ACCESS_NAME" || col_name == "COLL_ACCESS_NAME" ||
+            col_name == "DATA_ACCESS_PERM_NAME" || col_name == "COLL_ACCESS_PERM_NAME") {
+            if (val.starts_with("admin:")) val.remove_prefix(6);
+            if (val == "write" || val == "modify_object") return "modify_object";
+            if (val == "read" || val == "read_object") return "read_object";
+            if (val == "null" || val.empty()) return "null";
+            return val;
+        }
+        if (val.empty() && is_numeric_default_column(col_name)) {
+            return "0";
+        }
+        return val;
+    }
+} // anonymous namespace
+
+irods::error db_execute_genquery2_buffer_op(
     irods::plugin_context& _ctx,
-    const char* _user,
-    const char* _zone,
-    const char* _host,
-    int _priv,
-    int _control_flag)
+    const irods::experimental::genquery2::statement* _stmt,
+    const irods::experimental::genquery2::options* _opts,
+    lite3cpp::Buffer* _output)
 {
-    if (_user) {
-        g_access_control_user_name = safe_string(_user);
-        g_access_control_zone = safe_string(_zone);
-        g_access_control_priv = _priv;
+    if (!_stmt || !_opts || !_output) {
+        return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Null input pointers.");
     }
-    int old_flag = g_access_control_flag;
-    if (_control_flag >= 0) {
-        g_access_control_flag = _control_flag;
-    }
-    return CODE(old_flag);
-}
 
-irods::error db_gen_query_op(irods::plugin_context& _ctx, genQueryInp_t* _inp, genQueryOut_t* _out) {
+    if (auto err = init_l3kvg_catalog(); !err.ok()) {
+        return err;
+    }
+
+    if (!g_catalog) {
+        return ERROR(SYS_CONFIG_FILE_ERR, "Catalog facade not initialized.");
+    }
+
     try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_gen_query_op");
-        if (auto ret = init_l3kvg_catalog(); !ret.ok()) return ret;
-        if (!_inp || !_out) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Null input/output");
+        if (const auto* sel = std::get_if<irods::experimental::genquery2::select>(_stmt)) {
+            namespace gq2 = irods::experimental::genquery2;
+            gq2::options eff_opts = *_opts;
+            std::string ticket_target_path;
+            std::string ticket_target_type;
+            std::string ticket_cuser;
+            const bool is_caller_admin = (_ctx.comm() ? (_ctx.comm()->clientUser.authInfo.authFlag >= LOCAL_PRIV_USER_AUTH) : eff_opts.admin_mode);
 
-        // 1. Intercept ticket restriction queries
-        bool is_host = false, is_user = false, is_group = false;
-        for (int s = 0; s < _inp->selectInp.len; ++s) {
-            int sinx = _inp->selectInp.inx[s];
-            if (sinx == COL_TICKET_ALLOWED_HOST || sinx == COL_TICKET_ALLOWED_HOST_TICKET_ID) is_host = true;
-            if (sinx == COL_TICKET_ALLOWED_USER_NAME || sinx == COL_TICKET_ALLOWED_USER_TICKET_ID) is_user = true;
-            if (sinx == COL_TICKET_ALLOWED_GROUP_NAME || sinx == COL_TICKET_ALLOWED_GROUP_TICKET_ID) is_group = true;
-        }
-
-        if (is_host || is_user || is_group) {
-            std::string ticket_id_or_str;
-            for (int c = 0; c < _inp->sqlCondInp.len; ++c) {
-                int cinx = _inp->sqlCondInp.inx[c];
-                if (cinx == COL_TICKET_ALLOWED_HOST_TICKET_ID ||
-                    cinx == COL_TICKET_ALLOWED_USER_TICKET_ID ||
-                    cinx == COL_TICKET_ALLOWED_GROUP_TICKET_ID ||
-                    cinx == COL_TICKET_ID || cinx == COL_TICKET_STRING) {
-                    std::string cond_str = safe_string(_inp->sqlCondInp.value[c]);
-                    size_t first = cond_str.find_first_not_of("= '\"");
-                    size_t last = cond_str.find_last_not_of(" '\"");
-                    if (first != std::string::npos && last != std::string::npos && last >= first) {
-                        ticket_id_or_str = cond_str.substr(first, last - first + 1);
-                    }
+            if (g_session_ticket[0] != '\0') {
+                if (_ctx.comm() && _ctx.comm()->clientUser.userName[0] != '\0') {
+                    ticket_cuser = _ctx.comm()->clientUser.userName;
+                } else if (g_session_client_user[0] != '\0') {
+                    ticket_cuser = g_session_client_user;
+                } else {
+                    ticket_cuser = eff_opts.user_name;
                 }
-            }
-
-            std::vector<std::pair<std::string, std::string>> out_restrictions;
-            std::string restr_type = is_host ? "host" : (is_user ? "user" : "group");
-            g_catalog->get_ticket_restrictions(ticket_id_or_str, restr_type, out_restrictions);
-            if (out_restrictions.empty()) {
-                return ERROR(CAT_NO_ROWS_FOUND, "No rows found");
-            }
-
-            _out->rowCnt = out_restrictions.size();
-            _out->attriCnt = _inp->selectInp.len;
-            _out->continueInx = 0;
-            _out->totalRowCount = _out->rowCnt;
-            for (int s = 0; s < _inp->selectInp.len; ++s) {
-                int sinx = _inp->selectInp.inx[s];
-                int col_len = 1000;
-                _out->sqlResult[s].attriInx = sinx;
-                _out->sqlResult[s].len = col_len;
-                _out->sqlResult[s].value = (char*)malloc(_out->rowCnt * col_len);
-                memset(_out->sqlResult[s].value, 0, _out->rowCnt * col_len);
-                for (size_t r = 0; r < out_restrictions.size(); ++r) {
-                    char* dst = _out->sqlResult[s].value + r * col_len;
-                    if (sinx == COL_TICKET_ALLOWED_HOST_TICKET_ID ||
-                        sinx == COL_TICKET_ALLOWED_USER_TICKET_ID ||
-                        sinx == COL_TICKET_ALLOWED_GROUP_TICKET_ID) {
-                        strncpy(dst, out_restrictions[r].first.c_str(), col_len - 1);
-                    } else {
-                        strncpy(dst, out_restrictions[r].second.c_str(), col_len - 1);
-                    }
+                auto terr = g_catalog->validate_ticket(g_session_ticket, ticket_cuser, g_session_client_addr, &ticket_target_path, &ticket_target_type);
+                if (!terr.ok()) {
+                    return terr;
                 }
+                eff_opts.admin_mode = true;
             }
-            return SUCCESS();
-        }
 
-        // 2. Setup options & validate ticket if session ticket is active
-        irods::experimental::genquery2::options opts;
-        std::string ticket_target_path;
-        std::string ticket_target_type;
-        std::string ticket_cuser;
-        bool is_caller_admin = (_ctx.comm() ? (_ctx.comm()->clientUser.authInfo.authFlag >= LOCAL_PRIV_USER_AUTH) : (g_access_control_priv >= LOCAL_PRIV_USER_AUTH));
-        if (g_session_ticket[0] != '\0') {
-            if (_ctx.comm() && _ctx.comm()->clientUser.userName[0] != '\0') {
-                ticket_cuser = _ctx.comm()->clientUser.userName;
-            } else if (g_session_client_user[0] != '\0') {
-                ticket_cuser = g_session_client_user;
-            } else if (!g_access_control_user_name.empty()) {
-                ticket_cuser = g_access_control_user_name;
+            irods::catalog::ResultSet results;
+            std::vector<uint64_t> starting_nodes;
+            auto ret = g_catalog->execute_query(*sel, results, starting_nodes, "", &eff_opts);
+            if (!ret.ok()) {
+                if (ret.code() == SYS_INVALID_INPUT_PARAM && _ctx.comm()) {
+                    addRErrorMsg(&_ctx.comm()->rError, SYS_INVALID_INPUT_PARAM, "Could not generate SQL from GenQuery2 string.");
+                }
+                return ret;
             }
-            auto terr = g_catalog->validate_ticket(g_session_ticket, ticket_cuser, g_session_client_addr, &ticket_target_path, &ticket_target_type);
-            if (!terr.ok()) {
-                return terr;
-            }
-            opts.admin_mode = true;
-        } else {
-            if (_ctx.comm()) {
-                opts.user_name = _ctx.comm()->clientUser.userName;
-                opts.user_zone = _ctx.comm()->clientUser.rodsZone;
-                opts.admin_mode = (_ctx.comm()->clientUser.authInfo.authFlag >= LOCAL_PRIV_USER_AUTH);
-            } else if (!g_access_control_user_name.empty()) {
-                opts.user_name = g_access_control_user_name;
-                opts.user_zone = g_access_control_zone;
-                opts.admin_mode = (g_access_control_priv >= LOCAL_PRIV_USER_AUTH);
-            }
-        }
-        if (_inp->maxRows > 0) {
-            opts.default_number_of_rows = _inp->maxRows;
-        }
 
-        std::vector<uint64_t> starting_nodes;
-        auto ast = irods::catalog::bridge::synthesize_gq2_ast(_inp, g_catalog.get(), starting_nodes);
-        irods::catalog::ResultSet results;
-        auto ret = g_catalog->execute_query(ast, results, starting_nodes, "", &opts);
-
-        if (g_session_ticket[0] != '\0' && !is_caller_admin && !ticket_target_path.empty()) {
+            std::vector<std::string> col_names;
+            col_names.reserve(sel->projections.size());
             int coll_name_idx = -1;
             int data_name_idx = -1;
-            for (int i = 0; i < _inp->selectInp.len; ++i) {
-                int pinx = irods::catalog::bridge::get_pure_inx(_inp->selectInp.inx[i]);
-                if (pinx == COL_COLL_NAME) {
-                    coll_name_idx = i;
-                } else if (pinx == COL_DATA_NAME) {
-                    data_name_idx = i;
-                }
+            int data_id_idx = -1;
+            for (size_t c = 0; c < sel->projections.size(); ++c) {
+                std::string cname = get_projection_col_name(sel->projections[c]);
+                if (cname == "COLL_NAME") coll_name_idx = static_cast<int>(c);
+                else if (cname == "DATA_NAME") data_name_idx = static_cast<int>(c);
+                else if (cname == "DATA_ID") data_id_idx = static_cast<int>(c);
+                col_names.push_back(std::move(cname));
             }
 
             std::string cond_coll_name;
             std::string cond_data_name;
-            for (int k = 0; k < _inp->sqlCondInp.len; ++k) {
-                int pinx = irods::catalog::bridge::get_pure_inx(_inp->sqlCondInp.inx[k]);
-                if (pinx == COL_COLL_NAME && _inp->sqlCondInp.value[k]) {
-                    std::string val = _inp->sqlCondInp.value[k];
-                    auto p1 = val.find('\'');
-                    if (p1 != std::string::npos) {
-                        auto p2 = val.rfind('\'');
-                        if (p2 != std::string::npos && p2 > p1) {
-                            cond_coll_name = val.substr(p1 + 1, p2 - p1 - 1);
+            if (g_session_ticket[0] != '\0' && !is_caller_admin && !ticket_target_path.empty()) {
+                auto extract_eq_conds = [&](auto& self, const gq2::conditions& conds) -> void {
+                    for (const auto& w : conds) {
+                        if (const auto* c = std::get_if<gq2::condition>(&w)) {
+                            if (const auto* eq = std::get_if<gq2::condition_equal>(&c->expression)) {
+                                if (const auto* col = std::get_if<gq2::column>(&c->lhs)) {
+                                    if (col->name == "COLL_NAME") cond_coll_name = eq->string_literal;
+                                    else if (col->name == "DATA_NAME") cond_data_name = eq->string_literal;
+                                }
+                            }
+                        } else if (const auto* land = std::get_if<gq2::logical_and>(&w)) {
+                            self(self, land->condition);
+                        } else if (const auto* lgrp = std::get_if<gq2::logical_grouping>(&w)) {
+                            self(self, lgrp->conditions);
                         }
                     }
-                } else if (pinx == COL_DATA_NAME && _inp->sqlCondInp.value[k]) {
-                    std::string val = _inp->sqlCondInp.value[k];
-                    auto p1 = val.find('\'');
-                    if (p1 != std::string::npos) {
-                        auto p2 = val.rfind('\'');
-                        if (p2 != std::string::npos && p2 > p1) {
-                            cond_data_name = val.substr(p1 + 1, p2 - p1 - 1);
-                        }
-                    }
-                }
+                };
+                extract_eq_conds(extract_eq_conds, sel->conditions);
             }
 
-            if (coll_name_idx >= 0 || data_name_idx >= 0 || !cond_coll_name.empty()) {
-                std::vector<l3kvg::Query::ResultRow> filtered_rows;
-                for (size_t r = 0; r < results.rows.size(); ++r) {
-                    std::string cname = (coll_name_idx >= 0) ? std::string(results.get_field(r, (size_t)coll_name_idx)) : cond_coll_name;
-                    std::string dname = (data_name_idx >= 0) ? std::string(results.get_field(r, (size_t)data_name_idx)) : cond_data_name;
+            *_output = lite3cpp::Buffer();
+            _output->init_array();
+
+            const size_t nrows = results.row_count();
+            uint64_t first_data_id = 0;
+            for (size_t r = 0; r < nrows; ++r) {
+                if (g_session_ticket[0] != '\0' && !is_caller_admin && !ticket_target_path.empty() &&
+                    (coll_name_idx >= 0 || data_name_idx >= 0 || !cond_coll_name.empty())) {
+                    std::string cname = (coll_name_idx >= 0) ? std::string(results.get_field(r, static_cast<size_t>(coll_name_idx))) : cond_coll_name;
+                    std::string dname = (data_name_idx >= 0) ? std::string(results.get_field(r, static_cast<size_t>(data_name_idx))) : cond_data_name;
                     std::string row_path;
                     bool is_coll_entity = false;
                     if (!dname.empty()) {
@@ -3246,58 +3233,55 @@ irods::error db_gen_query_op(irods::plugin_context& _ctx, genQueryInp_t* _inp, g
                     } else {
                         allowed = true;
                     }
-
-                    if (allowed) {
-                        filtered_rows.push_back(std::move(results.rows[r]));
+                    if (!allowed) {
+                        continue;
                     }
                 }
-                results.rows = std::move(filtered_rows);
-            }
-        }
 
-        irods::catalog::bridge::pack_gq1_results(results, _inp, _out);
-        if (_out->rowCnt <= 0) {
-            rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_gen_query_op SUCCESS (NO ROWS)");
-            return ERROR(CAT_NO_ROWS_FOUND, "No rows found");
-        }
-
-        // 3. If session ticket is active and data object was queried during an access check, increment uses
-        if (g_session_ticket[0] != '\0') {
-            bool is_access_check = false;
-            if (_inp && _inp->condInput.len > 0) {
-                for (int k = 0; k < _inp->condInput.len; ++k) {
-                    if (_inp->condInput.keyWord[k] && 
-                        (strcmp(_inp->condInput.keyWord[k], ACCESS_PERMISSION_KW) == 0 ||
-                         strcmp(_inp->condInput.keyWord[k], TICKET_KW) == 0)) {
-                        is_access_check = true;
-                        break;
+                size_t row_arr = _output->arr_append_arr(0);
+                for (size_t c = 0; c < sel->projections.size(); ++c) {
+                    std::string_view raw_val = results.get_field(r, c);
+                    std::string_view norm_val = normalize_projected_cell(col_names[c], raw_val);
+                    _output->arr_append_str(row_arr, norm_val);
+                    if (first_data_id == 0 && static_cast<int>(c) == data_id_idx && !norm_val.empty()) {
+                        try { first_data_id = std::stoull(std::string(norm_val)); } catch (...) {}
                     }
                 }
             }
-            if (is_access_check) {
-                uint64_t q_data_id = 0;
-                for (int i = 0; i < _out->attriCnt; ++i) {
-                    if (_out->sqlResult[i].attriInx == COL_D_DATA_ID) {
-                        try {
-                            q_data_id = std::stoull(_out->sqlResult[i].value);
-                        } catch (...) {}
-                        break;
-                    }
-                }
-                if (q_data_id != 0) {
-                    auto uerr = g_catalog->increment_ticket_uses(g_session_ticket, q_data_id);
-                    if (!uerr.ok()) {
-                        return uerr;
-                    }
+
+            if (g_session_ticket[0] != '\0' && first_data_id != 0 && data_id_idx >= 0 && sel->projections.size() <= 2) {
+                auto uerr = g_catalog->increment_ticket_uses(g_session_ticket, first_data_id);
+                if (!uerr.ok()) {
+                    return uerr;
                 }
             }
+
+            return SUCCESS();
         }
 
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_gen_query_op SUCCESS");
-        return SUCCESS();
-    } catch (const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_gen_query_op EXCEPTION: %s", e.what());
+        // Handle DML Mutations
+        irods::catalog::compiler::Gq2ToL3kvgCompiler compiler;
+        auto plan = compiler.compile(*_stmt);
+        return g_catalog->execute_dml(plan, *_output);
+    }
+    catch (const std::invalid_argument& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_buffer_op invalid argument: %s", e.what());
+        if (_ctx.comm()) {
+            addRErrorMsg(&_ctx.comm()->rError, SYS_INVALID_INPUT_PARAM, "Could not generate SQL from GenQuery2 string.");
+        }
+        return ERROR(SYS_INVALID_INPUT_PARAM, e.what());
+    }
+    catch (const irods::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_buffer_op irods::exception: %s", e.what());
+        return ERROR(e.code(), e.what());
+    }
+    catch (const std::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_buffer_op exception: %s", e.what());
         return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
+    catch (...) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_buffer_op unknown exception");
+        return ERROR(SYS_UNKNOWN_ERROR, "Unknown exception in db_execute_genquery2_buffer_op");
     }
 }
 
@@ -3313,104 +3297,38 @@ irods::error db_execute_genquery2_op(
 
     *_output = nullptr;
 
-    if (auto err = init_l3kvg_catalog(); !err.ok()) {
-        return err;
-    }
-
-    if (!g_catalog) {
-        return ERROR(SYS_CONFIG_FILE_ERR, "Catalog facade not initialized.");
+    lite3cpp::Buffer buf;
+    auto ret = db_execute_genquery2_buffer_op(_ctx, _stmt, _opts, &buf);
+    if (!ret.ok()) {
+        return ret;
     }
 
     try {
-        if (const auto* sel = std::get_if<irods::experimental::genquery2::select>(_stmt)) {
-            irods::catalog::ResultSet results;
-            std::vector<uint64_t> starting_nodes;
-            auto ret = g_catalog->execute_query(*sel, results, starting_nodes, "", _opts);
-            if (!ret.ok()) {
-                if (ret.code() == SYS_INVALID_INPUT_PARAM && _ctx.comm()) {
-                    addRErrorMsg(&_ctx.comm()->rError, SYS_INVALID_INPUT_PARAM, "Could not generate SQL from GenQuery2 string.");
-                }
-                return ret;
-            }
-
-            std::stringstream ss;
-            ss << "[";
-            for (size_t r = 0; r < results.rows.size(); ++r) {
-                if (r > 0) ss << ",";
-                ss << "[";
-                for (size_t c = 0; c < sel->projections.size(); ++c) {
-                    if (c > 0) ss << ",";
-                    std::string_view val = results.get_field(r, c);
-                    ss << "\"";
-                    for (char ch : val) {
-                        switch (ch) {
-                            case '"': ss << "\\\""; break;
-                            case '\\': ss << "\\\\"; break;
-                            case '\b': ss << "\\b"; break;
-                            case '\f': ss << "\\f"; break;
-                            case '\n': ss << "\\n"; break;
-                            case '\r': ss << "\\r"; break;
-                            case '\t': ss << "\\t"; break;
-                            default:
-                                if (static_cast<unsigned char>(ch) < 0x20) {
-                                    char hex[8];
-                                    std::snprintf(hex, sizeof(hex), "\\u%04x", static_cast<unsigned char>(ch));
-                                    ss << hex;
-                                } else {
-                                    ss << ch;
-                                }
-                                break;
-                        }
-                    }
-                    ss << "\"";
-                }
-                ss << "]";
-            }
-            ss << "]";
-
-            std::string out_str = ss.str();
-            *_output = strdup(out_str.c_str());
-            if (!*_output) {
-                return ERROR(SYS_MALLOC_ERR, "Failed to allocate memory for GenQuery2 output.");
-            }
-            return SUCCESS();
-        }
-
-        // Handle DML Mutations
-        irods::catalog::compiler::Gq2ToL3kvgCompiler compiler;
-        auto plan = compiler.compile(*_stmt);
-        lite3cpp::Buffer dml_result;
-        auto ret = g_catalog->execute_dml(plan, dml_result);
-        if (!ret.ok()) {
-            return ret;
-        }
-
-        std::string out_str = lite3cpp::lite3_json::to_json_string(dml_result, 0);
+        std::string out_str = lite3cpp::lite3_json::to_json_string(buf, 0);
         *_output = strdup(out_str.c_str());
         if (!*_output) {
             return ERROR(SYS_MALLOC_ERR, "Failed to allocate memory for GenQuery2 output.");
         }
         return SUCCESS();
-    }
-    catch (const std::invalid_argument& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op invalid argument: %s", e.what());
-        if (_ctx.comm()) {
-            addRErrorMsg(&_ctx.comm()->rError, SYS_INVALID_INPUT_PARAM, "Could not generate SQL from GenQuery2 string.");
-        }
-        return ERROR(SYS_INVALID_INPUT_PARAM, e.what());
-    }
-    catch (const irods::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op irods::exception: %s", e.what());
-        return ERROR(e.code(), e.what());
-    }
-    catch (const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op exception: %s", e.what());
+    } catch (const std::exception& e) {
         return ERROR(SYS_INTERNAL_ERR, e.what());
     }
-    catch (...) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: db_execute_genquery2_op unknown exception");
-        return ERROR(SYS_UNKNOWN_ERROR, "Unknown exception in db_execute_genquery2_op");
+}
+
+irods::error db_atomic_apply_op(
+    irods::plugin_context& _ctx,
+    const std::vector<irods::experimental::dml::operation_type>* _ops)
+{
+    if (!_ops) {
+        return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Null operations pointer.");
     }
+    if (auto err = init_l3kvg_catalog(); !err.ok()) {
+        return err;
+    }
+    if (!g_catalog) {
+        return ERROR(SYS_CONFIG_FILE_ERR, "Catalog facade not initialized.");
+    }
+    return g_catalog->apply_atomic_operations(*_ops);
 }
 
 class l3kvg_database_plugin : public irods::database {
@@ -3512,15 +3430,8 @@ public:
         add_operation<const char*, const char*>(irods::DATABASE_OP_REMOVE_SESSION_TOKENS, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_remove_session_tokens_op));
         add_operation<const char*, const char*>(irods::DATABASE_OP_REMOVE_PASSWORD, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_remove_password_op));
 
-        add_operation<int*>("database_get_catalog_version", std::function<irods::error(irods::plugin_context&, int*)>(db_get_catalog_version_op));
-        add_operation("database_initialize_catalog", std::function<irods::error(irods::plugin_context&)>(db_initialize_catalog_op));
-        add_operation<genQueryInp_t*, genQueryOut_t*>(irods::DATABASE_OP_GEN_QUERY, std::function<irods::error(irods::plugin_context&, genQueryInp_t*, genQueryOut_t*)>(db_gen_query_op));
-        add_operation<const char*, const char*, const char*, int, int>(
-            irods::DATABASE_OP_GEN_QUERY_ACCESS_CONTROL_SETUP,
-            std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, int, int)>(db_gen_query_access_control_setup_op));
-        add_operation<const char*, const char*>(
-            irods::DATABASE_OP_GEN_QUERY_TICKET_SETUP,
-            std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_gen_query_ticket_setup_op));
+        add_operation<int*>(irods::DATABASE_OP_GET_CATALOG_VERSION, std::function<irods::error(irods::plugin_context&, int*)>(db_get_catalog_version_op));
+        add_operation(irods::DATABASE_OP_INITIALIZE_CATALOG, std::function<irods::error(irods::plugin_context&)>(db_initialize_catalog_op));
         add_operation<const irods::experimental::genquery2::statement*,
                       const irods::experimental::genquery2::options*,
                       char**>(
@@ -3529,6 +3440,18 @@ public:
                                        const irods::experimental::genquery2::statement*,
                                        const irods::experimental::genquery2::options*,
                                        char**)>(db_execute_genquery2_op));
+        add_operation<const irods::experimental::genquery2::statement*,
+                      const irods::experimental::genquery2::options*,
+                      lite3cpp::Buffer*>(
+            irods::DATABASE_OP_EXECUTE_GENQUERY2_BUFFER,
+            std::function<irods::error(irods::plugin_context&,
+                                       const irods::experimental::genquery2::statement*,
+                                       const irods::experimental::genquery2::options*,
+                                       lite3cpp::Buffer*)>(db_execute_genquery2_buffer_op));
+        add_operation<const std::vector<irods::experimental::dml::operation_type>*>(
+            irods::DATABASE_OP_ATOMIC_APPLY,
+            std::function<irods::error(irods::plugin_context&,
+                                       const std::vector<irods::experimental::dml::operation_type>*)>(db_atomic_apply_op));
     }
 };
 

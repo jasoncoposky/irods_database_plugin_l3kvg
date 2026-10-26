@@ -1,4 +1,6 @@
 #include "plugin_test_fixture.hpp"
+#include "irods/genquery1_ast_adapter.hpp"
+#include "irods/private/genquery2_sql.hpp"
 #include "irods/irods_server_properties.hpp"
 #include "irods/irods_configuration_keywords.hpp"
 #include "irods/irods_database_constants.hpp"
@@ -115,11 +117,15 @@ TEST_F(MetadataPluginTest, AvuLifecycle) {
     gq_inp.sqlCondInp.value[0] = strdup("= 'size'");
     gq_inp.sqlCondInp.value[1] = strdup("= 'large'");
 
-    genQueryOut_t gq_out{};
-    memset(&gq_out, 0, sizeof(genQueryOut_t));
+    auto select_ast = irods::experimental::genquery2::genquery1_to_genquery2_ast(gq_inp);
+    const irods::experimental::genquery2::statement stmt{std::move(select_ast)};
+    irods::experimental::genquery2::options opts{};
+    lite3cpp::Buffer raw_buf;
 
-    ret = plugin()->call<genQueryInp_t*, genQueryOut_t*>(
-        nullptr, irods::DATABASE_OP_GEN_QUERY, nullptr, &gq_inp, &gq_out);
+    ret = plugin()->call<const irods::experimental::genquery2::statement*,
+                         const irods::experimental::genquery2::options*,
+                         lite3cpp::Buffer*>(
+        nullptr, irods::DATABASE_OP_EXECUTE_GENQUERY2_BUFFER, nullptr, &stmt, &opts, &raw_buf);
     ASSERT_TRUE(ret.ok());
 
     free(gq_inp.selectInp.inx);
@@ -128,9 +134,6 @@ TEST_F(MetadataPluginTest, AvuLifecycle) {
     free(gq_inp.sqlCondInp.value[0]);
     free(gq_inp.sqlCondInp.value[1]);
     free(gq_inp.sqlCondInp.value);
-    if (gq_out.sqlResult && gq_out.sqlResult[0].value) {
-        free(gq_out.sqlResult[0].value);
-    }
 }
 
 int main(int argc, char **argv) {

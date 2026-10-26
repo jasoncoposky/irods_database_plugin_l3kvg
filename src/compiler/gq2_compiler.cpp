@@ -10,7 +10,7 @@
 #include <type_traits>
 #include <algorithm>
 #include "buffer.hpp"
-#include <boost/variant.hpp>
+#include <variant>
 #include <boost/algorithm/string.hpp>
 #include "irods/rodsGenQuery.h"
 
@@ -153,6 +153,8 @@ namespace irods::catalog::compiler {
         {"COLL_TYPE",         {"Collection", "t"}},
         {"COLL_INFO1",        {"Collection", "c1"}},
         {"COLL_INFO2",        {"Collection", "c2"}},
+        {"COLL_INFO_1",       {"Collection", "c1"}},
+        {"COLL_INFO_2",       {"Collection", "c2"}},
 
         {"USER_ID",           {"User", "id"}},
         {"USER_NAME",         {"User", "n"}},
@@ -229,12 +231,15 @@ namespace irods::catalog::compiler {
         {"USER_GROUP_NAME",      {"Group", "n"}},
 
         {"D_RESC_ID",      {"Replica", "rid"}},
+        {"DATA_RESC_ID",   {"Replica", "rid"}},
         {"DATA_REPL_NUM",  {"Replica", "rn"}},
         {"DATA_PATH",      {"Replica", "p"}},
         {"DATA_REPL_STATUS",{"Replica", "st"}},
         {"D_RESC_HIER",    {"Replica", "rh"}},
         {"DATA_RESC_HIER", {"Replica", "rh"}},
         {"DATA_ACCESS_TIME", {"Replica", "at"}},
+        {"RESC_GROUP_NAME", {"Resource", "n"}},
+        {"DATA_RESC_GROUP_NAME", {"Resource", "n"}},
 
         {"DATA_ACCESS_NAME",      {"Access", "l"}},
         {"DATA_ACCESS_TYPE",      {"Access", "l"}},
@@ -259,8 +264,18 @@ namespace irods::catalog::compiler {
         {"COLL_ACCESS_USER_TYPE", {"CollUser", "t"}},
         {"COLL_USER_NAME",        {"CollUser", "n"}},
         {"COLL_USER_ZONE",        {"CollUser", "z"}},
+        {"COLL_ZONE_NAME",        {"CollUser", "z"}},
         {"DATA_USER_NAME",        {"User", "n"}},
         {"DATA_USER_ZONE",        {"User", "z"}},
+        {"DATA_ZONE_NAME",        {"User", "z"}},
+        {"RESC_ACCESS_TYPE",      {"Access", "l"}},
+        {"RESC_ACCESS_NAME",      {"Access", "l"}},
+        {"RESC_TOKEN_NAMESPACE",  {"Access", "t"}},
+        {"RESC_ACCESS_USER_ID",   {"User", "id"}},
+        {"RESC_ACCESS_RESC_ID",   {"Resource", "id"}},
+        {"RESC_USER_NAME",        {"User", "n"}},
+        {"RESC_USER_ZONE",        {"User", "z"}},
+        {"RESC_ZONE_NAME",        {"Resource", "z"}},
 
         {"TICKET_ID",         {"Ticket", "id"}},
         {"TICKET_STRING",     {"Ticket", "s"}},
@@ -370,10 +385,23 @@ namespace irods::catalog::compiler {
         {"FNM_INT_FUNC_NAME", {"FNM", "if"}},
 
         {"QUOTA_USER_ID",     {"Quota", "uid"}},
+        {"QUOTA_USER_NAME",   {"User", "n"}},
+        {"QUOTA_USER_ZONE",   {"User", "z"}},
+        {"QUOTA_RESC_ID",     {"Resource", "id"}},
         {"QUOTA_RESC_NAME",   {"Resource", "n"}},
         {"QUOTA_LIMIT",       {"Quota", "l"}},
         {"QUOTA_OVER",        {"Quota", "o"}},
-        {"QUOTA_USAGE",       {"Quota", "u"}}
+        {"QUOTA_USAGE",       {"Quota", "u"}},
+
+        {"TOKEN_NAMESPACE",   {"Token", "ns"}},
+        {"TOKEN_ID",          {"Token", "id"}},
+        {"TOKEN_NAME",        {"Token", "n"}},
+        {"TOKEN_VALUE",       {"Token", "v"}},
+        {"TOKEN_VALUE2",      {"Token", "v2"}},
+        {"TOKEN_VALUE3",      {"Token", "v3"}},
+        {"TOKEN_COMMENT",     {"Token", "c"}},
+        {"TOKEN_CREATE_TIME", {"Token", "ct"}},
+        {"TOKEN_MODIFY_TIME", {"Token", "mt"}}
     };
 
     struct InternalRouteKey {
@@ -475,7 +503,7 @@ namespace irods::catalog::compiler {
         return nullptr;
     }
 
-    struct pc_visitor : public boost::static_visitor<std::pair<int, std::string>> {
+    struct pc_visitor {
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_equal& c) const { return {0, c.string_literal}; }
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_not_equal& c) const { return {1, c.string_literal}; }
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_greater_than& c) const { return {2, c.string_literal}; }
@@ -484,16 +512,19 @@ namespace irods::catalog::compiler {
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_less_than_or_equal_to& c) const { return {5, c.string_literal}; }
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_like& c) const { return {6, c.string_literal}; }
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_operator_not& c) const {
-            if (const auto* lk = boost::get<irods::experimental::genquery2::condition_like>(&c.expression)) {
+            if (const auto* lk = std::get_if<irods::experimental::genquery2::condition_like>(&c.expression)) {
                 return {7, lk->string_literal};
             }
-            if (const auto* eq = boost::get<irods::experimental::genquery2::condition_equal>(&c.expression)) {
+            if (const auto* eq = std::get_if<irods::experimental::genquery2::condition_equal>(&c.expression)) {
                 return {1, eq->string_literal};
             }
-            if (const auto* neq = boost::get<irods::experimental::genquery2::condition_not_equal>(&c.expression)) {
+            if (const auto* neq = std::get_if<irods::experimental::genquery2::condition_not_equal>(&c.expression)) {
                 return {0, neq->string_literal};
             }
             return {0, ""};
+        }
+        std::pair<int, std::string> operator()(const irods::experimental::genquery2::recursive_box<irods::experimental::genquery2::condition_operator_not>& c) const {
+            return (*this)(c.get());
         }
         template<typename T> std::pair<int, std::string> operator()(const T&) const { return {0, ""}; }
     };
@@ -512,7 +543,7 @@ namespace irods::catalog::compiler {
         }
     }
 
-    struct condition_visitor : public boost::static_visitor<void> {
+    struct condition_visitor {
         Gq2ToL3kvgCompiler* compiler;
         lite3cpp::Buffer& buf;
         size_t arr_ofs;
@@ -565,8 +596,17 @@ namespace irods::catalog::compiler {
 
         void operator()(const irods::experimental::genquery2::condition& c) const {
             std::string col_name;
-            if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) col_name = col->name;
-            else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) col_name = func->name;
+            if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) {
+                col_name = col->name;
+            } else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) {
+                for (const auto& arg : func->arguments) {
+                    if (auto* arg_col = std::get_if<irods::experimental::genquery2::column>(&arg)) {
+                        col_name = arg_col->name;
+                        break;
+                    }
+                }
+                if (col_name.empty()) col_name = func->name;
+            }
             const auto* gm = find_column_mapping(col_name);
             if (!gm) {
                 throw std::invalid_argument("Unknown column: " + col_name);
@@ -591,7 +631,7 @@ namespace irods::catalog::compiler {
             }
             compiler->add_target_type(node_type);
 
-            if (auto* in_expr = boost::get<irods::experimental::genquery2::condition_in>(&c.expression)) {
+            if (auto* in_expr = std::get_if<irods::experimental::genquery2::condition_in>(&c.expression)) {
                 if (in_expr->list_of_string_literals.empty()) {
                     return;
                 }
@@ -609,7 +649,7 @@ namespace irods::catalog::compiler {
                 return;
             }
 
-            if (auto* bet_expr = boost::get<irods::experimental::genquery2::condition_between>(&c.expression)) {
+            if (auto* bet_expr = std::get_if<irods::experimental::genquery2::condition_between>(&c.expression)) {
                 size_t grp_ofs = buf.arr_append_obj(arr_ofs);
                 buf.set_str(grp_ofs, "group", "and");
                 buf.set_str(grp_ofs, "prepended_op", "and");
@@ -620,7 +660,7 @@ namespace irods::catalog::compiler {
             }
 
             pc_visitor pcv;
-            auto pc = boost::apply_visitor(pcv, c.expression);
+            auto pc = std::visit(pcv, c.expression);
             if (node_type == "Access" && bson_key == "t" && pc.second == "access_type" && pc.first == 0) {
                 size_t grp_ofs = buf.arr_append_obj(arr_ofs);
                 buf.set_str(grp_ofs, "group", "or");
@@ -633,13 +673,13 @@ namespace irods::catalog::compiler {
             append_filter(buf, arr_ofs, node_type, bson_key, pc.first, pc.second);
         }
 
-        void operator()(const irods::experimental::genquery2::logical_and& l) const { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
+        void operator()(const irods::experimental::genquery2::logical_and& l) const { for(const auto& c : l.condition) std::visit(*this, c); }
         void operator()(const irods::experimental::genquery2::logical_or& l) const {
             lite3cpp::Buffer branch_buf;
             branch_buf.init_array();
             condition_visitor sub_vis(compiler, branch_buf, 0);
             for (const auto& c : l.condition) {
-                boost::apply_visitor(sub_vis, c);
+                std::visit(sub_vis, c);
             }
             if (branch_buf.size() < sizeof(lite3cpp::PackedNodeLayout)) return;
             lite3cpp::NodeView bnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(branch_buf.data()));
@@ -661,7 +701,7 @@ namespace irods::catalog::compiler {
             grp_buf.init_array();
             condition_visitor sub_vis(compiler, grp_buf, 0);
             for(const auto& c : l.conditions) {
-                boost::apply_visitor(sub_vis, c);
+                std::visit(sub_vis, c);
             }
             if (grp_buf.size() < sizeof(lite3cpp::PackedNodeLayout)) return;
             lite3cpp::NodeView gnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(grp_buf.data()));
@@ -675,10 +715,10 @@ namespace irods::catalog::compiler {
                 }
             }
         }
-        void operator()(const irods::experimental::genquery2::logical_not& l) const { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
+        void operator()(const irods::experimental::genquery2::logical_not& l) const { for(const auto& c : l.condition) std::visit(*this, c); }
     };
 
-    struct projection_visitor : public boost::static_visitor<void> {
+    struct projection_visitor {
         Gq2ToL3kvgCompiler* compiler;
         lite3cpp::Buffer& buf;
         size_t projs_arr_ofs;
@@ -761,52 +801,81 @@ namespace irods::catalog::compiler {
             entry_node_type_ = normalize_entity_type(ast.from_entity);
             rodsLog(LOG_DEBUG, "L3_COMPILER: Using ast.from_entity root alias: %s", entry_node_type_.c_str());
         } else {
-            struct anchor_visitor : public boost::static_visitor<void> {
+            struct anchor_visitor {
                  Gq2ToL3kvgCompiler* compiler;
                  anchor_visitor(Gq2ToL3kvgCompiler* c) : compiler(c) {}
                  void operator()(const irods::experimental::genquery2::condition& c) {
                      std::string col_name;
-                     if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) col_name = col->name;
-                     else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) col_name = func->name;
+                     if (auto* col = std::get_if<irods::experimental::genquery2::column>(&c.lhs)) {
+                         col_name = col->name;
+                     } else if (auto* func = std::get_if<irods::experimental::genquery2::function>(&c.lhs)) {
+                         for (const auto& arg : func->arguments) {
+                             if (auto* arg_col = std::get_if<irods::experimental::genquery2::column>(&arg)) {
+                                 col_name = arg_col->name;
+                                 break;
+                             }
+                         }
+                         if (col_name.empty()) col_name = func->name;
+                     }
                      const auto* gm = find_column_mapping(col_name);
                      if (gm) {
                          std::string t = std::string(gm->node_type);
-                         if (col_name.rfind("DATA_ACCESS_", 0) == 0 || col_name.rfind("DATA_", 0) == 0) t = "DataObject";
+                         if (col_name.rfind("RULE_EXEC_", 0) == 0 || col_name.rfind("RULE_", 0) == 0) t = "Rule";
+                         else if (col_name.rfind("TICKET_", 0) == 0) t = "Ticket";
+                         else if (col_name.rfind("DATA_ACCESS_", 0) == 0 || col_name.rfind("DATA_", 0) == 0 || col_name == "D_RESC_ID" || col_name == "D_RESC_HIER" || col_name == "D_RESC_NAME") t = "DataObject";
                          else if (col_name.rfind("COLL_ACCESS_", 0) == 0 || col_name.rfind("COLL_", 0) == 0) t = "Collection";
                          else if (t == "CollUser" || t == "CollAccess") t = "Collection";
                          else if (t == "Access" || t == "Replica") t = "DataObject";
 
-                         int current_priority = 0;
-                         std::string cur = std::string(compiler->get_entry_type());
-                         if (cur == "DataObject") current_priority = 5;
-                         else if (cur == "Collection") current_priority = 4;
-                         else if (cur == "Group") current_priority = 3;
-                         else if (cur == "User" || cur == "Resource") current_priority = 2;
-                         else if (cur == "Zone") current_priority = 1;
-                         
-                         int new_priority = 0;
-                         if (t == "DataObject") new_priority = 5;
-                         else if (t == "Collection") new_priority = 4;
-                         else if (t == "Group") new_priority = 3;
-                         else if (t == "User" || t == "Resource") new_priority = 2;
-                         else if (t == "Zone") new_priority = 1;
+                         auto get_prio = [](std::string_view et) -> int {
+                             if (et == "Rule") return 10;
+                             if (et == "Ticket") return 8;
+                             if (et == "DataObject") return 5;
+                             if (et == "Collection" || et == "Group") return 4;
+                             if (et == "User" || et == "Resource") return 3;
+                             if (et == "Zone") return 2;
+                             if (et == "Metadata" || et == "Token") return 1;
+                             return 0;
+                         };
+
+                         int current_priority = get_prio(compiler->get_entry_type());
+                         int new_priority = get_prio(t);
 
                          if (new_priority > current_priority) {
                              compiler->set_entry_type(t);
                          }
                      }
                  }
-                 void operator()(const irods::experimental::genquery2::logical_and& l) { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
-                 void operator()(const irods::experimental::genquery2::logical_or& l) { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
-                 void operator()(const irods::experimental::genquery2::logical_grouping& l) { for(const auto& c : l.conditions) boost::apply_visitor(*this, c); }
-                 void operator()(const irods::experimental::genquery2::logical_not& l) { for(const auto& c : l.condition) boost::apply_visitor(*this, c); }
+                 void operator()(const irods::experimental::genquery2::logical_and& l) { for(const auto& c : l.condition) std::visit(*this, c); }
+                 void operator()(const irods::experimental::genquery2::logical_or& l) { for(const auto& c : l.condition) std::visit(*this, c); }
+                 void operator()(const irods::experimental::genquery2::logical_grouping& l) { for(const auto& c : l.conditions) std::visit(*this, c); }
+                 void operator()(const irods::experimental::genquery2::logical_not& l) { for(const auto& c : l.condition) std::visit(*this, c); }
             };
             anchor_visitor av(this);
-            for(const auto& w : ast.conditions) boost::apply_visitor(av, w);
+            for (const auto& p : ast.projections) {
+                struct proj_anchor_visitor {
+                    anchor_visitor& av;
+                    proj_anchor_visitor(anchor_visitor& a) : av(a) {}
+                    void operator()(const irods::experimental::genquery2::column& col) const {
+                        irods::experimental::genquery2::condition dummy(col, irods::experimental::genquery2::condition_equal(""));
+                        av(dummy);
+                    }
+                    void operator()(const irods::experimental::genquery2::function& func) const {
+                        for (const auto& arg : func.arguments) {
+                            if (const auto* col = std::get_if<irods::experimental::genquery2::column>(&arg)) {
+                                irods::experimental::genquery2::condition dummy(*col, irods::experimental::genquery2::condition_equal(""));
+                                av(dummy);
+                            }
+                        }
+                    }
+                } pav(av);
+                std::visit(pav, p);
+            }
+            for(const auto& w : ast.conditions) std::visit(av, w);
 
             if (entry_node_type_.empty()) {
                 for (const auto& p : ast.projections) {
-                    struct peek_visitor : public boost::static_visitor<std::string> {
+                    struct peek_visitor {
                         std::string operator()(const irods::experimental::genquery2::column& col) const {
                             if (col.name.rfind("DATA_ACCESS_", 0) == 0 || col.name.rfind("DATA_", 0) == 0) return "DataObject";
                             if (col.name.rfind("COLL_ACCESS_", 0) == 0 || col.name.rfind("COLL_", 0) == 0) return "Collection";
@@ -836,7 +905,7 @@ namespace irods::catalog::compiler {
                              return "";
                         }
                     } peek;
-                    auto alias = boost::apply_visitor(peek, p);
+                    auto alias = std::visit(peek, p);
                     if (!alias.empty()) {
                         entry_node_type_ = alias;
                         break;
@@ -858,7 +927,7 @@ namespace irods::catalog::compiler {
         size_t projs_ofs = qbuf.set_arr(0, "projections");
         projection_visitor pv(this, qbuf, projs_ofs);
         for (const auto& p : ast.projections) {
-            boost::apply_visitor(pv, p);
+            std::visit(pv, p);
         }
 
         // Filters
@@ -866,7 +935,7 @@ namespace irods::catalog::compiler {
         raw_filters_buf.init_array();
         condition_visitor cv(this, raw_filters_buf, 0);
         for(const auto& w : ast.conditions) {
-            boost::apply_visitor(cv, w);
+            std::visit(cv, w);
         }
 
         // 2. Groups
@@ -1058,22 +1127,22 @@ namespace irods::catalog::compiler {
                 s.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
             }
 
-            if (s == "DATA_OBJECT" || s == "DATAOBJECT" || s == "DATA_NAME" || s == "DATA" || s == "DATAOBJECTS") {
+            if (s == "DATA_OBJECT" || s == "DATAOBJECT" || s == "DATA_NAME" || s == "DATA" || s == "DATAOBJECTS" || s == "R_DATA_MAIN") {
                 return "DataObject";
             }
-            if (s == "COLLECTION" || s == "COLL" || s == "COLL_NAME" || s == "COLLECTIONS") {
+            if (s == "COLLECTION" || s == "COLL" || s == "COLL_NAME" || s == "COLLECTIONS" || s == "R_COLL_MAIN") {
                 return "Collection";
             }
-            if (s == "USER" || s == "USER_NAME" || s == "USERS") {
+            if (s == "USER" || s == "USER_NAME" || s == "USERS" || s == "R_USER_MAIN") {
                 return "User";
             }
-            if (s == "RESOURCE" || s == "RESC" || s == "RESC_NAME" || s == "RESOURCES") {
+            if (s == "RESOURCE" || s == "RESC" || s == "RESC_NAME" || s == "RESOURCES" || s == "R_RESC_MAIN") {
                 return "Resource";
             }
-            if (s == "ZONE" || s == "ZONE_NAME" || s == "ZONES") {
+            if (s == "ZONE" || s == "ZONE_NAME" || s == "ZONES" || s == "R_ZONE_MAIN") {
                 return "Zone";
             }
-            if (s == "METADATA" || s == "AVU" || s == "META") {
+            if (s == "METADATA" || s == "AVU" || s == "META" || s == "R_META_MAIN" || s == "R_META_MAP" || s == "R_OBJT_METAMAP") {
                 return "Metadata";
             }
             if (s == "REPLICA" || s == "REPL" || s == "REPLICAS") {
@@ -1082,16 +1151,16 @@ namespace irods::catalog::compiler {
             if (s == "GROUP" || s == "GROUPS" || s == "USER_GROUP" || s == "USER_GROUPS" || s == "R_USER_GROUP") {
                 return "Group";
             }
-            if (s == "ACCESS") {
+            if (s == "ACCESS" || s == "R_OBJT_ACCESS") {
                 return "Access";
             }
-            if (s == "TICKET" || s == "TICKETS") {
+            if (s == "TICKET" || s == "TICKETS" || s == "R_TICKET_MAIN" || s == "R_TICKET_ALLOWED_HOSTS" || s == "R_TICKET_ALLOWED_USERS" || s == "R_TICKET_ALLOWED_GROUPS") {
                 return "Ticket";
             }
-            if (s == "MSRVC") {
+            if (s == "MSRVC" || s == "R_MICROSRVC_MAIN") {
                 return "MSRVC";
             }
-            if (s == "AUDIT") {
+            if (s == "AUDIT" || s == "R_OBJT_AUDIT") {
                 return "Audit";
             }
             if (s == "SERVERLOAD" || s == "SERVER_LOAD") {
@@ -1144,7 +1213,7 @@ namespace irods::catalog::compiler {
             }
         }
 
-        struct entity_infer_visitor : public boost::static_visitor<void> {
+        struct entity_infer_visitor {
             std::string& entity_type;
             int& best_priority;
             entity_infer_visitor(std::string& et, int& bp) : entity_type(et), best_priority(bp) {}
@@ -1174,20 +1243,20 @@ namespace irods::catalog::compiler {
             }
 
             void operator()(const irods::experimental::genquery2::logical_and& l) const {
-                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
+                for (const auto& c : l.condition) std::visit(*this, c);
             }
             void operator()(const irods::experimental::genquery2::logical_or& l) const {
-                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
+                for (const auto& c : l.condition) std::visit(*this, c);
             }
             void operator()(const irods::experimental::genquery2::logical_grouping& l) const {
-                for (const auto& c : l.conditions) boost::apply_visitor(*this, c);
+                for (const auto& c : l.conditions) std::visit(*this, c);
             }
             void operator()(const irods::experimental::genquery2::logical_not& l) const {
-                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
+                for (const auto& c : l.condition) std::visit(*this, c);
             }
         };
 
-        struct dml_condition_visitor : public boost::static_visitor<void> {
+        struct dml_condition_visitor {
             const std::string& entity_type;
             std::vector<DmlCondition>& conditions;
 
@@ -1225,18 +1294,18 @@ namespace irods::catalog::compiler {
                 }
 
                 pc_visitor pcv;
-                auto pc = boost::apply_visitor(pcv, c.expression);
+                auto pc = std::visit(pcv, c.expression);
                 conditions.push_back({std::move(key), pc.first, std::move(pc.second)});
             }
 
             void operator()(const irods::experimental::genquery2::logical_and& l) const {
-                for (const auto& c : l.condition) boost::apply_visitor(*this, c);
+                for (const auto& c : l.condition) std::visit(*this, c);
             }
             void operator()(const irods::experimental::genquery2::logical_or&) const {
                 throw std::invalid_argument("DML WHERE clause does not support logical OR");
             }
             void operator()(const irods::experimental::genquery2::logical_grouping& l) const {
-                for (const auto& c : l.conditions) boost::apply_visitor(*this, c);
+                for (const auto& c : l.conditions) std::visit(*this, c);
             }
             void operator()(const irods::experimental::genquery2::logical_not&) const {
                 throw std::invalid_argument("DML WHERE clause does not support logical NOT");
@@ -1292,7 +1361,7 @@ namespace irods::catalog::compiler {
         if (plan.entity_type.empty() || best_prio < 4) {
             entity_infer_visitor eiv(plan.entity_type, best_prio);
             for (const auto& w : ast.where_conditions) {
-                boost::apply_visitor(eiv, w);
+                std::visit(eiv, w);
             }
         }
 
@@ -1302,7 +1371,7 @@ namespace irods::catalog::compiler {
 
         dml_condition_visitor cv(plan.entity_type, plan.conditions);
         for (const auto& w : ast.where_conditions) {
-            boost::apply_visitor(cv, w);
+            std::visit(cv, w);
         }
 
         return plan;
@@ -1317,13 +1386,13 @@ namespace irods::catalog::compiler {
             int best_prio = 0;
             entity_infer_visitor eiv(plan.entity_type, best_prio);
             for (const auto& w : ast.where_conditions) {
-                boost::apply_visitor(eiv, w);
+                std::visit(eiv, w);
             }
         }
 
         dml_condition_visitor cv(plan.entity_type, plan.conditions);
         for (const auto& w : ast.where_conditions) {
-            boost::apply_visitor(cv, w);
+            std::visit(cv, w);
         }
 
         return plan;
