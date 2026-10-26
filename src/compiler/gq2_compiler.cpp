@@ -188,7 +188,9 @@ namespace irods::catalog::compiler {
         {"ZONE_ID",           {"Zone", "id"}},
         {"ZONE_NAME",         {"Zone", "n"}},
         {"ZONE_TYPE",         {"Zone", "t"}},
+        {"ZONE_TYPE_NAME",    {"Zone", "t"}},
         {"ZONE_CONNECTION",   {"Zone", "c"}},
+        {"ZONE_CONN_STRING",  {"Zone", "c"}},
         {"ZONE_COMMENT",      {"Zone", "m"}},
         {"ZONE_CREATE_TIME",  {"Zone", "ct"}},
         {"ZONE_MODIFY_TIME",  {"Zone", "mt"}},
@@ -238,6 +240,8 @@ namespace irods::catalog::compiler {
         {"D_RESC_HIER",    {"Replica", "rh"}},
         {"DATA_RESC_HIER", {"Replica", "rh"}},
         {"DATA_ACCESS_TIME", {"Replica", "at"}},
+        {"ACCESS_TS",        {"Replica", "at"}},
+        {"DATA_IS_DIRTY",    {"Replica", "st"}},
         {"RESC_GROUP_NAME", {"Resource", "n"}},
         {"DATA_RESC_GROUP_NAME", {"Resource", "n"}},
 
@@ -373,6 +377,22 @@ namespace irods::catalog::compiler {
         {"RULE_EXEC_LOCK_HOST",           {"Rule", "lh"}},
         {"RULE_EXEC_LOCK_HOST_PID",       {"Rule", "lp"}},
         {"RULE_EXEC_LOCK_TIME",           {"Rule", "lt"}},
+        {"EXE_LOCK_HOST",                 {"Rule", "lh"}},
+        {"LOCK_HOST",                     {"Rule", "lh"}},
+        {"EXE_LOCK_HOST_PID",             {"Rule", "lp"}},
+        {"LOCK_HOST_PID",                 {"Rule", "lp"}},
+        {"EXE_LOCK_TIME",                 {"Rule", "lt"}},
+        {"LOCK_TS",                       {"Rule", "lt"}},
+        {"REI_FILE_PATH",                 {"Rule", "rei"}},
+        {"EXE_ADDRESS",                   {"Rule", "addr"}},
+        {"EXE_TIME",                      {"Rule", "e"}},
+        {"EXE_FREQUENCY",                 {"Rule", "freq"}},
+        {"PRIORITY",                      {"Rule", "p"}},
+        {"ESTIMATE_EXE_TIME",             {"Rule", "est"}},
+        {"NOTIFICATION_ADDR",             {"Rule", "notif"}},
+        {"LAST_EXE_TIME",                 {"Rule", "last"}},
+        {"EXE_STATUS",                    {"Rule", "status"}},
+        {"EXE_CONTEXT",                   {"Rule", "ctx"}},
 
         {"DVM_ID",            {"DVM", "id"}},
         {"DVM_BASE_NAME",     {"DVM", "bn"}},
@@ -1163,11 +1183,20 @@ namespace irods::catalog::compiler {
             if (s == "AUDIT" || s == "R_OBJT_AUDIT") {
                 return "Audit";
             }
-            if (s == "SERVERLOAD" || s == "SERVER_LOAD") {
+            if (s == "SERVERLOAD" || s == "SERVER_LOAD" || s == "R_SERVER_LOAD" || s == "R_SERVER_LOAD_DIGEST") {
                 return "ServerLoad";
             }
             if (s == "RULE" || s == "RULES" || s == "RULE_EXEC" || s == "R_RULE_EXEC") {
                 return "Rule";
+            }
+            if (s == "TOKEN" || s == "TOKENS" || s == "R_TOKN_MAIN") {
+                return "Token";
+            }
+            if (s == "GRIDCONFIG" || s == "GRID_CONFIG" || s == "R_GRID_CONFIGURATION") {
+                return "GridConfig";
+            }
+            if (s == "SPECIFICQUERY" || s == "SPECIFIC_QUERY" || s == "R_SPECIFIC_QUERY") {
+                return "SpecificQuery";
             }
             if (s == "DVM") {
                 return "DVM";

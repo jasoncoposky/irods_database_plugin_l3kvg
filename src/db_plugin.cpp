@@ -262,10 +262,6 @@ irods::error db_stop_op(irods::plugin_context& _ctx) {
     g_catalog_pid = 0;
     return SUCCESS();
 }
-irods::error db_open_op(irods::plugin_context& _ctx) { return SUCCESS(); }
-irods::error db_close_op(irods::plugin_context& _ctx) { return SUCCESS(); }
-irods::error db_commit_op(irods::plugin_context& _ctx) { return SUCCESS(); }
-irods::error db_rollback_op(irods::plugin_context& _ctx) { return SUCCESS(); }
 
 // Data Objects
 irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _info) {
@@ -803,43 +799,6 @@ irods::error db_unreg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _in
     }
 }
 
-irods::error db_update_replica_access_time(irods::plugin_context& _ctx, const char* _json_input, char** _out) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_update_replica_access_time");
-        if (!_json_input || !_out) {
-            return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Received one or more null pointers.");
-        }
-        
-        auto json_buf = lite3cpp::lite3_json::from_json_string(_json_input);
-        if (json_buf.size() >= sizeof(lite3cpp::PackedNodeLayout) && json_buf.get_type(0, "access_time_updates") == lite3cpp::Type::Array) {
-            size_t updates_ofs = json_buf.get_arr(0, "access_time_updates");
-            lite3cpp::NodeView unv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(json_buf.data() + updates_ofs));
-            for (uint32_t i = 0; i < unv.size(); ++i) {
-                if (json_buf.arr_get_type(updates_ofs, i) != lite3cpp::Type::Object) continue;
-                size_t u_ofs = json_buf.arr_get_obj(updates_ofs, i);
-                uint64_t data_id = 0;
-                if (json_buf.get_type(u_ofs, "data_id") == lite3cpp::Type::Int64) data_id = static_cast<uint64_t>(json_buf.get_i64(u_ofs, "data_id"));
-                else if (json_buf.get_type(u_ofs, "data_id") == lite3cpp::Type::String) data_id = std::stoull(std::string(json_buf.get_str(u_ofs, "data_id")));
-
-                uint32_t repl_num = 0;
-                if (json_buf.get_type(u_ofs, "replica_number") == lite3cpp::Type::Int64) repl_num = static_cast<uint32_t>(json_buf.get_i64(u_ofs, "replica_number"));
-                else if (json_buf.get_type(u_ofs, "replica_number") == lite3cpp::Type::String) repl_num = std::stoul(std::string(json_buf.get_str(u_ofs, "replica_number")));
-
-                std::string atime = (json_buf.get_type(u_ofs, "atime") == lite3cpp::Type::String) ? std::string(json_buf.get_str(u_ofs, "atime")) : "";
-                
-                auto ret = g_catalog->update_replica_access_time(data_id, repl_num, atime);
-                if (!ret.ok()) return ret;
-            }
-        }
-        
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_update_replica_access_time SUCCESS");
-        return SUCCESS();
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_update_replica_access_time EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
 // Collections
 irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
     try {
@@ -950,35 +909,6 @@ irods::error db_reg_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_coll_op EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
-irods::error db_reg_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _info) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_coll_by_admin_op");
-        if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null collInfo_t");
-
-        std::string coll_name = safe_string(_info->collName);
-        if (coll_name.size() > 1 && coll_name.back() == '/') {
-            coll_name.pop_back();
-        }
-        irods::catalog::snowflake_id_t sid = 0;
-        irods::catalog::EntityType type;
-        if (g_catalog->resolve_path(coll_name, sid, type).ok() && type == irods::catalog::EntityType::Collection) {
-            auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
-            if (!payload.empty()) {
-                try {
-                    lite3cpp::Buffer buf(payload);
-                    _info->collId = buf.get_i64(0, "id");
-                    rodsLog(LOG_DEBUG, "L3_PLUGIN: db_reg_coll_by_admin_op: collection [%s] already exists (id %d), returning SUCCESS", coll_name.c_str(), _info->collId);
-                    return SUCCESS();
-                } catch (...) {}
-            }
-        }
-        return db_reg_coll_op(_ctx, _info);
-    } catch (const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_coll_by_admin_op EXCEPTION: %s", e.what());
         return ERROR(SYS_INTERNAL_ERR, e.what());
     }
 }
@@ -1102,7 +1032,14 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
             return ERROR(CAT_UNKNOWN_COLLECTION, "Collection not found");
         }
 
-        if (_ctx.comm()) {
+        const bool admin_mode = (getValByKey(&_info->condInput, ADMIN_KW) != nullptr);
+        if (admin_mode && _ctx.comm() &&
+            (_ctx.comm()->clientUser.authInfo.authFlag < LOCAL_PRIV_USER_AUTH ||
+             _ctx.comm()->proxyUser.authInfo.authFlag < LOCAL_PRIV_USER_AUTH)) {
+            return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "insufficient privilege");
+        }
+
+        if (_ctx.comm() && !admin_mode) {
             std::string user_name = safe_string(_ctx.comm()->clientUser.userName);
             irods::catalog::snowflake_id_t usid = 0;
             if (!user_name.empty()) {
@@ -1167,94 +1104,6 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_coll_op EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
-irods::error db_del_coll_by_admin_op(irods::plugin_context& _ctx, collInfo_t* _info) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_coll_by_admin_op");
-        irods::error ret_ctx = _ctx.valid();
-        if (!ret_ctx.ok()) return PASS(ret_ctx);
-        if (!_info) return ERROR(CAT_INVALID_ARGUMENT, "null parameter");
-
-        if (_ctx.comm() && _ctx.comm()->clientUser.authInfo.authFlag < LOCAL_PRIV_USER_AUTH) {
-            return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "insufficient privilege");
-        }
-        if (_ctx.comm() && _ctx.comm()->proxyUser.authInfo.authFlag < LOCAL_PRIV_USER_AUTH) {
-            return ERROR(CAT_INSUFFICIENT_PRIVILEGE_LEVEL, "insufficient privilege");
-        }
-
-        uint64_t coll_id = (uint64_t)_info->collId;
-        std::string coll_name = _info->collName ? safe_string(_info->collName) : "";
-        irods::catalog::snowflake_id_t sid = 0;
-
-        if (!coll_name.empty()) {
-            irods::catalog::snowflake_id_t resolved_sid = 0;
-            irods::catalog::EntityType type;
-            if (g_catalog->resolve_path(coll_name, resolved_sid, type).ok()) {
-                sid = resolved_sid;
-                auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
-                if (!payload.empty()) {
-                    try {
-                        lite3cpp::Buffer buf(payload);
-                        coll_id = buf.get_i64(0, "id");
-                    } catch (...) {}
-                }
-            }
-        }
-
-        if (sid == 0 && coll_id != 0) {
-            sid = g_catalog->make_id(irods::catalog::EntityType::Collection, coll_id);
-            std::string payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), sid).get();
-            if (payload.empty()) {
-                std::string direct_payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), coll_id).get();
-                if (!direct_payload.empty()) {
-                    sid = coll_id;
-                    payload = direct_payload;
-                }
-            }
-            if (!payload.empty() && coll_name.empty()) {
-                try {
-                    lite3cpp::Buffer buf(payload);
-                    coll_name = safe_string(buf.get_str(0, "n"));
-                } catch (...) {}
-            }
-        }
-
-        if (sid == 0 && coll_id == 0) {
-            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_del_coll_by_admin_op: Collection [%s] not found", coll_name.c_str());
-            if (_ctx.comm()) {
-                addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is unknown").c_str());
-            }
-            return ERROR(CAT_UNKNOWN_COLLECTION, "unknown collection");
-        }
-
-        // Check emptiness
-        bool is_empty = true;
-        auto empty_err = g_catalog->is_collection_empty(sid ? sid : coll_id, is_empty);
-        if (!empty_err.ok()) {
-            return empty_err;
-        }
-        if (!is_empty) {
-            rodsLog(LOG_DEBUG, "L3_PLUGIN: db_del_coll_by_admin_op: collection [%s] is not empty", coll_name.c_str());
-            if (_ctx.comm()) {
-                addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is not empty").c_str());
-            }
-            return ERROR(CAT_COLLECTION_NOT_EMPTY, "collection not empty");
-        }
-
-        auto ret = g_catalog->delete_collection(coll_id ? coll_id : sid);
-        if (ret.ok()) {
-            std::lock_guard<std::mutex> lock(s_coll_acls_mu);
-            if (!coll_name.empty()) {
-                s_coll_acls_cache.erase(coll_name);
-            }
-        }
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_coll_by_admin_op SUCCESS");
-        return ret;
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_coll_by_admin_op EXCEPTION: %s", e.what());
         return ERROR(SYS_INTERNAL_ERR, e.what());
     }
 }
@@ -1526,45 +1375,7 @@ irods::error db_get_hierarchy_for_resc_op(irods::plugin_context& _ctx, const cha
     }
 }
 
-irods::error db_update_resc_obj_count(irods::plugin_context& _ctx, const std::string* _resc_name, int _delta) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_update_resc_obj_count");
-        if (!_resc_name) return ERROR(SYS_INVALID_INPUT_PARAM, "Null resource name");
-        irods::catalog::snowflake_id_t rid = 0;
-        if (!g_catalog->resolve_resource_name(*_resc_name, rid).ok()) return SUCCESS();
-        auto ret = g_catalog->update_resource_object_count(rid, _delta);
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_update_resc_obj_count SUCCESS");
-        return ret;
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_update_resc_obj_count EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
-irods::error db_mod_resc_data_paths_op(irods::plugin_context& _ctx, const char* _resc, const char* _old_path, const char* _new_path, const char* _user) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_resc_data_paths_op resc [%s] old [%s] new [%s] user [%s]", safe_string(_resc).c_str(), safe_string(_old_path).c_str(), safe_string(_new_path).c_str(), safe_string(_user).c_str());
-    return SUCCESS();
-}
-
-irods::error db_mod_resc_freespace_op(irods::plugin_context& _ctx, const char* _resc, const char* _freespace) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_resc_freespace_op resc [%s] freespace [%s]", safe_string(_resc).c_str(), safe_string(_freespace).c_str());
-    return SUCCESS();
-}
-
 // Identity
-irods::error db_reg_user_op(irods::plugin_context& _ctx, const irods::catalog::user& _user, irods::catalog::user_id_t* _out_id) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_user_op");
-        if (!_out_id) return ERROR(SYS_INVALID_INPUT_PARAM, "null user_id_t pointer");
-        auto ret = g_catalog->register_user(_user, *_out_id);
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_user_op SUCCESS");
-        return ret;
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_user_op EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
 irods::error db_reg_user_re_op(irods::plugin_context& _ctx, userInfo_t* _info) {
     try {
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_user_re_op");
@@ -1707,22 +1518,6 @@ irods::error db_mod_user_op(irods::plugin_context& _ctx, const char* _user, cons
         return ret;
     } catch(const std::exception& e) {
         rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_user_op EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
-irods::error db_del_user_op(irods::plugin_context& _ctx, const char* _username) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_user_op");
-        if (!_username) return ERROR(SYS_INVALID_INPUT_PARAM, "null username");
-        char userName2[NAME_LEN]{};
-        char zoneName[NAME_LEN]{};
-        parseUserName(_username, userName2, zoneName);
-        auto ret = g_catalog->delete_user(userName2, zoneName);
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_user_op SUCCESS");
-        return ret;
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_user_op EXCEPTION: %s", e.what());
         return ERROR(SYS_INTERNAL_ERR, e.what());
     }
 }
@@ -2534,141 +2329,6 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
     }
 }
 
-irods::error db_get_delay_rule_info_op(irods::plugin_context& _ctx, const char* _rule_id, std::vector<std::string>* _out_info) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_get_delay_rule_info_op [%s]", safe_string(_rule_id).c_str());
-    if (!_rule_id || !_out_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null pointers");
-    uint64_t id = 0;
-    try { id = std::stoull(_rule_id); } catch (...) { return ERROR(SYS_INVALID_INPUT_PARAM, "invalid rule id"); }
-    irods::catalog::rule_exec re;
-    auto ret = g_catalog->get_rule_execution(id, re);
-    if (!ret.ok()) {
-        return ret;
-    }
-    _out_info->push_back(re.name);
-    _out_info->push_back(re.rei_file_path);
-    _out_info->push_back(re.user_name);
-    _out_info->push_back(re.address);
-    _out_info->push_back(re.exec_time);
-    _out_info->push_back(re.frequency);
-    _out_info->push_back(re.priority);
-    _out_info->push_back(re.last_exec_time);
-    _out_info->push_back(re.status);
-    _out_info->push_back(re.estimate);
-    _out_info->push_back(re.notification_addr);
-    _out_info->push_back(re.context);
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_get_delay_rule_info_op SUCCESS");
-    return SUCCESS();
-}
-
-irods::error db_delay_rule_lock_op(irods::plugin_context& _ctx, const char* _rule_id, const char* _lock_host, int _lock_host_pid) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_delay_rule_lock_op rule [%s] host [%s] pid [%d]", safe_string(_rule_id).c_str(), safe_string(_lock_host).c_str(), _lock_host_pid);
-    if (!_rule_id || !_lock_host) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "null pointers");
-    uint64_t id = 0;
-    try { id = std::stoull(_rule_id); } catch (...) { return ERROR(SYS_INVALID_INPUT_PARAM, "invalid rule id"); }
-    auto ret = g_catalog->lock_rule_execution(id, safe_string(_lock_host), _lock_host_pid);
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_delay_rule_lock_op ret=%d", ret.code());
-    return ret;
-}
-
-irods::error db_delay_rule_unlock_op(irods::plugin_context& _ctx, const char* _rule_ids) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_delay_rule_unlock_op [%s]", safe_string(_rule_ids).c_str());
-    if (!_rule_ids) return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "null pointers");
-    try {
-        auto j = lite3cpp::lite3_json::from_json_string(_rule_ids);
-        if (j.size() >= sizeof(lite3cpp::PackedNodeLayout)) {
-            lite3cpp::NodeView nv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(j.data()));
-            if (nv.type() == lite3cpp::Type::Array) {
-                for (uint32_t i = 0; i < nv.size(); ++i) {
-                    uint64_t id = 0;
-                    auto t = j.arr_get_type(0, i);
-                    if (t == lite3cpp::Type::String) {
-                        try { id = std::stoull(std::string(j.arr_get_str(0, i))); } catch (...) {}
-                    } else if (t == lite3cpp::Type::Int64) {
-                        id = static_cast<uint64_t>(j.arr_get_i64(0, i));
-                    }
-                    if (id) g_catalog->unlock_rule_execution(id);
-                }
-            }
-        }
-    } catch (...) {}
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_delay_rule_unlock_op SUCCESS");
-    return SUCCESS();
-}
-
-irods::error db_check_password_op(irods::plugin_context& _ctx, const char* _user, const char* _zone, const char* _password, int* _correct) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_password_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
-    if (_correct) *_correct = 0;
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_password_op SUCCESS");
-    return SUCCESS();
-}
-
-irods::error db_make_session_token_op(irods::plugin_context& _ctx, const char* _user, const char* _zone, char* _token) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_make_session_token_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_make_session_token_op SUCCESS");
-    return SUCCESS();
-}
-
-irods::error db_check_session_token_op(irods::plugin_context& _ctx, const char* _user, const char* _zone, const char* _token, int* _correct) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_session_token_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
-    if (_correct) *_correct = 0;
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_session_token_op SUCCESS");
-    return SUCCESS();
-}
-
-irods::error db_remove_session_tokens_op(irods::plugin_context& _ctx, const char* _user, const char* _zone) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_remove_session_tokens_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_remove_session_tokens_op SUCCESS");
-    return SUCCESS();
-}
-
-irods::error db_remove_password_op(irods::plugin_context& _ctx, const char* _user, const char* _zone) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_remove_password_op user [%s] zone [%s]", safe_string(_user).c_str(), safe_string(_zone).c_str());
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_remove_password_op SUCCESS");
-    return SUCCESS();
-}
-
-// Zones
-irods::error db_reg_zone_op(irods::plugin_context& _ctx, const char* _zone, const char* _type, const char* _conn, const char* _comment) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_reg_zone_op");
-        irods::catalog::zone z;
-        z.name = safe_string(_zone);
-        z.type = safe_string(_type);
-        z.connection = safe_string(_conn);
-        z.comment = safe_string(_comment);
-        auto ret = g_catalog->register_zone(z);
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_zone_op SUCCESS");
-        return ret;
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_reg_zone_op EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
-irods::error db_mod_zone_op(irods::plugin_context& _ctx, const char* _zone, const char* _prop, const char* _val) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_zone_op");
-        auto ret = g_catalog->modify_zone(safe_string(_zone), safe_string(_prop), safe_string(_val));
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_mod_zone_op SUCCESS");
-        return ret;
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_mod_zone_op EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
-irods::error db_del_zone_op(irods::plugin_context& _ctx, const char* _zone) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_zone_op");
-        auto ret = g_catalog->delete_zone(safe_string(_zone));
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_zone_op SUCCESS");
-        return ret;
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_zone_op EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
 // Token
 irods::error db_reg_token_op(irods::plugin_context& _ctx, const char* _name, const char* _value, const char* _namespace) {
     try {
@@ -2722,13 +2382,6 @@ irods::error db_check_quota_op(irods::plugin_context& _ctx, const char* _user, c
     }
 }
 
-irods::error db_calc_usage_and_quota_op(irods::plugin_context& _ctx) { return SUCCESS(); }
-
-irods::error db_del_unused_avus_op(irods::plugin_context& _ctx) {
-    rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_unused_avus_op");
-    return SUCCESS();
-}
-
 // Rules
 irods::error db_reg_rule_exec_op(irods::plugin_context& _ctx, ruleExecSubmitInp_t* _info) {
     try {
@@ -2765,44 +2418,7 @@ irods::error db_reg_rule_exec_op(irods::plugin_context& _ctx, ruleExecSubmitInp_
     }
 }
 
-irods::error db_del_rule_exec_op(irods::plugin_context& _ctx, const char* _rule_id) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_rule_exec_op");
-        std::string rid_str = safe_string(_rule_id);
-        auto ret = g_catalog->delete_rule_execution(rid_str.empty() ? 0 : std::stoull(rid_str));
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_rule_exec_op SUCCESS");
-        return ret;
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_rule_exec_op EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
 // Specific Query
-irods::error db_add_specific_query_op(irods::plugin_context& _ctx, const char* _alias, const char* _sql) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_add_specific_query_op");
-        auto ret = g_catalog->register_specific_query(safe_string(_alias), safe_string(_sql));
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_add_specific_query_op SUCCESS");
-        return ret;
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_add_specific_query_op EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
-irods::error db_del_specific_query_op(irods::plugin_context& _ctx, const char* _alias) {
-    try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_del_specific_query_op");
-        auto ret = g_catalog->delete_specific_query(safe_string(_alias));
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_del_specific_query_op SUCCESS");
-        return ret;
-    } catch(const std::exception& e) {
-        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_del_specific_query_op EXCEPTION: %s", e.what());
-        return ERROR(SYS_INTERNAL_ERR, e.what());
-    }
-}
-
 irods::error db_specific_query_op(
     irods::plugin_context& _ctx,
     specificQueryInp_t*    _spec_query_inp,
@@ -2945,10 +2561,6 @@ irods::error db_calc_logical_usage_and_quota_op(irods::plugin_context& _ctx, con
         return ERROR(SYS_INTERNAL_ERR, e.what());
     }
 }
-
-// Server Load
-irods::error db_reg_server_load_op(irods::plugin_context& _ctx, const char* _host, int _load) { return SUCCESS(); }
-irods::error db_purge_server_load_op(irods::plugin_context& _ctx, const char* _host) { return SUCCESS(); }
 
 // Grid Config
 irods::error db_set_grid_configuration_value_op(irods::plugin_context& _ctx, const char* _ns, const char* _name, const char* _value) {
@@ -3337,11 +2949,7 @@ public:
         set_start_operation(db_maintenance_op);
         add_operation(irods::DATABASE_OP_START, std::function<irods::error(irods::plugin_context&)>(db_start_op));
         add_operation(irods::DATABASE_OP_STOP, std::function<irods::error(irods::plugin_context&)>(db_stop_op));
-        add_operation(irods::DATABASE_OP_OPEN, std::function<irods::error(irods::plugin_context&)>(db_open_op));
-        add_operation(irods::DATABASE_OP_CLOSE, std::function<irods::error(irods::plugin_context&)>(db_close_op));
-        add_operation(irods::DATABASE_OP_COMMIT, std::function<irods::error(irods::plugin_context&)>(db_commit_op));
-        add_operation(irods::DATABASE_OP_ROLLBACK, std::function<irods::error(irods::plugin_context&)>(db_rollback_op));
-        
+
         add_operation<dataObjInfo_t*>(irods::DATABASE_OP_REG_DATA_OBJ, std::function<irods::error(irods::plugin_context&, dataObjInfo_t*)>(db_reg_data_obj_op));
         add_operation<dataObjInfo_t*, keyValPair_t*>(irods::DATABASE_OP_MOD_DATA_OBJ_META, std::function<irods::error(irods::plugin_context&, dataObjInfo_t*, keyValPair_t*)>(db_mod_data_obj_meta_op));
         add_operation<rodsLong_t, const char*>(irods::DATABASE_OP_RENAME_OBJECT, std::function<irods::error(irods::plugin_context&, rodsLong_t, const char*)>(db_rename_object_op));
@@ -3349,21 +2957,14 @@ public:
 
         add_operation<dataObjInfo_t*, dataObjInfo_t*, keyValPair_t*>(irods::DATABASE_OP_REG_REPLICA, std::function<irods::error(irods::plugin_context&, dataObjInfo_t*, dataObjInfo_t*, keyValPair_t*)>(db_reg_replica_op));
         add_operation<dataObjInfo_t*, keyValPair_t*>(irods::DATABASE_OP_UNREG_REPLICA, std::function<irods::error(irods::plugin_context&, dataObjInfo_t*, keyValPair_t*)>(db_unreg_replica_op));
-        add_operation<const char*, char**>(irods::DATABASE_OP_UPDATE_REPLICA_ACCESS_TIME, std::function<irods::error(irods::plugin_context&, const char*, char**)>(db_update_replica_access_time));
-
-        add_operation<const std::string*, int>(irods::DATABASE_OP_UPDATE_RESC_OBJ_COUNT, std::function<irods::error(irods::plugin_context&, const std::string*, int)>(db_update_resc_obj_count));
 
         add_operation<collInfo_t*>(irods::DATABASE_OP_REG_COLL, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_reg_coll_op));
-        add_operation<collInfo_t*>(irods::DATABASE_OP_REG_COLL_BY_ADMIN, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_reg_coll_by_admin_op));
         add_operation<collInfo_t*>(irods::DATABASE_OP_MOD_COLL, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_mod_coll_op));
         add_operation<collInfo_t*>(irods::DATABASE_OP_DEL_COLL, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_del_coll_op));
-        add_operation<collInfo_t*>(irods::DATABASE_OP_DEL_COLL_BY_ADMIN, std::function<irods::error(irods::plugin_context&, collInfo_t*)>(db_del_coll_by_admin_op));
         add_operation<const char*, const char*>(irods::DATABASE_OP_RENAME_COLL, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_rename_coll_op));
 
         add_operation<std::map<std::string, std::string>*>(irods::DATABASE_OP_REG_RESC, std::function<irods::error(irods::plugin_context&, std::map<std::string, std::string>*)>(db_reg_resc_op));
         add_operation<const char*, const char*, const char*>(irods::DATABASE_OP_MOD_RESC, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*)>(db_mod_resc_op));
-        add_operation<const char*, const char*, const char*, const char*>(irods::DATABASE_OP_MOD_RESC_DATA_PATHS, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*)>(db_mod_resc_data_paths_op));
-        add_operation<const char*, const char*>(irods::DATABASE_OP_MOD_RESC_FREESPACE, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_mod_resc_freespace_op));
         add_operation<const char*, int>(irods::DATABASE_OP_DEL_RESC, std::function<irods::error(irods::plugin_context&, const char*, int)>(db_del_resc_op));
         add_operation<std::map<std::string, std::string>*>(irods::DATABASE_OP_ADD_CHILD_RESC, std::function<irods::error(irods::plugin_context&, std::map<std::string, std::string>*)>(db_add_child_resc_op));
         add_operation<std::map<std::string, std::string>*>(irods::DATABASE_OP_DEL_CHILD_RESC, std::function<irods::error(irods::plugin_context&, std::map<std::string, std::string>*)>(db_del_child_resc_op));
@@ -3384,31 +2985,20 @@ public:
         add_operation<int, const char*, const char*, const char*, const char*, const char*, int, const KeyValPair*>(irods::DATABASE_OP_DEL_AVU_METADATA, std::function<irods::error(irods::plugin_context&, int, const char*, const char*, const char*, const char*, const char*, int, const KeyValPair*)>(db_del_avu_metadata_op));
         add_operation<const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const KeyValPair*>(irods::DATABASE_OP_MOD_AVU_METADATA, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const KeyValPair*)>(db_mod_avu_metadata_op));
         add_operation<const char*, const char*, const char*, const char*, const KeyValPair*>(irods::DATABASE_OP_COPY_AVU_METADATA, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, const KeyValPair*)>(db_copy_avu_metadata_op));
-        
-        add_operation<const char*, const char*, const char*, const char*>(irods::DATABASE_OP_REG_ZONE, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*)>(db_reg_zone_op));
-        add_operation<const char*, const char*, const char*>(irods::DATABASE_OP_MOD_ZONE, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*)>(db_mod_zone_op));
-        add_operation<const char*>(irods::DATABASE_OP_DEL_ZONE, std::function<irods::error(irods::plugin_context&, const char*)>(db_del_zone_op));
 
         add_operation<const char*, const char*, const char*>(irods::DATABASE_OP_REG_TOKEN, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*)>(db_reg_token_op));
         add_operation<const char*, const char*>(irods::DATABASE_OP_DEL_TOKEN, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_del_token_op));
 
         add_operation<const char*, const char*, rodsLong_t>(irods::DATABASE_OP_SET_QUOTA, std::function<irods::error(irods::plugin_context&, const char*, const char*, rodsLong_t)>(db_set_quota_op));
         add_operation<const char*, const char*, rodsLong_t*, int*>(irods::DATABASE_OP_CHECK_QUOTA, std::function<irods::error(irods::plugin_context&, const char*, const char*, rodsLong_t*, int*)>(db_check_quota_op));
-        add_operation(irods::DATABASE_OP_CALC_USAGE_AND_QUOTA, std::function<irods::error(irods::plugin_context&)>(db_calc_usage_and_quota_op));
 
         add_operation<ruleExecSubmitInp_t*>(irods::DATABASE_OP_REG_RULE_EXEC, std::function<irods::error(irods::plugin_context&, ruleExecSubmitInp_t*)>(db_reg_rule_exec_op));
-        add_operation<const char*>(irods::DATABASE_OP_DEL_RULE_EXEC, std::function<irods::error(irods::plugin_context&, const char*)>(db_del_rule_exec_op));
 
-        add_operation<const char*, const char*>(irods::DATABASE_OP_ADD_SPECIFIC_QUERY, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_add_specific_query_op));
-        add_operation<const char*>(irods::DATABASE_OP_DEL_SPECIFIC_QUERY, std::function<irods::error(irods::plugin_context&, const char*)>(db_del_specific_query_op));
         add_operation<specificQueryInp_t*, genQueryOut_t*>(irods::DATABASE_OP_SPECIFIC_QUERY, std::function<irods::error(irods::plugin_context&, specificQueryInp_t*, genQueryOut_t*)>(db_specific_query_op));
 
         add_operation<const char*, rodsLong_t>(irods::DATABASE_OP_SET_LOGICAL_QUOTA, std::function<irods::error(irods::plugin_context&, const char*, rodsLong_t)>(db_set_logical_quota_op));
         add_operation<const char*, std::vector<std::tuple<std::string, std::int64_t, std::int64_t, std::int64_t, std::int64_t>>*>(irods::DATABASE_OP_CHECK_LOGICAL_QUOTA, std::function<irods::error(irods::plugin_context&, const char*, std::vector<std::tuple<std::string, std::int64_t, std::int64_t, std::int64_t, std::int64_t>>*)>(db_check_logical_quota_op));
         add_operation<const char*, rodsLong_t*, rodsLong_t*>(irods::DATABASE_OP_CALC_LOGICAL_USAGE_AND_QUOTA, std::function<irods::error(irods::plugin_context&, const char*, rodsLong_t*, rodsLong_t*)>(db_calc_logical_usage_and_quota_op));
-
-        add_operation<const char*, int>(irods::DATABASE_OP_REG_SERVER_LOAD, std::function<irods::error(irods::plugin_context&, const char*, int)>(db_reg_server_load_op));
-        add_operation<const char*>(irods::DATABASE_OP_PURGE_SERVER_LOAD, std::function<irods::error(irods::plugin_context&, const char*)>(db_purge_server_load_op));
 
         add_operation<const char*, const char*, const char*>(irods::DATABASE_OP_SET_GRID_CONFIGURATION_VALUE, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*)>(db_set_grid_configuration_value_op));
         add_operation<const char*, const char*, char*, std::size_t>(irods::DATABASE_OP_GET_GRID_CONFIGURATION_VALUE, std::function<irods::error(irods::plugin_context&, const char*, const char*, char*, std::size_t)>(db_get_grid_configuration_value_op));
@@ -3420,15 +3010,6 @@ public:
             irods::DATABASE_OP_MOD_TICKET,
             std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, const char*, const KeyValPair*)>(db_mod_ticket_op));
         add_operation<const char*>(irods::DATABASE_OP_DATA_OBJECT_FINALIZE, std::function<irods::error(irods::plugin_context&, const char*)>(db_data_object_finalize_op));
-        add_operation(irods::DATABASE_OP_DEL_UNUSED_AVUS, std::function<irods::error(irods::plugin_context&)>(db_del_unused_avus_op));
-        add_operation<const char*, std::vector<std::string>*>(irods::DATABASE_OP_GET_DELAY_RULE_INFO, std::function<irods::error(irods::plugin_context&, const char*, std::vector<std::string>*)>(db_get_delay_rule_info_op));
-        add_operation<const char*, const char*, int>(irods::DATABASE_OP_DELAY_RULE_LOCK, std::function<irods::error(irods::plugin_context&, const char*, const char*, int)>(db_delay_rule_lock_op));
-        add_operation<const char*>(irods::DATABASE_OP_DELAY_RULE_UNLOCK, std::function<irods::error(irods::plugin_context&, const char*)>(db_delay_rule_unlock_op));
-        add_operation<const char*, const char*, const char*, int*>(irods::DATABASE_OP_CHECK_PASSWORD, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, int*)>(db_check_password_op));
-        add_operation<const char*, const char*, char*>(irods::DATABASE_OP_MAKE_SESSION_TOKEN, std::function<irods::error(irods::plugin_context&, const char*, const char*, char*)>(db_make_session_token_op));
-        add_operation<const char*, const char*, const char*, int*>(irods::DATABASE_OP_CHECK_SESSION_TOKEN, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, int*)>(db_check_session_token_op));
-        add_operation<const char*, const char*>(irods::DATABASE_OP_REMOVE_SESSION_TOKENS, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_remove_session_tokens_op));
-        add_operation<const char*, const char*>(irods::DATABASE_OP_REMOVE_PASSWORD, std::function<irods::error(irods::plugin_context&, const char*, const char*)>(db_remove_password_op));
 
         add_operation<int*>(irods::DATABASE_OP_GET_CATALOG_VERSION, std::function<irods::error(irods::plugin_context&, int*)>(db_get_catalog_version_op));
         add_operation(irods::DATABASE_OP_INITIALIZE_CATALOG, std::function<irods::error(irods::plugin_context&)>(db_initialize_catalog_op));

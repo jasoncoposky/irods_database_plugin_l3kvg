@@ -429,4 +429,122 @@ TEST_F(CatalogFacadeDmlTest, ModifyDataObjectAndReplicaMultiReplica) {
     auto r1_node_after = mock_server_->get_node(rid1);
     EXPECT_EQ(r1_node_after.get_attribute<int64_t>("s"), 16384);
     EXPECT_EQ(r1_node_after.get_attribute<std::string>("mt"), "0180000000");
+
+    // 7. Test Phase VII-A relational DML aliases: R_DATA_MAIN replica access time update (at with id + rn)
+    Gq2ToL3kvgCompiler compiler;
+    {
+        DmlPlan at_plan;
+        at_plan.action = DmlAction::Update;
+        at_plan.entity_type = "DataObject";
+        at_plan.properties["at"] = "0190000000";
+        at_plan.conditions.push_back(DmlCondition{"id", 0, "6001"});
+        at_plan.conditions.push_back(DmlCondition{"rn", 0, "1"});
+        lite3cpp::Buffer at_res;
+        ASSERT_TRUE(facade_.execute_dml(at_plan, at_res).ok());
+        EXPECT_EQ(at_res.get_i64(0, "rows_affected"), 1);
+        auto r1_node_at = mock_server_->get_node(rid1);
+        EXPECT_EQ(r1_node_at.get_attribute<std::string>("at"), "0190000000");
+    }
+
+    // 8. Test Phase VII-A relational DML aliases: R_ZONE_MAIN, R_TOKN_MAIN, R_SPECIFIC_QUERY, R_RULE_EXEC
+    {
+        irods::experimental::genquery2::insert zone_ast;
+        zone_ast.target_entity = "R_ZONE_MAIN";
+        zone_ast.assignments = {
+            {"ZONE_NAME", "fedZone"},
+            {"ZONE_TYPE_NAME", "remote"},
+            {"ZONE_CONN_STRING", "irods.fed.org:1247"},
+            {"ZONE_COMMENT", "federated"}
+        };
+        auto zone_ins = compiler.compile(zone_ast);
+        lite3cpp::Buffer res;
+        ASSERT_TRUE(facade_.execute_dml(zone_ins, res).ok());
+        EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
+
+        DmlPlan zone_upd;
+        zone_upd.action = DmlAction::Update;
+        zone_upd.entity_type = "Zone";
+        zone_upd.properties["c"] = "irods2.fed.org:1247";
+        zone_upd.conditions.push_back(DmlCondition{"n", 0, "fedZone"});
+        ASSERT_TRUE(facade_.execute_dml(zone_upd, res).ok());
+        EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
+
+        DmlPlan zone_del;
+        zone_del.action = DmlAction::Remove;
+        zone_del.entity_type = "Zone";
+        zone_del.conditions.push_back(DmlCondition{"n", 0, "fedZone"});
+        ASSERT_TRUE(facade_.execute_dml(zone_del, res).ok());
+        EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
+    }
+
+    {
+        irods::experimental::genquery2::insert tok_ast;
+        tok_ast.target_entity = "R_TOKN_MAIN";
+        tok_ast.assignments = {
+            {"TOKEN_NAMESPACE", "data_type"},
+            {"TOKEN_NAME", "hdf5"},
+            {"TOKEN_VALUE", "binary"}
+        };
+        auto tok_ins = compiler.compile(tok_ast);
+        lite3cpp::Buffer res;
+        ASSERT_TRUE(facade_.execute_dml(tok_ins, res).ok());
+        EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
+    }
+
+    {
+        irods::experimental::genquery2::insert sq_ast;
+        sq_ast.target_entity = "R_SPECIFIC_QUERY";
+        sq_ast.assignments = {
+            {"SQL_ALIAS", "custom_sq"},
+            {"SQL_STR", "SELECT coll_name FROM R_COLL_MAIN"}
+        };
+        auto sq_ins = compiler.compile(sq_ast);
+        lite3cpp::Buffer res;
+        ASSERT_TRUE(facade_.execute_dml(sq_ins, res).ok());
+        EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
+
+        DmlPlan sq_del;
+        sq_del.action = DmlAction::Remove;
+        sq_del.entity_type = "SpecificQuery";
+        sq_del.conditions.push_back(DmlCondition{"a", 0, "custom_sq"});
+        ASSERT_TRUE(facade_.execute_dml(sq_del, res).ok());
+        EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
+    }
+
+    {
+        rule_exec re;
+        re.id = 88001;
+        re.name = "test_rule";
+        re.user_name = "rods";
+        re.exec_time = "0170000000";
+        uint64_t rule_id = 0;
+        ASSERT_TRUE(facade_.register_rule_execution(re, rule_id).ok());
+
+        DmlPlan rule_lock;
+        rule_lock.action = DmlAction::Update;
+        rule_lock.entity_type = "Rule";
+        rule_lock.properties["lh"] = "hostA";
+        rule_lock.properties["lp"] = "1234";
+        rule_lock.properties["lt"] = "0175000000";
+        rule_lock.conditions.push_back(DmlCondition{"id", 0, std::to_string(rule_id)});
+        lite3cpp::Buffer res;
+        ASSERT_TRUE(facade_.execute_dml(rule_lock, res).ok());
+        EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
+
+        // Second lock attempt while locked should fail (already locked)
+        DmlPlan rule_lock_again = rule_lock;
+        rule_lock_again.properties["lh"] = "hostB";
+        EXPECT_FALSE(facade_.execute_dml(rule_lock_again, res).ok());
+
+        // Unlock (empty lh) should succeed
+        DmlPlan rule_unlock;
+        rule_unlock.action = DmlAction::Update;
+        rule_unlock.entity_type = "Rule";
+        rule_unlock.properties["lh"] = "";
+        rule_unlock.properties["lp"] = "";
+        rule_unlock.properties["lt"] = "";
+        rule_unlock.conditions.push_back(DmlCondition{"id", 0, std::to_string(rule_id)});
+        ASSERT_TRUE(facade_.execute_dml(rule_unlock, res).ok());
+        EXPECT_EQ(res.get_i64(0, "rows_affected"), 1);
+    }
 }

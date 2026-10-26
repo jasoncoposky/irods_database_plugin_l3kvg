@@ -5116,7 +5116,7 @@ namespace irods::catalog {
                     }
                 };
 
-                if (plan.entity_type == "USER_GROUP" || plan.entity_type == "user_group" || plan.entity_type == "R_USER_GROUP") {
+                if (plan.entity_type == "USER_GROUP" || plan.entity_type == "user_group" || plan.entity_type == "R_USER_GROUP" || plan.entity_type == "Group") {
                     if (plan.action == compiler::DmlAction::Insert) {
                         std::string user_id, group_user_id;
                         for (const auto& [k, v] : plan.properties) {
@@ -5159,6 +5159,213 @@ namespace irods::catalog {
                             auto members = client_->get_in_neighbors_async(local_cluster_id_, gid, "MEMBER_OF").get();
                             for (auto u : members) del_edge(u, "MEMBER_OF", 1.0, gid);
                         }
+                        set_dml_result(1);
+                        return SUCCESS();
+                    }
+                }
+
+                if (plan.entity_type == "Token" || plan.entity_type == "R_TOKN_MAIN") {
+                    if (plan.action == compiler::DmlAction::Insert) {
+                        std::string name, val, ns;
+                        for (const auto& [k, v] : plan.properties) {
+                            if (k == "n" || k == "token_name" || k == "name") name = v;
+                            else if (k == "v" || k == "token_value" || k == "value") val = v;
+                            else if (k == "ns" || k == "token_namespace" || k == "namespace") ns = v;
+                        }
+                        auto err = register_token(name, val, ns);
+                        if (!err.ok()) return err;
+                        set_dml_result(1);
+                        return SUCCESS();
+                    } else if (plan.action == compiler::DmlAction::Remove) {
+                        std::string name, ns;
+                        for (const auto& cond : plan.conditions) {
+                            if (cond.op == 0) {
+                                if (cond.property == "n" || cond.property == "token_name" || cond.property == "name") name = cond.value;
+                                else if (cond.property == "ns" || cond.property == "token_namespace" || cond.property == "namespace") ns = cond.value;
+                            }
+                        }
+                        auto err = delete_token(name, ns);
+                        if (!err.ok()) return err;
+                        set_dml_result(1);
+                        return SUCCESS();
+                    }
+                }
+
+                if (plan.entity_type == "GridConfig" || plan.entity_type == "R_GRID_CONFIGURATION") {
+                    std::string ns, opt_name, opt_val;
+                    for (const auto& [k, v] : plan.properties) {
+                        if (k == "namespace" || k == "ns") ns = v;
+                        else if (k == "option_name" || k == "n") opt_name = v;
+                        else if (k == "option_value" || k == "v") opt_val = v;
+                    }
+                    for (const auto& cond : plan.conditions) {
+                        if (cond.op == 0) {
+                            if (cond.property == "namespace" || cond.property == "ns") ns = cond.value;
+                            else if (cond.property == "option_name" || cond.property == "n") opt_name = cond.value;
+                        }
+                    }
+                    if (!ns.empty() && !opt_name.empty()) {
+                        auto err = set_grid_configuration_value(ns + ":" + opt_name, opt_val);
+                        if (!err.ok()) return err;
+                    }
+                    set_dml_result(1);
+                    return SUCCESS();
+                }
+
+                if (plan.entity_type == "SpecificQuery" || plan.entity_type == "R_SPECIFIC_QUERY") {
+                    if (plan.action == compiler::DmlAction::Insert) {
+                        std::string alias, sql;
+                        for (const auto& [k, v] : plan.properties) {
+                            if (k == "alias" || k == "a") alias = v;
+                            else if (k == "sqlStr" || k == "sql" || k == "q") sql = v;
+                        }
+                        auto err = register_specific_query(alias, sql);
+                        if (!err.ok()) return err;
+                        set_dml_result(1);
+                        return SUCCESS();
+                    } else if (plan.action == compiler::DmlAction::Remove) {
+                        std::string alias;
+                        for (const auto& cond : plan.conditions) {
+                            if (cond.op == 0 && (cond.property == "alias" || cond.property == "sqlStr" || cond.property == "a" || cond.property == "q")) {
+                                alias = cond.value;
+                            }
+                        }
+                        auto err = delete_specific_query(alias);
+                        if (!err.ok()) return err;
+                        set_dml_result(1);
+                        return SUCCESS();
+                    }
+                }
+
+                if (plan.entity_type == "ServerLoad" || plan.entity_type == "R_SERVER_LOAD" || plan.entity_type == "R_SERVER_LOAD_DIGEST") {
+                    set_dml_result(1);
+                    return SUCCESS();
+                }
+
+                if (plan.entity_type == "Zone" || plan.entity_type == "R_ZONE_MAIN") {
+                    if (plan.action == compiler::DmlAction::Insert) {
+                        zone z{};
+                        for (const auto& [k, v] : plan.properties) {
+                            if (k == "n" || k == "zone_name" || k == "name") z.name = v;
+                            else if (k == "t" || k == "zone_type_name" || k == "type") z.type = v;
+                            else if (k == "c" || k == "zone_conn_string" || k == "connection") z.connection = v;
+                            else if (k == "m" || k == "r_comment" || k == "comment") z.comment = v;
+                        }
+                        auto err = register_zone(z);
+                        if (!err.ok()) return err;
+                        set_dml_result(1);
+                        return SUCCESS();
+                    } else if (plan.action == compiler::DmlAction::Update) {
+                        std::string zname;
+                        for (const auto& cond : plan.conditions) {
+                            if (cond.op == 0 && (cond.property == "n" || cond.property == "zone_name" || cond.property == "name")) {
+                                zname = cond.value;
+                            }
+                        }
+                        for (const auto& [k, v] : plan.properties) {
+                            std::string prop = k;
+                            if (k == "n") prop = "name";
+                            else if (k == "t") prop = "type";
+                            else if (k == "c") prop = "conn";
+                            else if (k == "m") prop = "comment";
+                            auto err = modify_zone(zname, prop, v);
+                            if (!err.ok()) return err;
+                        }
+                        set_dml_result(1);
+                        return SUCCESS();
+                    } else if (plan.action == compiler::DmlAction::Remove) {
+                        std::string zname;
+                        for (const auto& cond : plan.conditions) {
+                            if (cond.op == 0 && (cond.property == "n" || cond.property == "zone_name" || cond.property == "name")) {
+                                zname = cond.value;
+                            }
+                        }
+                        auto err = delete_zone(zname);
+                        if (!err.ok()) return err;
+                        set_dml_result(1);
+                        return SUCCESS();
+                    }
+                }
+
+                if (plan.entity_type == "Rule" || plan.entity_type == "R_RULE_EXEC") {
+                    if (plan.action == compiler::DmlAction::Insert) {
+                        rule_exec re{};
+                        for (const auto& [k, v] : plan.properties) {
+                            if (k == "id" || k == "rule_exec_id") { try { re.id = std::stoull(v); } catch (...) {} }
+                            else if (k == "n" || k == "rule_name") re.name = v;
+                            else if (k == "rei" || k == "rei_file_path") re.rei_file_path = v;
+                            else if (k == "u" || k == "user_name") re.user_name = v;
+                            else if (k == "addr" || k == "exe_address") re.address = v;
+                            else if (k == "e" || k == "exe_time") re.exec_time = v;
+                            else if (k == "freq" || k == "exe_frequency") re.frequency = v;
+                            else if (k == "p" || k == "priority") re.priority = v;
+                            else if (k == "last" || k == "last_exe_time") re.last_exec_time = v;
+                            else if (k == "status" || k == "exe_status") re.status = v;
+                            else if (k == "est" || k == "estimate_exe_time") re.estimate = v;
+                            else if (k == "notif" || k == "notification_addr") re.notification_addr = v;
+                            else if (k == "ctx" || k == "exe_context") re.context = v;
+                            else if (k == "lh") re.lock_host = v;
+                            else if (k == "lp") re.lock_host_pid = v;
+                            else if (k == "lt") re.lock_time = v;
+                        }
+                        if (re.id == 0) {
+                            get_next_sequence_value("R_RULE_EXEC", re.id);
+                        }
+                        uint64_t out_id = 0;
+                        auto err = register_rule_execution(re, out_id);
+                        if (!err.ok()) return err;
+                        set_dml_result(1);
+                        return SUCCESS();
+                    } else if (plan.action == compiler::DmlAction::Update) {
+                        uint64_t rid_num = 0;
+                        for (const auto& cond : plan.conditions) {
+                            if (cond.op == 0 && (cond.property == "id" || cond.property == "rule_exec_id")) {
+                                try { rid_num = std::stoull(cond.value); } catch (...) {}
+                            }
+                        }
+                        if (rid_num == 0) {
+                            return ERROR(CAT_NO_ROWS_UPDATED, "Rule execution ID missing");
+                        }
+                        snowflake_id_t rid = make_id(EntityType::Rule, rid_num);
+                        std::string payload = client_->get_node_payload_async(local_cluster_id_, rid).get();
+                        if (payload.empty()) {
+                            // If unlocking a non-existent rule, succeed like unlock_rule_execution
+                            if (plan.properties.count("lh") && plan.properties.at("lh").empty()) {
+                                set_dml_result(0);
+                                return SUCCESS();
+                            }
+                            return ERROR(CAT_NO_ROWS_UPDATED, "Rule execution not found");
+                        }
+                        lite3cpp::Buffer buf(payload);
+                        if (plan.properties.count("lh") && !plan.properties.at("lh").empty()) {
+                            std::string current_lh = safe_get_str(buf, 0, "lh");
+                            if (!current_lh.empty()) {
+                                return ERROR(CAT_NO_ROWS_UPDATED, "Rule already locked");
+                            }
+                        }
+                        for (const auto& [k, v] : plan.properties) {
+                            if (k == "lh" || k == "lp" || k == "lt" || k == "n" || k == "rei" || k == "u" ||
+                                k == "addr" || k == "e" || k == "freq" || k == "p" || k == "last" ||
+                                k == "status" || k == "est" || k == "notif" || k == "ctx") {
+                                if (k == "lp" && v == "0" && plan.properties.count("lh") && plan.properties.at("lh").empty()) {
+                                    buf.set_str(0, "lp", "");
+                                } else {
+                                    buf.set_str(0, k, v);
+                                }
+                            }
+                        }
+                        client_->put_node_async(local_cluster_id_, rid, buf).get();
+                        set_dml_result(1);
+                        return SUCCESS();
+                    } else if (plan.action == compiler::DmlAction::Remove) {
+                        uint64_t rid_num = 0;
+                        for (const auto& cond : plan.conditions) {
+                            if (cond.op == 0 && (cond.property == "id" || cond.property == "rule_exec_id")) {
+                                try { rid_num = std::stoull(cond.value); } catch (...) {}
+                            }
+                        }
+                        auto err = delete_rule_execution(rid_num);
+                        if (!err.ok()) return err;
                         set_dml_result(1);
                         return SUCCESS();
                     }
@@ -5440,6 +5647,27 @@ namespace irods::catalog {
                     set_dml_result(1);
                     return SUCCESS();
                 } else if (plan.action == compiler::DmlAction::Update) {
+                    if ((et == EntityType::DataObject || et == EntityType::Replica) && plan.properties.count("at")) {
+                        uint64_t data_id = 0;
+                        uint32_t repl_num = 0;
+                        bool has_rn = false;
+                        for (const auto& cond : plan.conditions) {
+                            if (cond.op == 0 && (cond.property == "id" || cond.property == "data_id")) {
+                                try { data_id = std::stoull(cond.value); } catch (...) {}
+                            } else if (cond.op == 0 && (cond.property == "rn" || cond.property == "data_repl_num")) {
+                                try { repl_num = static_cast<uint32_t>(std::stoul(cond.value)); has_rn = true; } catch (...) {}
+                            }
+                        }
+                        if (data_id > 0 && has_rn) {
+                            auto err = update_replica_access_time(data_id, repl_num, plan.properties.at("at"));
+                            if (!err.ok()) return err;
+                            if (plan.properties.size() == 1) {
+                                set_dml_result(1);
+                                return SUCCESS();
+                            }
+                        }
+                    }
+
                     snowflake_id_t sid = resolve_target_sid(et, plan.conditions);
 
                     if (sid == 0) {
