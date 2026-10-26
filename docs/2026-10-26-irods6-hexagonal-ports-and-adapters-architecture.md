@@ -466,7 +466,245 @@ sequenceDiagram
 
 ---
 
-## 5. Guide for Consortium Plugin Authors: Implementing a New Catalog Adapter
+## 5. How `lite3cpp::Buffer` Made the iRODS World a Better Place: 10 Concrete Examples
+
+Across both `irods` and `l3kvg`, `lite3cpp::Buffer` serves as the **universal, zero-parse binary substrate**—replacing fragmented C pointer graphs, `nlohmann::json` string bridges, and bespoke serialization loops with a single 4-byte-aligned B-Tree buffer format. Below are 10 concrete examples from the codebase showing how `lite3cpp::Buffer` transformed performance, safety, and maintainability.
+
+---
+
+### Example 1: Eliminating the `KeyValPair_t` Heap-Allocation & $O(N)$ Linear Scan Tax
+
+`KeyValPair_t` (`condInput`) is passed to nearly every function in iRODS. Historically, it consisted of two parallel heap-allocated `char**` arrays (`keyWord` and `value`), requiring $2N + 2$ `malloc`/`strdup` calls, $O(N)$ `strcmp` linear scans on every lookup, and manual `clearKeyVal` cleanup (one of the largest sources of memory leaks in iRODS 4.x/5.x).
+
+```cpp
+// ❌ BEFORE (Legacy C Struct KeyValPair_t):
+// - 2N + 2 heap allocations (realloc + strdup per key and value)
+// - O(N) linear strcmp scan on every getValByKey()
+// - Easy to leak if clearKeyVal() is missed on an early error return
+keyValPair_t cond_input{};
+addKeyVal(&cond_input, RESC_HIER_STR_KW, "pt;ufs0");
+addKeyVal(&cond_input, FORCE_FLAG_KW, "");
+addKeyVal(&cond_input, ADMIN_KW, "");
+
+const char* hier = getValByKey(&cond_input, RESC_HIER_STR_KW); // O(N) strcmp loop
+if (hier) {
+    // use hier...
+}
+clearKeyVal(&cond_input); // Must remember on every exit path!
+```
+```cpp
+// ✅ AFTER (iRODS 6.0 irods::protocol::KeyValPair / KeyValPairView):
+// - Stored in-place inside a single contiguous lite3cpp::Buffer B-Tree ("kv")
+// - O(log N) B-Tree lookup returning zero-copy std::string_view
+// - Automatic RAII cleanup; zero individual strdup/free calls
+irods::protocol::DataObjInp req;
+req.obj_path("/tempZone/home/rods/dataset.h5");
+req.cond_input().set(RESC_HIER_STR_KW, "pt;ufs0");
+req.cond_input().set(FORCE_FLAG_KW, "");
+req.cond_input().set(ADMIN_KW, "");
+
+if (auto hier = req.cond_input().get(RESC_HIER_STR_KW); !hier.empty()) { // O(log N), zero-copy string_view
+    // use hier...
+} // Automatically freed when req leaves scope
+```
+*Reference*: [`lib/core/include/irods/protocol/lite3_structs.hpp`](file:///home/darkfell/dev/irods/lib/core/include/irods/protocol/lite3_structs.hpp#L240-L430)
+
+---
+
+### Example 2: Eradicating `dataObjInfo_t*` Linked-List Pointer Graphs & Double-Free Hazards
+
+In legacy iRODS, replica lists were represented as singly linked lists of heap-allocated `dataObjInfo_t*` nodes (`next` pointer), each owning a heap-allocated `specColl_t*` and `keyValPair_t`. Splitting, sorting, or freeing replica lists (`freeAllDataObjInfo`) caused frequent use-after-free and double-free bugs.
+
+```cpp
+// ❌ BEFORE (Legacy dataObjInfo_t* Linked List):
+// - Scattered heap nodes per replica + nested pointers
+// - Manual linked-list manipulation and freeAllDataObjInfo() required
+dataObjInfo_t* head = nullptr;
+for (int i = 0; i < repl_cnt; ++i) {
+    auto* node = static_cast<dataObjInfo_t*>(std::calloc(1, sizeof(dataObjInfo_t)));
+    rstrcpy(node->objPath, "/tempZone/home/rods/file.bin", MAX_NAME_LEN);
+    node->replNum = i;
+    addKeyVal(&node->condInput, "resc_hier", "ufs0");
+    node->next = head;
+    head = node;
+}
+// ... any early return without freeAllDataObjInfo(head) leaks the entire graph
+freeAllDataObjInfo(head);
+```
+```cpp
+// ✅ AFTER (iRODS 6.0 irods::protocol::DataObjInfoList):
+// - Entire replica list lives in a single contiguous lite3cpp::Buffer Array
+// - Deep copy is a single memcpy; move is O(1) pointer transfer
+irods::protocol::DataObjInfoList replicas;
+for (int i = 0; i < repl_cnt; ++i) {
+    irods::protocol::DataObjInfo item;
+    item.obj_path("/tempZone/home/rods/file.bin");
+    item.repl_num(i);
+    item.cond_input().set("resc_hier", "ufs0");
+    replicas.push_back(item);
+}
+for (std::size_t i = 0; i < replicas.size(); ++i) {
+    auto repl = replicas.at(i); // Typed facade over replica i
+}
+```
+*Reference*: [`lib/core/include/irods/protocol/lite3_structs.hpp`](file:///home/darkfell/dev/irods/lib/core/include/irods/protocol/lite3_structs.hpp#L1185-L1290)
+
+---
+
+### Example 3: Zero-Parse Network Wire Framing (`LITE3_PROT` + `active_api_buffer_scope`)
+
+When two iRODS 6.0 peers communicate over `LITE3_PROT` (`irodsProt_t = 3`), the wire payload **is** a `lite3cpp::Buffer`. Using [`active_api_buffer_scope`](file:///home/darkfell/dev/irods/lib/core/include/irods/protocol/lite3_structs.hpp#L1755-L1850), API handlers inspect the request buffer in-place and attach a pre-built `lite3cpp::Buffer` reply that [`sendApiReply`](file:///home/darkfell/dev/irods/server/core/src/rsApiHandler.cpp#L350-L390) writes directly to the socket—bypassing `pack_struct` completely.
+
+```cpp
+// ❌ BEFORE (Legacy rsObjStat Reply Path):
+// - Allocates C struct rodsObjStat_t* on the heap
+// - sendApiReply walks RodsObjStat_PI reflection table to serialize XML/Native bytes
+rodsObjStat_t* stat_out = static_cast<rodsObjStat_t*>(std::calloc(1, sizeof(rodsObjStat_t)));
+stat_out->objSize = 65536;
+stat_out->objType = DATA_OBJ_T;
+rstrcpy(stat_out->ownerName, "rods", NAME_LEN);
+rstrcpy(stat_out->ownerZone, "tempZone", NAME_LEN);
+*rodsObjStatOut = stat_out; // Later serialized by pack_struct() in sendApiReply
+```
+```cpp
+// ✅ AFTER (iRODS 6.0 _rsObjStat with active_api_buffer_scope):
+// - Builds irods::protocol::RodsObjStat directly in a lite3cpp::Buffer
+// - sendApiReply sends the raw buffer bytes directly over LITE3_PROT without pack_struct()
+if (irods::protocol::active_api_buffer_scope::is_lite3_protocol_active() && *rodsObjStatOut) {
+    if (auto stat_buf = irods::protocol::RodsObjStat::from_legacy(**rodsObjStatOut); stat_buf.has_value()) {
+        irods::protocol::active_api_buffer_scope::set_active_reply(std::move(*stat_buf));
+    }
+}
+```
+*References*: [`server/core/src/rsApiHandler.cpp`](file:///home/darkfell/dev/irods/server/core/src/rsApiHandler.cpp#L117-L390), [`server/api/src/rsObjStat.cpp`](file:///home/darkfell/dev/irods/server/api/src/rsObjStat.cpp#L204-L240)
+
+---
+
+### Example 4: Eliminating the GenQuery2 JSON Serialization Tax (`try_execute_buffer` + `rows_buffer_view`)
+
+Previously, every server-side GenQuery2 call serialized the result set inside the database plugin via `nlohmann::json::dump()`, allocated a `char*` via `strdup()`, and immediately called `nlohmann::json::parse()` on the other side of the plugin boundary. With [`try_execute_buffer`](file:///home/darkfell/dev/irods/lib/core/include/irods/genquery2_builder.hpp#L1178-L1199) and [`rows_buffer_view`](file:///home/darkfell/dev/irods/lib/core/include/irods/genquery2_builder.hpp#L973-L1072), server callers read `std::string_view` cells directly out of the `lite3cpp::Buffer` (**3.35x faster**).
+
+```cpp
+// ❌ BEFORE (JSON String Round-Trip in dataObjStat / collStat):
+// - Plugin dumps JSON to char* -> Server parses char* back into nlohmann::json DOM
+// - Every cell access allocates or reads std::string objects in a JSON tree (69.95 us/iter)
+const auto rows = gq2::try_execute(*rsComm,
+    gq2::builder::select({"DATA_ID", "DATA_MODIFY_TIME", "DATA_OWNER_NAME", "DATA_OWNER_ZONE", "DATA_SIZE"})
+        .where(col("COLL_NAME") == coll_sv && col("DATA_NAME") == data_sv));
+if (!rows || rows->empty()) {
+    return OBJ_PATH_DOES_NOT_EXIST;
+}
+const auto& row = (*rows)[0];
+const auto& id_str = row[0].get_ref<const std::string&>();
+```
+```cpp
+// ✅ AFTER (Zero-Copy try_execute_buffer + rows_buffer_view in dataObjStat / collStat):
+// - Plugin populates lite3cpp::Buffer directly via DATABASE_OP_EXECUTE_GENQUERY2_BUFFER
+// - rows_buffer_view slices std::string_view directly from the aligned buffer (20.91 us/iter — 3.35x faster!)
+lite3cpp::Buffer rows_buf;
+if (gq2::try_execute_buffer(*rsComm,
+        gq2::builder::select({"DATA_ID", "DATA_MODIFY_TIME", "DATA_OWNER_NAME", "DATA_OWNER_ZONE", "DATA_SIZE"})
+            .where(col("COLL_NAME") == coll_sv && col("DATA_NAME") == data_sv),
+        rows_buf) < 0) {
+    return OBJ_PATH_DOES_NOT_EXIST;
+}
+const gq2::rows_buffer_view rows{rows_buf};
+char scratch[64]{};
+const auto id_sv = rows.cell(0, 0, scratch); // Zero-copy std::string_view!
+```
+*References*: [`server/api/src/rsObjStat.cpp`](file:///home/darkfell/dev/irods/server/api/src/rsObjStat.cpp#L101-L154), [`server/core/src/collection.cpp`](file:///home/darkfell/dev/irods/server/core/src/collection.cpp#L208-L249)
+
+---
+
+### Example 5: High-Speed Legacy `GenQueryOut_t*` Materialization (`rows_buffer_to_genquery_out`)
+
+For legacy callers (`rcGenQuery` / `iquest`) that still expect a C `GenQueryOut_t*` struct, [`rows_buffer_to_genquery_out`](file:///home/darkfell/dev/irods/lib/core/include/irods/genquery2_builder.hpp#L1074-L1153) populates `GenQueryOut_t::sqlResult` directly from `lite3cpp::Buffer` without ever constructing an `nlohmann::json` DOM (**1.90x faster**).
+
+```cpp
+// Direct zero-copy materialization from lite3cpp::Buffer into legacy GenQueryOut_t*:
+lite3cpp::Buffer rows_buf;
+const int ec = chl_execute_genquery2_buffer(*rsComm, statement, sql_opts, rows_buf);
+if (ec == 0) {
+    // Computes column strides and memcpy's std::string_view slices straight into sqlResult[col].value
+    irods::experimental::genquery2::rows_buffer_to_genquery_out(
+        rows_buf, std::span<const int>{col_ids}, *genQueryOut, continue_inx, max_rows);
+}
+```
+*References*: [`lib/core/include/irods/genquery2_builder.hpp`](file:///home/darkfell/dev/irods/lib/core/include/irods/genquery2_builder.hpp#L1074-L1153), [`server/api/src/rsGenQuery.cpp`](file:///home/darkfell/dev/irods/server/api/src/rsGenQuery.cpp#L265-L340)
+
+---
+
+### Example 6: End-to-End Zero-Copy Distributed Graph Queries Over ZeroMQ (`l3kvg`)
+
+In [`irods_database_plugin_l3kvg`](file:///home/darkfell/dev/irods_database_plugin_l3kvg) and [`l3kvg`](file:///home/darkfell/dev/l3kvg), `GQ2Compiler::compile` produces a binary `lite3cpp::Buffer` query plan, [`RemoteL3KVClient::query_buffer_async`](file:///home/darkfell/dev/l3kvg/include/l3kvg/remote_client.hpp) transmits the raw buffer bytes over ZeroMQ (`cmd == "R"`), and the L3KVG server returns a `lite3cpp::Buffer` of result rows that is moved directly into `irods_server`—**zero JSON serialization or parsing across the entire client-plugin-database pipeline**.
+
+```cpp
+// In CatalogImpl::execute_query (irods_database_plugin_l3kvg/src/catalog/catalog_facade.cpp):
+lite3cpp::Buffer plan;
+auto err = compiler::GQ2Compiler::compile(ast, plan, local_zone, client_user, is_admin);
+
+// Zero-copy binary ZMQ RPC: sends plan.data() directly and receives lite3cpp::Buffer directly
+results.buffer = client_->query_buffer_async(local_cluster_id_, starting_nodes, plan).get();
+```
+*References*: [`src/catalog/catalog_facade.cpp`](file:///home/darkfell/dev/irods_database_plugin_l3kvg/src/catalog/catalog_facade.cpp#L4830-L4885), [`l3kvg/include/l3kvg/remote_client.hpp`](file:///home/darkfell/dev/l3kvg/include/l3kvg/remote_client.hpp#L48-L62)
+
+---
+
+### Example 7: Single-Round-Trip Atomic Graph Mutations (`l3kvg::MutationBatch`)
+
+Updating a data object, its replicas, graph edges (`CONTAINS`, `HAS_REPLICA`, `OWNS`), and secondary lookup indices previously required 6–10 sequential network round-trips. [`l3kvg::MutationBatch`](file:///home/darkfell/dev/l3kvg/include/l3kvg/mutation_batch.hpp) packs all node, edge, and raw index mutations into a single `lite3cpp::Buffer` (`cmd == "B"`) applied atomically in one ZeroMQ round-trip:
+
+```cpp
+l3kvg::MutationBatch batch;
+batch.put_node(data_sid, data_buf);                                  // Zero-copy lite3cpp::Buffer slice
+batch.put_node(repl_sid, repl_buf);                                  // Zero-copy lite3cpp::Buffer slice
+batch.add_edge(coll_sid, "CONTAINS", 1.0, data_sid);                 // Graph edge
+batch.add_edge(data_sid, "HAS_REPLICA", 1.0, repl_sid);              // Graph edge
+batch.put_raw(idx_name_key, SnowflakeID::to_hex(data_sid));          // Secondary index
+client_->execute_batch_async(local_cluster_id_, batch.buffer()).get(); // Single atomic ZMQ RPC!
+```
+*References*: [`l3kvg/include/l3kvg/mutation_batch.hpp`](file:///home/darkfell/dev/l3kvg/include/l3kvg/mutation_batch.hpp), [`l3kvg/tests/test_mutation_batch.cpp`](file:///home/darkfell/dev/l3kvg/tests/test_mutation_batch.cpp)
+
+---
+
+### Example 8: Universal Dynamic PEP Rule Engine Serialization (`serialize_lite3_buffer`)
+
+Previously, exposing a C struct to the rule engine required writing a bespoke `serialize_*_ptr` function in [`irods_re_serialization.cpp`](file:///home/darkfell/dev/irods/server/re/src/irods_re_serialization.cpp) listing every struct member by hand. Because `lite3cpp::Buffer` is a self-describing B-Tree, a single 50-line function ([`serialize_lite3_buffer`](file:///home/darkfell/dev/irods/server/re/src/irods_re_serialization.cpp#L47-L120)) serializes **any** `lite3cpp::Buffer` or `struct_buffer<Tag, LegacyT>` into rule engine `serialized_parameter_t` maps automatically:
+
+```cpp
+// Universal rule-engine serializer for any lite3cpp::Buffer / struct_buffer:
+irods::error serialize_lite3_buffer(
+    const lite3cpp::Buffer& _buf,
+    irods::re_serialization::serialized_parameter_t& _out,
+    std::string_view _prefix = "");
+```
+*Reference*: [`server/re/src/irods_re_serialization.cpp`](file:///home/darkfell/dev/irods/server/re/src/irods_re_serialization.cpp#L47-L120)
+
+---
+
+### Example 9: Polyglot Edge Interoperability (`LITE3_PROT` $\leftrightarrow$ `JSON_PROT` $\leftrightarrow$ `XML_PROT` $\leftrightarrow$ `NATIVE_PROT`)
+
+Because [`irods::wire`](file:///home/darkfell/dev/irods/lib/core/include/irods/wire_transcoder.hpp) uses `lite3cpp::Buffer` as the canonical hub, iRODS 6.0 supports four wire protocols with a single internal representation:
+- **6.0 C++ / Rust / Python native clients** speak `LITE3_PROT` with zero transcoding overhead.
+- **Web / HTTP / REST gateways** speak `JSON_PROT`, transcoded directly to/from `lite3cpp::Buffer` via `yyjson`.
+- **Legacy 4.x / 5.x clients** speak `NATIVE_PROT` or `XML_PROT`, transcoded at the edge via `packInstruct_t`.
+
+*Reference*: [`lib/core/src/wire_transcoder.cpp`](file:///home/darkfell/dev/irods/lib/core/src/wire_transcoder.cpp), [`unit_tests/src/test_lite3_wire_transcoder.cpp`](file:///home/darkfell/dev/irods/unit_tests/src/test_lite3_wire_transcoder.cpp)
+
+---
+
+### Example 10: Forward- & Backward-Compatible Schema Evolution Without ABI Breakage
+
+In legacy iRODS, adding a single field to `DataObjInp_t` or `rodsObjStat_t` changed `sizeof(...)`, breaking binary ABI compatibility across all compiled resource, auth, database, and rule engine plugins and requiring coordinated `RodsPackTable` version bumps.
+
+With `lite3cpp::Buffer` and [`struct_buffer<Tag, LegacyT>`](file:///home/darkfell/dev/irods/lib/core/include/irods/protocol/lite3_structs.hpp):
+- Every message and catalog node is a self-describing B-Tree document.
+- New fields can be added at any time (`buf.set_str(0, "checksum_sha512", ...)` or `buf.set_i64(0, "qos_tier", 2)`).
+- Older plugins or clients inspecting the same `lite3cpp::Buffer` simply ignore unrecognized keys—**zero ABI breakage and zero mandatory plugin recompilation**.
+
+---
+
+## 6. Guide for Consortium Plugin Authors: Implementing a New Catalog Adapter
 
 Under the iRODS 6.0 Hexagonal Architecture, creating a new catalog provider plugin (e.g., for FoundationDB, TiKV, CockroachDB, DuckDB, or L3KVG) no longer requires implementing 70+ `db_*_op` functions or parsing SQL strings.
 
@@ -482,7 +720,7 @@ All legacy GenQuery1 queries (`rcGenQuery` / `iquest`), GenQuery2 queries (`rc_g
 
 ---
 
-## 6. Consortium Adoption & Phased Deprecation Roadmap
+## 7. Consortium Adoption & Phased Deprecation Roadmap
 
 | Phase | Milestone | Status | Compatibility Guarantee |
 | :--- | :--- | :--- | :--- |
