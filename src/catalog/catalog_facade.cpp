@@ -4856,9 +4856,8 @@ namespace irods::catalog {
 
                     if (!target_coll_name.empty() && !target_data_name.empty()) {
                         std::string full_path = (target_coll_name == "/" ? "/" + target_data_name : target_coll_name + "/" + target_data_name);
-                        snowflake_id_t sid = 0;
-                        EntityType type;
-                        if (resolve_path(full_path, sid, type).ok() && type == EntityType::DataObject) {
+                        snowflake_id_t sid = resolve_id_from_index(EntityType::DataObject, "path", full_path);
+                        if (sid != 0) {
                             sn.clear();
                             sn.push_back(sid);
                             resolved_start = true;
@@ -5336,6 +5335,13 @@ namespace irods::catalog {
             #ifdef IRODS_SERVER
                 rodsLog(LOG_DEBUG, "L3_CATALOG: Executing Query with root_type [%s] and [%zu] starting nodes (query buffer size: %zu bytes)", effective_root_type.c_str(), sn.size(), query_buf.size());
             #endif
+
+                if (sn.size() == 1 && sn[0] == 0xFFFFFFFFFFFFFFFFULL) {
+                    lite3cpp::Buffer empty_buf;
+                    empty_buf.init_array();
+                    results.bind_buffer(std::move(empty_buf));
+                    return SUCCESS();
+                }
 
                 lite3cpp::Buffer raw_buf = client_->resume_query_buffer_async(local_cluster_id_, sn, query_buf).get();
                 results.bind_buffer(std::move(raw_buf));

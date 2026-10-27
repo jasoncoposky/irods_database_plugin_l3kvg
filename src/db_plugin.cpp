@@ -1119,21 +1119,14 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
             }
         }
 
-        // Check emptiness
-        bool is_empty = true;
-        auto empty_err = g_catalog->is_collection_empty(sid ? sid : coll_id, is_empty);
-        if (!empty_err.ok()) {
-            return empty_err;
-        }
-        if (!is_empty) {
+        auto ret = g_catalog->delete_collection(coll_id ? coll_id : sid);
+        if (ret.code() == CAT_COLLECTION_NOT_EMPTY) {
             rodsLog(LOG_DEBUG, "L3_PLUGIN: db_del_coll_op: collection [%s] is not empty", coll_name.c_str());
             if (_ctx.comm()) {
                 addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + coll_name + "' is not empty").c_str());
             }
-            return ERROR(CAT_COLLECTION_NOT_EMPTY, "Collection is not empty");
+            return ret;
         }
-
-        auto ret = g_catalog->delete_collection(coll_id ? coll_id : sid);
         if (ret.ok()) {
             std::lock_guard<std::mutex> lock(s_coll_acls_mu);
             s_coll_acls_cache.erase(coll_name);
@@ -1982,6 +1975,35 @@ static irods::error check_avu_access(
     }
 
     return SUCCESS();
+}
+
+irods::error db_check_and_get_object_id_op(
+    irods::plugin_context& _ctx,
+    const char* _type,
+    const char* _name,
+    const char* _access)
+{
+    try {
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_and_get_object_id_op type [%s] name [%s] access [%s]",
+                safe_string(_type).c_str(), safe_string(_name).c_str(), safe_string(_access).c_str());
+        if (auto err = init_l3kvg_catalog(); !err.ok()) {
+            return err;
+        }
+        irods::catalog::snowflake_id_t target_sid = 0;
+        const char* req_level = (_access && _access[0] != '\0') ? _access : "read_object";
+        auto ret = check_avu_access(_ctx, _type, _name, req_level, nullptr, target_sid);
+        if (!ret.ok()) {
+            if (ret.code() == CAT_UNKNOWN_COLLECTION && _ctx.comm() && _name) {
+                addRErrorMsg(&_ctx.comm()->rError, 0, ("collection '" + safe_string(_name) + "' is unknown").c_str());
+            }
+            return ret;
+        }
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_and_get_object_id_op SUCCESS");
+        return SUCCESS();
+    } catch (const std::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_check_and_get_object_id_op EXCEPTION: %s", e.what());
+        return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
 }
 
 irods::error db_add_avu_metadata_op(irods::plugin_context& _ctx, const char* _type, const char* _target_id, const char* _attr, const char* _val, const char* _units, const KeyValPair* _cond_input) {
@@ -3367,6 +3389,7 @@ public:
         add_operation<const char*, const char*, char*, std::size_t>(irods::DATABASE_OP_GET_GRID_CONFIGURATION_VALUE, std::function<irods::error(irods::plugin_context&, const char*, const char*, char*, std::size_t)>(db_get_grid_configuration_value_op));
 
         add_operation<int, const char*, const char*, const char*, const char*>(irods::DATABASE_OP_MOD_ACCESS_CONTROL, std::function<irods::error(irods::plugin_context&, int, const char*, const char*, const char*, const char*)>(db_mod_access_control_op));
+        add_operation<const char*, const char*, const char*>(irods::DATABASE_OP_CHECK_AND_GET_OBJ_ID, std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*)>(db_check_and_get_object_id_op));
         add_operation<rodsLong_t>(irods::DATABASE_OP_CHECK_PERMISSION_TO_MODIFY_DATA_OBJECT, std::function<irods::error(irods::plugin_context&, rodsLong_t)>(db_check_permission_to_modify_data_object_op));
         add_operation(irods::DATABASE_OP_CHECK_DATA_OBJECT_ACCESS, std::function<irods::error(irods::plugin_context&, const rodsLong_t, const char*)>(db_check_data_object_access_op));
         add_operation<rodsLong_t, rodsLong_t>(irods::DATABASE_OP_UPDATE_TICKET_WRITE_BYTE_COUNT, std::function<irods::error(irods::plugin_context&, rodsLong_t, rodsLong_t)>(db_update_ticket_write_byte_count_op));

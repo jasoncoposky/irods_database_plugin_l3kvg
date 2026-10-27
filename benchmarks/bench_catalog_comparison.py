@@ -173,7 +173,7 @@ TIER_TIMEOUTS = {
 }
 
 BACKEND_CONTAINERS = {
-    "l3kvg": "ubuntu-2404-l3kvg-irods-catalog-provider-1",
+    "l3kvg": "test-l3kvg-bench-irods-catalog-provider-1",
     "postgres": "test-postgres-bench-irods-catalog-provider-1",
 }
 
@@ -763,10 +763,10 @@ def measure_footprint():
 
     # 1. On-disk database sizes
     # L3KVG iRODS provider directory
-    out, _, rc = run_in_container("ubuntu-2404-l3kvg-irods-catalog-provider-1", "du -sh /var/lib/irods/", as_irods=False)
+    out, _, rc = run_in_container("test-l3kvg-bench-irods-catalog-provider-1", "du -sh /var/lib/irods/", as_irods=False)
     if rc == 0 and out.strip():
         footprint["disk_human"]["l3kvg_irods"] = out.strip().split()[0]
-    out, _, rc = run_in_container("ubuntu-2404-l3kvg-irods-catalog-provider-1", "du -sb /var/lib/irods/", as_irods=False)
+    out, _, rc = run_in_container("test-l3kvg-bench-irods-catalog-provider-1", "du -sb /var/lib/irods/", as_irods=False)
     if rc == 0 and out.strip():
         try:
             footprint["disk_bytes"]["l3kvg_irods"] = int(out.strip().split()[0])
@@ -774,10 +774,10 @@ def measure_footprint():
             pass
 
     # L3KVG database directory
-    out, _, rc = run_in_container("ubuntu-2404-l3kvg-irods-catalog-provider-1", "du -sh /var/lib/irods/l3kvg_db", as_irods=False)
+    out, _, rc = run_in_container("test-l3kvg-bench-irods-catalog-provider-1", "du -sh /var/lib/irods/l3kvg_db", as_irods=False)
     if rc == 0 and out.strip():
         footprint["disk_human"]["l3kvg_db"] = out.strip().split()[0]
-    out, _, rc = run_in_container("ubuntu-2404-l3kvg-irods-catalog-provider-1", "du -sb /var/lib/irods/l3kvg_db", as_irods=False)
+    out, _, rc = run_in_container("test-l3kvg-bench-irods-catalog-provider-1", "du -sb /var/lib/irods/l3kvg_db", as_irods=False)
     if rc == 0 and out.strip():
         try:
             footprint["disk_bytes"]["l3kvg_db"] = int(out.strip().split()[0])
@@ -785,7 +785,7 @@ def measure_footprint():
             pass
 
     # L3KVG catalog container (if separate volume exists)
-    out, _, rc = run_in_container("ubuntu-2404-l3kvg-catalog-1", "du -sh /var/lib/l3kvg/", as_irods=False)
+    out, _, rc = run_in_container("test-l3kvg-bench-catalog-1", "du -sh /var/lib/l3kvg/", as_irods=False)
     if rc == 0 and out.strip():
         footprint["disk_human"]["l3kvg_catalog"] = out.strip().split()[0]
     elif rc != 0:
@@ -819,7 +819,7 @@ def measure_footprint():
         return res
 
     footprint["rss_kb"]["l3kvg"] = get_container_rss(
-        "ubuntu-2404-l3kvg-irods-catalog-provider-1",
+        "test-l3kvg-bench-irods-catalog-provider-1",
         ["l3kvg_server", "irodsServer", "irodsAgent"]
     )
     footprint["rss_kb"]["postgres_server"] = get_container_rss(
