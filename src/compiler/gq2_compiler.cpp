@@ -34,7 +34,7 @@ namespace irods::catalog::compiler {
         {COL_D_CREATE_TIME,    {"DataObject", "ct"}},
         {COL_D_MODIFY_TIME,    {"Replica", "mt"}},
         {COL_D_DATA_CHECKSUM,  {"Replica", "cs"}},
-        {COL_D_DATA_STATUS,    {"DataObject", "st"}},
+        {COL_D_DATA_STATUS,    {"Replica", "ds"}},
 
 
         {COL_COLL_ID,          {"Collection", "id"}},
@@ -94,8 +94,8 @@ namespace irods::catalog::compiler {
         {COL_COLL_TOKEN_NAMESPACE, {"Access", "t"}},
         {COL_DATA_ACCESS_DATA_ID, {"DataObject", "id"}},
         {COL_COLL_ACCESS_COLL_ID, {"Collection", "id"}},
-        {COL_DATA_ACCESS_USER_ID, {"User", "id"}},
-        {COL_COLL_ACCESS_USER_ID, {"User", "id"}},
+        {COL_DATA_ACCESS_USER_ID, {"Access", "user_id"}},
+        {COL_COLL_ACCESS_USER_ID, {"CollAccess", "user_id"}},
         {COL_COLL_USER_NAME,      {"User", "n"}},
         {COL_COLL_USER_ZONE,      {"User", "z"}},
         {COL_DATA_USER_NAME,      {"User", "n"}},
@@ -137,8 +137,8 @@ namespace irods::catalog::compiler {
         {"DATA_COMMENTS",     {"DataObject", "c"}},
         {"DATA_RESC_NAME",    {"Resource", "n"}},
         {"D_RESC_NAME",       {"Resource", "n"}},
-        {"DATA_STATUS",       {"DataObject", "st"}},
-        {"DATA_DATA_STATUS",  {"DataObject", "st"}},
+        {"DATA_STATUS",       {"Replica", "ds"}},
+        {"DATA_DATA_STATUS",  {"Replica", "ds"}},
 
         {"COLL_ID",           {"Collection", "id"}},
         {"COLL_NAME",         {"Collection", "n"}},
@@ -165,6 +165,8 @@ namespace irods::catalog::compiler {
         {"USER_CREATE_TIME",  {"User", "ct"}},
         {"USER_MODIFY_TIME",  {"User", "mt"}},
         {"USER_DN",           {"User", "d"}},
+        {"USER_AUTH_ID",      {"User", "id"}},
+        {"USER_DN_INVALID",   {"User", "c"}},
 
         {"RESC_ID",           {"Resource", "id"}},
         {"RESC_NAME",         {"Resource", "n"}},
@@ -172,6 +174,7 @@ namespace irods::catalog::compiler {
         {"RESC_TYPE_NAME",    {"Resource", "t"}},
         {"RESC_CLASS_NAME",   {"Resource", "c"}},
         {"RESC_LOC",          {"Resource", "l"}},
+        {"RESC_HOSTNAME",     {"Resource", "l"}},
         {"RESC_VAULT_PATH",   {"Resource", "v"}},
         {"RESC_FREE_SPACE",   {"Resource", "f"}},
         {"RESC_FREE_SPACE_TIME", {"Resource", "ft"}},
@@ -181,9 +184,11 @@ namespace irods::catalog::compiler {
         {"RESC_CHILDREN",     {"Resource", "ch"}},
         {"RESC_CONTEXT",      {"Resource", "cx"}},
         {"RESC_PARENT",       {"Resource", "p"}},
+        {"RESC_PARENT_ID",    {"Resource", "p"}},
         {"RESC_PARENT_CONTEXT", {"Resource", "pc"}},
         {"RESC_CREATE_TIME",  {"Resource", "ct"}},
         {"RESC_MODIFY_TIME",  {"Resource", "mt"}},
+        {"RESC_MODIFY_TIME_MILLIS", {"Resource", "mt_ms"}},
 
         {"ZONE_ID",           {"Zone", "id"}},
         {"ZONE_NAME",         {"Zone", "n"}},
@@ -258,11 +263,11 @@ namespace irods::catalog::compiler {
         {"DATA_ACCESS_DATA_ID",   {"DataObject", "id"}},
         {"COLL_ACCESS_COLL_ID",   {"Collection", "id"}},
         {"COLL_COLL_ACCESS_COLL_ID", {"Collection", "id"}},
-        {"DATA_ACCESS_USER_ID",   {"User", "id"}},
+        {"DATA_ACCESS_USER_ID",   {"Access", "user_id"}},
         {"DATA_ACCESS_USER_NAME", {"User", "n"}},
         {"DATA_ACCESS_USER_ZONE", {"User", "z"}},
         {"DATA_ACCESS_USER_TYPE", {"User", "t"}},
-        {"COLL_ACCESS_USER_ID",   {"CollUser", "id"}},
+        {"COLL_ACCESS_USER_ID",   {"CollAccess", "user_id"}},
         {"COLL_ACCESS_USER_NAME", {"CollUser", "n"}},
         {"COLL_ACCESS_USER_ZONE", {"CollUser", "z"}},
         {"COLL_ACCESS_USER_TYPE", {"CollUser", "t"}},
@@ -275,7 +280,7 @@ namespace irods::catalog::compiler {
         {"RESC_ACCESS_TYPE",      {"Access", "l"}},
         {"RESC_ACCESS_NAME",      {"Access", "l"}},
         {"RESC_TOKEN_NAMESPACE",  {"Access", "t"}},
-        {"RESC_ACCESS_USER_ID",   {"User", "id"}},
+        {"RESC_ACCESS_USER_ID",   {"Access", "user_id"}},
         {"RESC_ACCESS_RESC_ID",   {"Resource", "id"}},
         {"RESC_USER_NAME",        {"User", "n"}},
         {"RESC_USER_ZONE",        {"User", "z"}},
@@ -287,6 +292,8 @@ namespace irods::catalog::compiler {
         {"TICKET_USES_LIMIT", {"Ticket", "ul"}},
         {"TICKET_USES_COUNT", {"Ticket", "uc"}},
         {"TICKET_EXPIRY_TS",  {"Ticket", "ex"}},
+        {"TICKET_EXPIRY_TIME",{"Ticket", "ex"}},
+        {"TICKET_EXPIRY",     {"Ticket", "ex"}},
         {"TICKET_CREATE_TIME",{"Ticket", "ct"}},
         {"TICKET_MODIFY_TIME",{"Ticket", "mt"}},
         {"TICKET_WRITE_FILE_COUNT", {"Ticket", "wfc"}},
@@ -547,6 +554,8 @@ namespace irods::catalog::compiler {
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_less_than& c) const { return {4, c.string_literal}; }
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_less_than_or_equal_to& c) const { return {5, c.string_literal}; }
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_like& c) const { return {6, c.string_literal}; }
+        std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_is_null&) const { return {0, ""}; }
+        std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_is_not_null&) const { return {1, ""}; }
         std::pair<int, std::string> operator()(const irods::experimental::genquery2::condition_operator_not& c) const {
             if (const auto* lk = std::get_if<irods::experimental::genquery2::condition_like>(&c.expression)) {
                 return {7, lk->string_literal};
@@ -556,6 +565,12 @@ namespace irods::catalog::compiler {
             }
             if (const auto* neq = std::get_if<irods::experimental::genquery2::condition_not_equal>(&c.expression)) {
                 return {0, neq->string_literal};
+            }
+            if (std::holds_alternative<irods::experimental::genquery2::condition_is_null>(c.expression)) {
+                return {1, ""};
+            }
+            if (std::holds_alternative<irods::experimental::genquery2::condition_is_not_null>(c.expression)) {
+                return {0, ""};
             }
             return {0, ""};
         }
@@ -653,16 +668,14 @@ namespace irods::catalog::compiler {
             remap_data_object_coll_cols(compiler->get_entry_type(), col_name, node_type, bson_key);
 
             if (col_name == "USER_TYPE") {
-                if (compiler->get_entry_type() == "Group") {
+                bool has_user = (compiler->get_entry_type() == "User");
+                bool has_group = (compiler->get_entry_type() == "Group");
+                for (const auto& t : compiler->get_target_types()) {
+                    if (t == "User") has_user = true;
+                    if (t == "Group") has_group = true;
+                }
+                if (has_group && !has_user) {
                     node_type = "Group";
-                } else {
-                    bool has_group = false;
-                    for (const auto& t : compiler->get_target_types()) {
-                        if (t == "Group") has_group = true;
-                    }
-                    if (has_group && compiler->get_entry_type() != "User") {
-                        node_type = "Group";
-                    }
                 }
             }
             compiler->add_target_type(node_type);
@@ -808,6 +821,10 @@ namespace irods::catalog::compiler {
                         std::string node_type = std::string(gm->node_type);
                         std::string bson_key = std::string(gm->bson_key);
                         remap_data_object_coll_cols(compiler->get_entry_type(), col->name, node_type, bson_key);
+                        if (agg == 1 && !func.distinct && col->name == "DATA_ID") {
+                            node_type = "Replica";
+                            bson_key = "id";
+                        }
                         compiler->add_target_type(node_type);
                         size_t p_ofs = buf.arr_append_obj(projs_arr_ofs);
                         buf.set_str(p_ofs, "alias", node_type);
@@ -1060,16 +1077,58 @@ namespace irods::catalog::compiler {
                     }
                 }
             }
+        } else if (ast.group_by.expressions.empty()) {
+            bool has_repl_num_proj = false;
+            for (const auto& p : ast.projections) {
+                if (const auto* col = std::get_if<irods::experimental::genquery2::column>(&p)) {
+                    if (col->name == "DATA_REPL_NUM") {
+                        has_repl_num_proj = true;
+                        break;
+                    }
+                }
+            }
+            if (has_repl_num_proj) {
+                size_t sorts_ofs = qbuf.set_arr(0, "sorts");
+                size_t s_ofs = qbuf.arr_append_obj(sorts_ofs);
+                qbuf.set_str(s_ofs, "alias", "Replica");
+                qbuf.set_str(s_ofs, "property", "rn");
+                qbuf.set_bool(s_ofs, "ascending", true);
+            }
         }
 
         // 4. DataObject / Replica
         bool has_data_object = (entry_node_type_ == "DataObject");
         bool has_collection = (entry_node_type_ == "Collection");
+        bool has_replica = (entry_node_type_ == "Replica");
+        bool has_group_target = false;
         for (const auto& t : target_node_types_) {
             if (t == "DataObject") {
                 has_data_object = true;
             } else if (t == "Collection") {
                 has_collection = true;
+            } else if (t == "Replica") {
+                has_replica = true;
+            } else if (t == "Group") {
+                has_group_target = true;
+            }
+        }
+        if (has_group_target && entry_node_type_ != "Group") {
+            condition_visitor::append_filter(raw_filters_buf, 0, "Group", "t", 0, "rodsgroup", "and");
+        }
+        if (has_replica && qbuf.get_type(0, "projections") == lite3cpp::Type::Array) {
+            size_t p_arr = qbuf.get_arr(0, "projections");
+            lite3cpp::NodeView pnv(reinterpret_cast<const lite3cpp::PackedNodeLayout*>(qbuf.data() + p_arr));
+            for (uint32_t pi = 0; pi < pnv.size(); ++pi) {
+                if (qbuf.arr_get_type(p_arr, pi) == lite3cpp::Type::Object) {
+                    size_t p_item = qbuf.arr_get_obj(p_arr, pi);
+                    if (qbuf.get_type(p_item, "alias") == lite3cpp::Type::String &&
+                        qbuf.get_str(p_item, "alias") == "DataObject" &&
+                        qbuf.get_type(p_item, "property") == lite3cpp::Type::String &&
+                        qbuf.get_str(p_item, "property") == "c") {
+                        qbuf.set_str(p_item, "alias", "Replica");
+                        qbuf.set_str(p_item, "property", "cm");
+                    }
+                }
             }
         }
 

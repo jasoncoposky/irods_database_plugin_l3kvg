@@ -58,7 +58,7 @@ TEST_F(MiscPluginTest, TokensAndQuotas) {
 
     // 4. Logical Quotas
     // Register Collection for Logical Quota test
-    collInfo_t coll;
+    collInfo_t coll{};
     std::strcpy(coll.collName, "/tempZone/home/alice");
     ASSERT_TRUE((plugin()->call<collInfo_t*>(nullptr, irods::DATABASE_OP_REG_COLL, nullptr, &coll).ok()));
 

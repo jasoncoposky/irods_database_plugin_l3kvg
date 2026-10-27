@@ -42,6 +42,7 @@ namespace irods::catalog {
         std::string modify_ts;
         std::string access_time;
         int64_t size = 0;
+        std::string comments = "";
     };
 
     struct collection {
@@ -80,7 +81,7 @@ namespace irods::catalog {
         std::string vault_path;
         std::string context;
         std::string comments;
-        int64_t free_space = 0;
+        std::string free_space;
         int status = 0; // 0=up, 1=down
         std::string create_ts;
         std::string modify_ts;

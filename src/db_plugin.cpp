@@ -31,6 +31,7 @@
 #include <vector>
 #include <map>
 #include <cstring>
+#include <charconv>
 #include <iostream>
 #include <ctime>
 #include <pthread.h>
@@ -110,6 +111,13 @@ static std::string get_timestamp(const std::string& ts) {
         if (!ts.empty() && std::all_of(ts.begin(), ts.end(), ::isdigit)) {
             char buf[32];
             std::snprintf(buf, sizeof(buf), "%011lld", std::stoll(ts));
+            return std::string(buf);
+        }
+        if (ts.size() < 11) {
+            long long val = 0;
+            std::from_chars(ts.data(), ts.data() + ts.size(), val);
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%011lld", val);
             return std::string(buf);
         }
     } catch (...) {}
@@ -402,6 +410,18 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
         obj.checksum = safe_string(_info->chksum);
         obj.status = safe_string(_info->statusString);
 
+        // Check if object already exists at full_path before allocating sequence ID or resolving resources
+        if (!full_path.empty()) {
+            irods::catalog::EntityType existing_type;
+            irods::catalog::snowflake_id_t existing_sid = 0;
+            if (g_catalog->resolve_path(full_path, existing_sid, existing_type).ok() && existing_sid != 0) {
+                if (existing_type == irods::catalog::EntityType::Collection) {
+                    return ERROR(CAT_NAME_EXISTS_AS_COLLECTION, "Collection already exists with data object name: " + full_path);
+                }
+                return ERROR(CATALOG_ALREADY_HAS_ITEM_BY_THAT_NAME, "Data object already exists: " + full_path);
+            }
+        }
+
         if (obj.id <= 0) g_catalog->get_next_sequence_value("R_DATA_MAIN", obj.id);
 
         rodsLog(LOG_DEBUG, "L3_PLUGIN: db_reg_data_obj_op: obj.name=%s, obj.coll_id=%llu, obj.id=%llu", obj.name.c_str(), (unsigned long long)obj.coll_id, (unsigned long long)obj.id);
@@ -417,38 +437,49 @@ irods::error db_reg_data_obj_op(irods::plugin_context& _ctx, dataObjInfo_t* _inf
         repl.checksum = safe_string(_info->chksum);
         repl.modify_ts = get_timestamp(safe_string(_info->dataModify));
         repl.size = (int64_t)_info->dataSize;
+        repl.comments = obj.comments;
 
         if (repl.resc_hier.empty() && _info->rescName && _info->rescName[0] != '\0') {
             repl.resc_hier = _info->rescName;
         }
+        if (repl.resc_hier.empty()) {
+            repl.resc_hier = "demoResc";
+        }
 
-        if (repl.resource_id == 0 && _info->rescName && _info->rescName[0] != '\0') {
-            std::string rname(_info->rescName);
+        std::string rname_lookup = (_info->rescName && _info->rescName[0] != '\0') ? std::string(_info->rescName) : repl.resc_hier;
+        if (auto sep = rname_lookup.rfind(';'); sep != std::string::npos) {
+            rname_lookup = rname_lookup.substr(sep + 1);
+        }
+        if (repl.resource_id == 0 && !rname_lookup.empty()) {
             {
                 std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-                auto it = s_rid_cache.find(rname);
+                auto it = s_rid_cache.find(rname_lookup);
                 if (it != s_rid_cache.end()) {
                     repl.resource_id = it->second;
                 }
             }
             if (repl.resource_id == 0) {
                 irods::catalog::snowflake_id_t rsid;
-                if (g_catalog->resolve_resource_name(_info->rescName, rsid).ok()) {
+                if (g_catalog->resolve_resource_name(rname_lookup, rsid).ok()) {
                     auto payload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
                     if (!payload.empty()) {
                         lite3cpp::Buffer buf(payload);
                         repl.resource_id = buf.get_i64(0, "id");
                         std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-                        s_rid_cache[rname] = repl.resource_id;
-                        s_rname_by_id_cache[repl.resource_id] = rname;
+                        s_rid_cache[rname_lookup] = repl.resource_id;
+                        s_rname_by_id_cache[repl.resource_id] = rname_lookup;
                     }
                 }
             }
         }
-        if (repl.resource_id > 0 && _info->rescName && _info->rescName[0] != '\0') {
-            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-            s_rid_cache[_info->rescName] = repl.resource_id;
-            s_rname_by_id_cache[repl.resource_id] = _info->rescName;
+        if (_info->rescHier[0] == '\0' && !repl.resc_hier.empty()) {
+            std::snprintf(_info->rescHier, sizeof(_info->rescHier), "%s", repl.resc_hier.c_str());
+        }
+        if (_info->rescName[0] == '\0' && !rname_lookup.empty()) {
+            std::snprintf(_info->rescName, sizeof(_info->rescName), "%s", rname_lookup.c_str());
+        }
+        if (_info->rescId == 0 && repl.resource_id > 0) {
+            _info->rescId = static_cast<rodsLong_t>(repl.resource_id);
         }
 
         irods::catalog::data_id_t out_id;
@@ -472,6 +503,7 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_mod_data_obj_meta_op");
         if (!_info) return ERROR(SYS_INVALID_INPUT_PARAM, "null dataObjInfo_t");
 
+        bool had_initial_data_id = (_info->dataId > 0);
         uint64_t data_id = (uint64_t)_info->dataId;
         irods::catalog::snowflake_id_t sid = 0;
         if (data_id == 0 && _info->objPath && _info->objPath[0] != '\0') {
@@ -507,7 +539,7 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
             }
         }
 
-        if (!admin_mode && !user_name.empty() && (!_ctx.comm() || !irods::is_privileged_client(*_ctx.comm()))) {
+        if (!admin_mode && !user_name.empty()) {
             std::string req_level = "write";
             if (_reg_param && getValByKey(_reg_param, DATA_EXPIRY_KW) != nullptr) {
                 req_level = "own";
@@ -529,7 +561,8 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
                 allowed = true;
             } else {
                 if (g_catalog->resolve_user_name(user_name, usid).ok()) {
-                    g_catalog->check_permission(usid, dsid, req_level, allowed);
+                    bool check_parents = !(_ctx.comm() && irods::is_privileged_client(*_ctx.comm()) && !had_initial_data_id);
+                    g_catalog->check_permission(usid, dsid, req_level, allowed, /*check_parents=*/check_parents);
                 }
             }
             rodsLog(LOG_DEBUG, "L3_PLUGIN: db_mod_data_obj_meta_op: user=%s usid=%llx dsid=%llx level=%s allowed=%d",
@@ -547,7 +580,7 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
             for (int i = 0; i < _reg_param->len; ++i) {
                 std::string kw = safe_string(_reg_param->keyWord[i]);
                 std::string val = safe_string(_reg_param->value[i]);
-                if (kw == DATA_MODIFY_KW || kw == "dataModify" || kw == DATA_CREATE_KW || kw == DATA_EXPIRY_KW) {
+                if (kw == DATA_MODIFY_KW || kw == "dataModify" || kw == DATA_CREATE_KW || kw == DATA_EXPIRY_KW || kw == DATA_ACCESS_TIME_KW || kw == "dataAccessTime") {
                     val = get_timestamp(val);
                 }
                 if (kw == ALL_REPL_STATUS_KW) {
@@ -569,24 +602,28 @@ irods::error db_mod_data_obj_meta_op(irods::plugin_context& _ctx, dataObjInfo_t*
 
         if (data_id > 0) {
             uint32_t target_repl_num = (uint32_t)_info->replNum;
+            bool explicit_repl_num = false;
             if (_reg_param) {
                 if (const char* rn_val = getValByKey(_reg_param, REPL_NUM_KW)) {
-                    try { target_repl_num = static_cast<uint32_t>(std::stoul(rn_val)); } catch (...) {}
+                    try {
+                        target_repl_num = static_cast<uint32_t>(std::stoul(rn_val));
+                        explicit_repl_num = true;
+                    } catch (...) {}
                 }
             }
 
-            std::string target_resc_hier = safe_string(_info->rescHier);
-            if (target_resc_hier.empty() && _reg_param) {
+            std::string target_resc_hier;
+            if (_reg_param) {
                 if (const char* rh_val = getValByKey(_reg_param, RESC_HIER_STR_KW)) {
                     target_resc_hier = rh_val;
+                } else if (const char* rn_val = getValByKey(_reg_param, RESC_NAME_KW)) {
+                    target_resc_hier = rn_val;
                 }
             }
-            if (target_resc_hier.empty() && _info->rescName && _info->rescName[0] != '\0') {
-                target_resc_hier = _info->rescName;
-            }
-            if (target_resc_hier.empty() && _reg_param) {
-                if (const char* rn_val = getValByKey(_reg_param, RESC_NAME_KW)) {
-                    target_resc_hier = rn_val;
+            if (target_resc_hier.empty() && !explicit_repl_num) {
+                target_resc_hier = safe_string(_info->rescHier);
+                if (target_resc_hier.empty() && _info->rescName && _info->rescName[0] != '\0') {
+                    target_resc_hier = _info->rescName;
                 }
             }
 
@@ -698,10 +735,10 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
                 }
             }
         }
-        if (resc_id > 0 && _dst->rescName[0] != '\0') {
-            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-            s_rid_cache[_dst->rescName] = resc_id;
-            s_rname_by_id_cache[resc_id] = _dst->rescName;
+
+        std::string comments = safe_string(_dst->dataComments);
+        if (comments.empty() && _src && _src->dataComments[0] != '\0') {
+            comments = safe_string(_src->dataComments);
         }
 
         irods::catalog::replica repl{
@@ -714,7 +751,8 @@ irods::error db_reg_replica_op(irods::plugin_context& _ctx, dataObjInfo_t* _src,
             chksum, 
             get_timestamp(safe_string(_dst->dataModify)), 
             "",
-            size};
+            size,
+            comments};
         
         auto ret = g_catalog->register_replica(repl);
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_replica_op SUCCESS");
@@ -1111,7 +1149,12 @@ irods::error db_del_coll_op(irods::plugin_context& _ctx, collInfo_t* _info) {
 irods::error db_rename_coll_op(irods::plugin_context& _ctx, const char* _old_name, const char* _new_name) {
     try {
         rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_rename_coll_op");
-        auto ret = g_catalog->rename_collection(safe_string(_old_name), safe_string(_new_name));
+        std::string old_s = safe_string(_old_name);
+        std::string new_s = safe_string(_new_name);
+        if (old_s.starts_with('/') && !new_s.empty() && !new_s.starts_with('/')) {
+            new_s = "/" + new_s;
+        }
+        auto ret = g_catalog->rename_collection(old_s, new_s);
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_rename_coll_op SUCCESS");
         return ret;
     } catch(const std::exception& e) {
@@ -1146,10 +1189,10 @@ irods::error db_reg_resc_op(irods::plugin_context& _ctx, std::map<std::string, s
         
         irods::catalog::resc_id_t out_id;
         auto ret = g_catalog->register_resource(resc, out_id);
-        if (ret.ok() && !resc.name.empty() && out_id > 0) {
+        if (ret.ok() && !resc.name.empty() && resc.id > 0) {
             std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-            s_rid_cache[resc.name] = out_id;
-            s_rname_by_id_cache[out_id] = resc.name;
+            s_rid_cache[resc.name] = resc.id;
+            s_rname_by_id_cache[resc.id] = resc.name;
         }
         rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_reg_resc_op SUCCESS");
         return ret;
@@ -1931,7 +1974,7 @@ static irods::error check_avu_access(
     }
 
     bool allowed = false;
-    g_catalog->check_permission(usid, out_target_sid, safe_string(_req_level), allowed);
+    g_catalog->check_permission(usid, out_target_sid, safe_string(_req_level), allowed, /*check_parents=*/false);
     if (!allowed) {
         rodsLog(LOG_DEBUG, "L3_PLUGIN: check_avu_access: Access Denied for user [%s] on object [%s] with level [%s]",
                 user_name.c_str(), safe_string(_name).c_str(), safe_string(_req_level).c_str());
@@ -2159,14 +2202,11 @@ irods::error db_mod_access_control_op(irods::plugin_context& _ctx, int _recursiv
     }
 }
 
-irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context& _ctx, rodsLong_t _data_id) {
+irods::error db_check_data_object_access_op(irods::plugin_context& _ctx, const rodsLong_t _data_id, const char* _access_perm) {
     try {
-        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_permission_to_modify_data_object_op id [%ld]", _data_id);
-        if (_ctx.comm() && irods::is_privileged_client(*_ctx.comm())) {
-            return SUCCESS();
-        }
+        const char* perm_str = (_access_perm && _access_perm[0] != '\0') ? _access_perm : "read_object";
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_data_object_access_op id [%ld] perm [%s]", _data_id, perm_str);
         bool allowed = false;
-        
         std::string user_name;
         if (_ctx.comm()) {
             user_name = _ctx.comm()->clientUser.userName;
@@ -2175,6 +2215,44 @@ irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context&
             if (config.contains(KW_CFG_ZONE_USER)) {
                 user_name = config.at(KW_CFG_ZONE_USER).get<std::string>();
             }
+        }
+        irods::catalog::snowflake_id_t usid = 0;
+        irods::catalog::snowflake_id_t dsid = g_catalog->make_id(irods::catalog::EntityType::DataObject, static_cast<uint64_t>(_data_id));
+        if (g_session_ticket[0] != '\0') {
+            std::string cuser = user_name.empty() ? g_session_client_user : user_name;
+            std::string_view ticket_access = (std::string_view(perm_str).find("read") == 0) ? "read" : "write";
+            auto terr = g_catalog->check_ticket_access(g_session_ticket, dsid, ticket_access, cuser, g_session_client_addr);
+            if (!terr.ok()) {
+                return terr;
+            }
+            allowed = true;
+        } else {
+            if (g_catalog->resolve_user_name(user_name, usid).ok()) {
+                g_catalog->check_permission(usid, dsid, perm_str, allowed, /*check_parents=*/false);
+            }
+        }
+
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: EXITING db_check_data_object_access_op id [%ld] perm [%s] allowed [%d]", _data_id, perm_str, allowed);
+        if (allowed) return SUCCESS();
+        return ERROR(CAT_NO_ACCESS_PERMISSION, "User does not have permission to access data object");
+    } catch (const std::exception& e) {
+        rodsLog(LOG_ERROR, "L3_PLUGIN: EXITING db_check_data_object_access_op EXCEPTION: %s", e.what());
+        return ERROR(SYS_INTERNAL_ERR, e.what());
+    }
+}
+
+irods::error db_check_permission_to_modify_data_object_op(irods::plugin_context& _ctx, rodsLong_t _data_id) {
+    if (_ctx.comm()) {
+        return db_check_data_object_access_op(_ctx, _data_id, "modify_metadata");
+    }
+    try {
+        rodsLog(LOG_DEBUG, "L3_PLUGIN: ENTERING db_check_permission_to_modify_data_object_op id [%ld]", _data_id);
+        bool allowed = false;
+        
+        std::string user_name;
+        const auto& config = irods::server_properties::instance().map().get_json();
+        if (config.contains(KW_CFG_ZONE_USER)) {
+            user_name = config.at(KW_CFG_ZONE_USER).get<std::string>();
         }
         irods::catalog::snowflake_id_t usid = 0;
         irods::catalog::snowflake_id_t dsid = g_catalog->make_id(irods::catalog::EntityType::DataObject, (uint64_t)_data_id);
@@ -2227,46 +2305,55 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
                 size_t r_ofs = j.arr_get_obj(repls_ofs, ri);
                 if (j.get_type(r_ofs, "after") == lite3cpp::Type::Object) {
                     size_t after_ofs = j.get_obj(r_ofs, "after");
-                    
-                    auto get_after_u64 = [&](std::string_view key) -> uint64_t {
-                        auto t = j.get_type(after_ofs, key);
-                        if (t == lite3cpp::Type::Int64) return static_cast<uint64_t>(j.get_i64(after_ofs, key));
+                    bool has_before = (j.get_type(r_ofs, "before") == lite3cpp::Type::Object);
+                    size_t before_ofs = has_before ? j.get_obj(r_ofs, "before") : after_ofs;
+
+                    auto get_obj_u64 = [&](size_t obj_ofs, std::string_view key) -> uint64_t {
+                        auto t = j.get_type(obj_ofs, key);
+                        if (t == lite3cpp::Type::Int64) return static_cast<uint64_t>(j.get_i64(obj_ofs, key));
                         if (t == lite3cpp::Type::String) {
-                            try { return std::stoull(std::string(j.get_str(after_ofs, key))); } catch (...) {}
+                            try { return std::stoull(std::string(j.get_str(obj_ofs, key))); } catch (...) {}
                         }
                         if (t == lite3cpp::Type::Bytes) {
-                            auto bytes = j.get_bytes(after_ofs, key);
+                            auto bytes = j.get_bytes(obj_ofs, key);
                             std::string s(reinterpret_cast<const char*>(bytes.data()), bytes.size());
                             try { return std::stoull(s); } catch (...) {}
                         }
                         return 0;
                     };
-                    auto get_after_str = [&](std::string_view key, std::string_view def = "") -> std::string {
-                        auto t = j.get_type(after_ofs, key);
-                        if (t == lite3cpp::Type::String) return std::string(j.get_str(after_ofs, key));
-                        if (t == lite3cpp::Type::Int64) return std::to_string(j.get_i64(after_ofs, key));
+                    auto get_obj_str = [&](size_t obj_ofs, std::string_view key, std::string_view def = "") -> std::string {
+                        auto t = j.get_type(obj_ofs, key);
+                        if (t == lite3cpp::Type::String) return std::string(j.get_str(obj_ofs, key));
+                        if (t == lite3cpp::Type::Int64) return std::to_string(j.get_i64(obj_ofs, key));
                         if (t == lite3cpp::Type::Bytes) {
-                            auto bytes = j.get_bytes(after_ofs, key);
+                            auto bytes = j.get_bytes(obj_ofs, key);
                             return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
                         }
                         return std::string(def);
                     };
 
-                    uint64_t data_id = get_after_u64("data_id");
-                    uint32_t repl_num = static_cast<uint32_t>(get_after_u64("data_repl_num"));
-                    uint64_t resc_id = get_after_u64("resc_id");
-                    uint64_t data_size = get_after_u64("data_size");
-                    std::string checksum = get_after_str("data_checksum");
-                    std::string modify_ts = get_after_str("modify_ts");
+                    uint64_t data_id = get_obj_u64(before_ofs, "data_id");
+                    if (data_id == 0) data_id = get_obj_u64(after_ofs, "data_id");
+                    uint32_t before_repl_num = static_cast<uint32_t>(get_obj_u64(before_ofs, "data_repl_num"));
+                    uint32_t after_repl_num = static_cast<uint32_t>(get_obj_u64(after_ofs, "data_repl_num"));
+                    uint64_t before_resc_id = get_obj_u64(before_ofs, "resc_id");
+                    uint64_t after_resc_id = get_obj_u64(after_ofs, "resc_id");
+                    uint64_t resc_id = (before_resc_id > 0) ? before_resc_id : after_resc_id;
+                    uint64_t data_size = get_obj_u64(after_ofs, "data_size");
+                    std::string checksum = get_obj_str(after_ofs, "data_checksum");
+                    std::string modify_ts = get_obj_str(after_ofs, "modify_ts");
 
                     irods::catalog::replica repl;
                     repl.data_id = data_id;
-                    repl.replica_number = repl_num;
-                    repl.resource_id = resc_id;
-                    repl.physical_path = get_after_str("data_path");
-                    repl.resc_hier = get_after_str("resc_hier");
+                    repl.replica_number = after_repl_num;
+                    repl.resource_id = (after_resc_id > 0) ? after_resc_id : resc_id;
+                    repl.physical_path = get_obj_str(after_ofs, "data_path");
+                    repl.resc_hier = get_obj_str(before_ofs, "resc_hier");
                     if (repl.resc_hier.empty()) {
-                        repl.resc_hier = get_after_str("data_resc_hier");
+                        repl.resc_hier = get_obj_str(after_ofs, "resc_hier");
+                    }
+                    if (repl.resc_hier.empty()) {
+                        repl.resc_hier = get_obj_str(after_ofs, "data_resc_hier");
                     }
                     if (repl.resc_hier.empty() && j.get_type(r_ofs, "file_modified") == lite3cpp::Type::Object) {
                         size_t fm_ofs = j.get_obj(r_ofs, "file_modified");
@@ -2277,47 +2364,84 @@ irods::error db_data_object_finalize_op(irods::plugin_context& _ctx, const char*
                             repl.resc_hier = std::string(j.get_str(fm_ofs, "dest_resc_hier"));
                         }
                     }
-                    if (repl.resc_hier.empty() && resc_id > 0) {
-                        {
-                            std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-                            auto it = s_rname_by_id_cache.find(resc_id);
-                            if (it != s_rname_by_id_cache.end()) {
-                                repl.resc_hier = it->second;
-                            }
-                        }
-                        if (repl.resc_hier.empty()) {
-                            irods::catalog::snowflake_id_t rsid = g_catalog->make_id(irods::catalog::EntityType::Resource, resc_id);
-                            auto rpayload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
-                            if (!rpayload.empty()) {
-                                lite3cpp::Buffer rbuf(rpayload);
-                                try { 
-                                    repl.resc_hier = rbuf.get_str(0, "n"); 
-                                    std::lock_guard<std::mutex> lock(s_rid_cache_mu);
-                                    s_rname_by_id_cache[resc_id] = repl.resc_hier;
-                                    s_rid_cache[repl.resc_hier] = resc_id;
-                                } catch (...) {}
-                            }
-                        }
-                    }
-                    repl.status = get_after_str("data_is_dirty", "1");
+                    repl.status = get_obj_str(after_ofs, "data_is_dirty", "1");
                     repl.checksum = checksum;
                     repl.modify_ts = get_timestamp(modify_ts);
                     repl.size = data_size;
+                    repl.comments = get_obj_str(after_ofs, "r_comment");
 
                     std::vector<std::pair<std::string, std::string>> updates;
                     updates.emplace_back("dataSize", std::to_string(data_size));
                     updates.emplace_back("dataModify", repl.modify_ts);
-                    if (!checksum.empty()) updates.emplace_back("chksum", checksum);
+                    if (j.get_type(after_ofs, "data_repl_num") != lite3cpp::Type::Invalid) {
+                        updates.emplace_back("replNum", std::to_string(after_repl_num));
+                    }
+                    if (j.get_type(after_ofs, "r_comment") != lite3cpp::Type::Invalid) {
+                        updates.emplace_back("r_comment", repl.comments);
+                    }
+                    if (j.get_type(after_ofs, "data_version") != lite3cpp::Type::Invalid) {
+                        updates.emplace_back("data_version", get_obj_str(after_ofs, "data_version"));
+                    }
+                    if (j.get_type(after_ofs, "data_type_name") != lite3cpp::Type::Invalid) {
+                        std::string dt = get_obj_str(after_ofs, "data_type_name");
+                        if (!dt.empty()) updates.emplace_back("data_type_name", dt);
+                    }
+                    if (j.get_type(after_ofs, "data_owner_name") != lite3cpp::Type::Invalid) {
+                        std::string o = get_obj_str(after_ofs, "data_owner_name");
+                        if (!o.empty()) updates.emplace_back("data_owner_name", o);
+                    }
+                    if (j.get_type(after_ofs, "data_owner_zone") != lite3cpp::Type::Invalid) {
+                        std::string oz = get_obj_str(after_ofs, "data_owner_zone");
+                        if (!oz.empty()) updates.emplace_back("data_owner_zone", oz);
+                    }
+                    if (j.get_type(after_ofs, "data_status") != lite3cpp::Type::Invalid) {
+                        updates.emplace_back("data_status", get_obj_str(after_ofs, "data_status"));
+                    }
+                    if (j.get_type(after_ofs, "data_mode") != lite3cpp::Type::Invalid) {
+                        updates.emplace_back("data_mode", get_obj_str(after_ofs, "data_mode"));
+                    }
+                    if (j.get_type(after_ofs, "data_map_id") != lite3cpp::Type::Invalid) {
+                        updates.emplace_back("data_map_id", get_obj_str(after_ofs, "data_map_id"));
+                    }
+                    if (j.get_type(after_ofs, "create_ts") != lite3cpp::Type::Invalid) {
+                        std::string ct = get_obj_str(after_ofs, "create_ts");
+                        if (!ct.empty()) updates.emplace_back("create_ts", get_timestamp(ct));
+                    }
+                    if (!checksum.empty() || j.get_type(after_ofs, "data_checksum") != lite3cpp::Type::Invalid) {
+                        updates.emplace_back("chksum", checksum);
+                    }
                     if (!repl.status.empty()) updates.emplace_back("replStatus", repl.status);
                     if (!repl.physical_path.empty()) updates.emplace_back("filePath", repl.physical_path);
                     if (!repl.resc_hier.empty()) updates.emplace_back("rescHier", repl.resc_hier);
                     if (repl.resource_id > 0) updates.emplace_back("rescId", std::to_string(repl.resource_id));
-                    std::string expiry = get_after_str("data_expiry_ts");
+                    std::string expiry = get_obj_str(after_ofs, "data_expiry_ts");
                     if (!expiry.empty()) updates.emplace_back("ex", get_timestamp(expiry));
 
-                    auto mod_ret = g_catalog->modify_data_object_and_replica(data_id, repl_num, repl.resc_hier, updates, /*all_repl_status=*/false, /*all_replicas=*/false);
+                    auto mod_ret = g_catalog->modify_data_object_and_replica(data_id, before_repl_num, "", updates, /*all_repl_status=*/false, /*all_replicas=*/false);
                     if (!mod_ret.ok()) {
                         // Fallback in case replica does not exist yet
+                        if (repl.resc_hier.empty() && resc_id > 0) {
+                            {
+                                std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+                                auto it = s_rname_by_id_cache.find(resc_id);
+                                if (it != s_rname_by_id_cache.end()) {
+                                    repl.resc_hier = it->second;
+                                }
+                            }
+                            if (repl.resc_hier.empty()) {
+                                irods::catalog::snowflake_id_t rsid = g_catalog->make_id(irods::catalog::EntityType::Resource, resc_id);
+                                auto rpayload = g_catalog->get_client()->get_node_payload_async(g_catalog->get_cluster_id(), rsid).get();
+                                if (!rpayload.empty()) {
+                                    lite3cpp::Buffer rbuf(rpayload);
+                                    try { 
+                                        repl.resc_hier = rbuf.get_str(0, "n"); 
+                                        std::lock_guard<std::mutex> lock(s_rid_cache_mu);
+                                        s_rname_by_id_cache[resc_id] = repl.resc_hier;
+                                        s_rid_cache[repl.resc_hier] = resc_id;
+                                    } catch (...) {}
+                                }
+                            }
+                        }
                         g_catalog->register_replica(repl);
                         g_catalog->modify_data_object(data_id, "DATA_SIZE", std::to_string(data_size));
                         if (!expiry.empty()) {
@@ -2677,7 +2801,7 @@ namespace {
             return true;
         }
         return col_name == "DATA_SIZE" || col_name == "DATA_REPL_NUM" || col_name == "DATA_REPL_STATUS" ||
-               col_name == "RESC_FREE_SPACE" || col_name == "QUOTA_LIMIT" || col_name == "QUOTA_OVER" ||
+               col_name == "QUOTA_LIMIT" || col_name == "QUOTA_OVER" ||
                col_name == "QUOTA_USAGE";
     }
 
@@ -2686,8 +2810,16 @@ namespace {
             if (val.empty() || val == "collection") return "";
             return val;
         }
+        if (col_name == "COLL_INHERITANCE") {
+            if (val.empty()) return "0";
+            return val;
+        }
         if (col_name == "DATA_EXPIRY") {
             if (val.empty()) return "00000000000";
+            return val;
+        }
+        if (col_name == "RESC_MODIFY_TIME_MILLIS") {
+            if (val.empty()) return "000";
             return val;
         }
         if (col_name == "TICKET_EXPIRY_TS") {
@@ -2765,9 +2897,143 @@ irods::error db_execute_genquery2_buffer_op(
                 eff_opts.admin_mode = true;
             }
 
+            struct ConcatPart {
+                bool is_col = false;
+                std::string val;
+                size_t rewritten_col_idx = 0;
+            };
+            auto try_flatten_concat = [](auto& self, const gq2::function& fn, std::vector<ConcatPart>& out) -> bool {
+                std::string uname = fn.name;
+                for (char& ch : uname) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+                if (uname != "CONCAT") return false;
+                for (const auto& arg : fn.arguments) {
+                    if (const auto* s = std::get_if<std::string>(&arg)) {
+                        out.push_back({false, *s, 0});
+                    } else if (const auto* col = std::get_if<gq2::column>(&arg)) {
+                        out.push_back({true, col->name, 0});
+                    } else if (const auto* sub_fn = std::get_if<gq2::function>(&arg)) {
+                        if (!self(self, *sub_fn, out)) return false;
+                    }
+                }
+                return !out.empty();
+            };
+
+            struct OrigProjSpec {
+                bool is_concat = false;
+                size_t single_idx = 0;
+                std::vector<ConcatPart> concat_parts;
+            };
+            std::vector<OrigProjSpec> orig_proj_specs;
+            orig_proj_specs.reserve(sel->projections.size());
+
+            gq2::select rewritten_sel = *sel;
+            rewritten_sel.projections.clear();
+
+            for (const auto& p : sel->projections) {
+                if (const auto* fn = std::get_if<gq2::function>(&p)) {
+                    std::vector<ConcatPart> parts;
+                    if (try_flatten_concat(try_flatten_concat, *fn, parts)) {
+                        for (auto& pt : parts) {
+                            if (pt.is_col) {
+                                pt.rewritten_col_idx = rewritten_sel.projections.size();
+                                rewritten_sel.projections.push_back(gq2::column{pt.val});
+                            }
+                        }
+                        orig_proj_specs.push_back({true, 0, std::move(parts)});
+                        continue;
+                    }
+                }
+                size_t idx = rewritten_sel.projections.size();
+                rewritten_sel.projections.push_back(p);
+                orig_proj_specs.push_back({false, idx, {}});
+            }
+
+            auto rewrite_conds = [&](auto& self, gq2::conditions& conds) -> void {
+                for (auto& w : conds) {
+                    if (auto* c = std::get_if<gq2::condition>(&w)) {
+                        if (const auto* fn = std::get_if<gq2::function>(&c->lhs)) {
+                            std::vector<ConcatPart> parts;
+                            if (try_flatten_concat(try_flatten_concat, *fn, parts)) {
+                                if (const auto* eq = std::get_if<gq2::condition_equal>(&c->expression)) {
+                                    std::string_view rem = eq->string_literal;
+                                    gq2::conditions split_conds;
+                                    bool matched = true;
+                                    size_t i = 0;
+                                    while (i < parts.size()) {
+                                        if (!parts[i].is_col) {
+                                            if (!rem.starts_with(parts[i].val)) {
+                                                matched = false;
+                                                break;
+                                            }
+                                            rem.remove_prefix(parts[i].val.size());
+                                            ++i;
+                                        } else {
+                                            std::string col_name = parts[i].val;
+                                            ++i;
+                                            std::string next_lit;
+                                            while (i < parts.size() && !parts[i].is_col) {
+                                                next_lit += parts[i].val;
+                                                ++i;
+                                            }
+                                            if (next_lit.empty()) {
+                                                split_conds.push_back(gq2::condition{gq2::column{col_name}, gq2::condition_equal{std::string(rem)}});
+                                                rem = {};
+                                            } else {
+                                                auto pos = rem.find(next_lit);
+                                                if (pos == std::string_view::npos) {
+                                                    matched = false;
+                                                    break;
+                                                }
+                                                split_conds.push_back(gq2::condition{gq2::column{col_name}, gq2::condition_equal{std::string(rem.substr(0, pos))}});
+                                                rem.remove_prefix(pos + next_lit.size());
+                                            }
+                                        }
+                                    }
+                                    if (matched && rem.empty() && !split_conds.empty()) {
+                                        if (split_conds.size() == 1) {
+                                            w = std::move(split_conds[0]);
+                                        } else {
+                                            w = gq2::logical_and{std::move(split_conds)};
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (auto* land = std::get_if<gq2::logical_and>(&w)) {
+                        self(self, land->condition);
+                    } else if (auto* lor = std::get_if<gq2::logical_or>(&w)) {
+                        self(self, lor->condition);
+                    } else if (auto* lnot = std::get_if<gq2::logical_not>(&w)) {
+                        self(self, lnot->condition);
+                    } else if (auto* lgrp = std::get_if<gq2::logical_grouping>(&w)) {
+                        self(self, lgrp->conditions);
+                    }
+                }
+            };
+            rewrite_conds(rewrite_conds, rewritten_sel.conditions);
+
+            if (!rewritten_sel.order_by.sort_expressions.empty()) {
+                std::vector<gq2::sort_expression> new_sorts;
+                for (const auto& se : rewritten_sel.order_by.sort_expressions) {
+                    if (const auto* fn = std::get_if<gq2::function>(&se.expr)) {
+                        std::vector<ConcatPart> parts;
+                        if (try_flatten_concat(try_flatten_concat, *fn, parts)) {
+                            for (const auto& pt : parts) {
+                                if (pt.is_col) {
+                                    new_sorts.push_back(gq2::sort_expression{gq2::column{pt.val}, se.ascending_order});
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    new_sorts.push_back(se);
+                }
+                rewritten_sel.order_by.sort_expressions = std::move(new_sorts);
+            }
+
             irods::catalog::ResultSet results;
             std::vector<uint64_t> starting_nodes;
-            auto ret = g_catalog->execute_query(*sel, results, starting_nodes, "", &eff_opts);
+            auto ret = g_catalog->execute_query(rewritten_sel, results, starting_nodes, "", &eff_opts);
             if (!ret.ok()) {
                 if (ret.code() == SYS_INVALID_INPUT_PARAM && _ctx.comm()) {
                     addRErrorMsg(&_ctx.comm()->rError, SYS_INVALID_INPUT_PARAM, "Could not generate SQL from GenQuery2 string.");
@@ -2776,12 +3042,12 @@ irods::error db_execute_genquery2_buffer_op(
             }
 
             std::vector<std::string> col_names;
-            col_names.reserve(sel->projections.size());
+            col_names.reserve(rewritten_sel.projections.size());
             int coll_name_idx = -1;
             int data_name_idx = -1;
             int data_id_idx = -1;
-            for (size_t c = 0; c < sel->projections.size(); ++c) {
-                std::string cname = get_projection_col_name(sel->projections[c]);
+            for (size_t c = 0; c < rewritten_sel.projections.size(); ++c) {
+                std::string cname = get_projection_col_name(rewritten_sel.projections[c]);
                 if (cname == "COLL_NAME") coll_name_idx = static_cast<int>(c);
                 else if (cname == "DATA_NAME") data_name_idx = static_cast<int>(c);
                 else if (cname == "DATA_ID") data_id_idx = static_cast<int>(c);
@@ -2807,7 +3073,7 @@ irods::error db_execute_genquery2_buffer_op(
                         }
                     }
                 };
-                extract_eq_conds(extract_eq_conds, sel->conditions);
+                extract_eq_conds(extract_eq_conds, rewritten_sel.conditions);
             }
 
             *_output = lite3cpp::Buffer();
@@ -2858,13 +3124,45 @@ irods::error db_execute_genquery2_buffer_op(
                     }
                 }
 
+                bool skip_empty_user_dn = false;
+                for (size_t c = 0; c < orig_proj_specs.size(); ++c) {
+                    const auto& spec = orig_proj_specs[c];
+                    if (!spec.is_concat) {
+                        size_t r_idx = spec.single_idx;
+                        if (col_names[r_idx] == "USER_DN" && results.get_field(r, r_idx).empty()) {
+                            skip_empty_user_dn = true;
+                            break;
+                        }
+                    }
+                }
+                if (skip_empty_user_dn) {
+                    continue;
+                }
+
                 size_t row_arr = _output->arr_append_arr(0);
-                for (size_t c = 0; c < sel->projections.size(); ++c) {
-                    std::string_view raw_val = results.get_field(r, c);
-                    std::string_view norm_val = normalize_projected_cell(col_names[c], raw_val);
-                    _output->arr_append_str(row_arr, norm_val);
-                    if (first_data_id == 0 && static_cast<int>(c) == data_id_idx && !norm_val.empty()) {
-                        try { first_data_id = std::stoull(std::string(norm_val)); } catch (...) {}
+                for (size_t c = 0; c < orig_proj_specs.size(); ++c) {
+                    const auto& spec = orig_proj_specs[c];
+                    if (!spec.is_concat) {
+                        size_t r_idx = spec.single_idx;
+                        std::string_view raw_val = results.get_field(r, r_idx);
+                        std::string_view norm_val = normalize_projected_cell(col_names[r_idx], raw_val);
+                        _output->arr_append_str(row_arr, norm_val);
+                        if (first_data_id == 0 && static_cast<int>(r_idx) == data_id_idx && !norm_val.empty()) {
+                            try { first_data_id = std::stoull(std::string(norm_val)); } catch (...) {}
+                        }
+                    } else {
+                        std::string combined;
+                        for (const auto& pt : spec.concat_parts) {
+                            if (!pt.is_col) {
+                                combined += pt.val;
+                            } else {
+                                size_t r_idx = pt.rewritten_col_idx;
+                                std::string_view raw_val = results.get_field(r, r_idx);
+                                std::string_view norm_val = normalize_projected_cell(col_names[r_idx], raw_val);
+                                combined.append(norm_val.data(), norm_val.size());
+                            }
+                        }
+                        _output->arr_append_str(row_arr, combined);
                     }
                 }
             }
@@ -2951,6 +3249,63 @@ irods::error db_atomic_apply_op(
     return g_catalog->apply_atomic_operations(*_ops);
 }
 
+irods::error db_update_replica_access_time_op(
+    irods::plugin_context& _ctx,
+    const char* _json_input,
+    char** _output)
+{
+    if (!_json_input || !_output) {
+        return ERROR(SYS_INTERNAL_NULL_INPUT_ERR, "Null input pointers.");
+    }
+    *_output = nullptr;
+
+    if (auto err = init_l3kvg_catalog(); !err.ok()) {
+        return err;
+    }
+    if (!g_catalog) {
+        return ERROR(SYS_CONFIG_FILE_ERR, "Catalog facade not initialized.");
+    }
+
+    try {
+        const auto j = nlohmann::json::parse(_json_input);
+        if (!j.is_object() || !j.contains("access_time_updates")) {
+            return ERROR(SYS_LIBRARY_ERROR, "Missing access_time_updates property.");
+        }
+        const auto& updates = j.at("access_time_updates");
+        if (!updates.is_array()) {
+            return ERROR(SYS_LIBRARY_ERROR, "access_time_updates is not an array.");
+        }
+
+        for (const auto& item : updates) {
+            if (!item.is_object()) {
+                return ERROR(SYS_LIBRARY_ERROR, "Update item is not an object.");
+            }
+            if (!item.contains("data_id") || (!item.at("data_id").is_number_integer() && !item.at("data_id").is_number_unsigned())) {
+                return ERROR(SYS_LIBRARY_ERROR, "Invalid or missing data_id.");
+            }
+            if (!item.contains("replica_number") || (!item.at("replica_number").is_number_integer() && !item.at("replica_number").is_number_unsigned())) {
+                return ERROR(SYS_LIBRARY_ERROR, "Invalid or missing replica_number.");
+            }
+            if (!item.contains("atime") || !item.at("atime").is_string()) {
+                return ERROR(SYS_LIBRARY_ERROR, "Invalid or missing atime.");
+            }
+
+            const auto data_id = item.at("data_id").get<std::uint64_t>();
+            const auto repl_num = item.at("replica_number").get<std::uint32_t>();
+            const auto atime_raw = item.at("atime").get<std::string>();
+            if (atime_raw.empty()) {
+                continue;
+            }
+            g_catalog->update_replica_access_time(data_id, repl_num, atime_raw);
+        }
+        return SUCCESS();
+    } catch (const std::exception& e) {
+        return ERROR(SYS_LIBRARY_ERROR, e.what());
+    } catch (...) {
+        return ERROR(SYS_LIBRARY_ERROR, "Unknown error in db_update_replica_access_time_op.");
+    }
+}
+
 class l3kvg_database_plugin : public irods::database {
 public:
     l3kvg_database_plugin(const std::string& _inst, const std::string& _ctx) : irods::database(_inst, _ctx) {
@@ -3013,11 +3368,13 @@ public:
 
         add_operation<int, const char*, const char*, const char*, const char*>(irods::DATABASE_OP_MOD_ACCESS_CONTROL, std::function<irods::error(irods::plugin_context&, int, const char*, const char*, const char*, const char*)>(db_mod_access_control_op));
         add_operation<rodsLong_t>(irods::DATABASE_OP_CHECK_PERMISSION_TO_MODIFY_DATA_OBJECT, std::function<irods::error(irods::plugin_context&, rodsLong_t)>(db_check_permission_to_modify_data_object_op));
+        add_operation(irods::DATABASE_OP_CHECK_DATA_OBJECT_ACCESS, std::function<irods::error(irods::plugin_context&, const rodsLong_t, const char*)>(db_check_data_object_access_op));
         add_operation<rodsLong_t, rodsLong_t>(irods::DATABASE_OP_UPDATE_TICKET_WRITE_BYTE_COUNT, std::function<irods::error(irods::plugin_context&, rodsLong_t, rodsLong_t)>(db_update_ticket_write_byte_count_op));
         add_operation<const char*, const char*, const char*, const char*, const char*, const KeyValPair*>(
             irods::DATABASE_OP_MOD_TICKET,
             std::function<irods::error(irods::plugin_context&, const char*, const char*, const char*, const char*, const char*, const KeyValPair*)>(db_mod_ticket_op));
         add_operation<const char*>(irods::DATABASE_OP_DATA_OBJECT_FINALIZE, std::function<irods::error(irods::plugin_context&, const char*)>(db_data_object_finalize_op));
+        add_operation<const char*, char**>(irods::DATABASE_OP_UPDATE_REPLICA_ACCESS_TIME, std::function<irods::error(irods::plugin_context&, const char*, char**)>(db_update_replica_access_time_op));
 
         add_operation<int*>(irods::DATABASE_OP_GET_CATALOG_VERSION, std::function<irods::error(irods::plugin_context&, int*)>(db_get_catalog_version_op));
         add_operation(irods::DATABASE_OP_INITIALIZE_CATALOG, std::function<irods::error(irods::plugin_context&)>(db_initialize_catalog_op));
